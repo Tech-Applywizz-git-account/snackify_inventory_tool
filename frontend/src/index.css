@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors;
+  }
+  .btn-primary {
+    @apply btn bg-brand text-white hover:bg-brand-dark disabled:opacity-50;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50;
+  }
+  .card {
+    @apply rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200;
+  }
+  .input {
+    @apply w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm
+           focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand;
+  }
+  .pill {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .pill-ok {
+    @apply pill bg-emerald-100 text-emerald-800;
+  }
+  .pill-low {
+    @apply pill bg-amber-100 text-amber-800;
+  }
+  .pill-out {
+    @apply pill bg-rose-100 text-rose-800;
+  }
+  .pill-warn {
+    @apply pill bg-orange-100 text-orange-800;
+  }
+
+  /* Zomato-style Tracking Timeline */
+  .timeline {
+    @apply relative flex flex-col gap-6 pl-8;
+  }
+  .timeline::before {
+    content: "";
+    @apply absolute left-[11px] top-2 h-[calc(100%-1rem)] w-0.5 bg-slate-200;
+  }
+  .timeline-item {
+    @apply relative;
+  }
+  .timeline-dot {
+    @apply absolute -left-[27px] top-1.5 h-4 w-4 rounded-full border-2 border-white ring-2;
+  }
+  .timeline-dot-active {
+    @apply ring-brand bg-brand;
+  }
+  .timeline-dot-inactive {
+    @apply ring-slate-200 bg-white;
+  }
+  .timeline-dot-done {
+    @apply ring-emerald-500 bg-emerald-500;
+  }
+
+  .animate-pulse-slow {
+    animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+}
