@@ -67,12 +67,30 @@ export async function postOrderToTeams(order) {
   const item = order.parsed_item || order.raw_text || 'Request';
   const employee = order.parsed_employee_name || order.ordered_by || 'Someone';
   const location = order.parsed_location || order.deliver_to || 'Not specified';
-  const qty = parseInt(order.quantity, 10) || 1;
+  let itemsList = [];
+
+  if (order.raw_text && order.raw_text.includes(',')) {
+    itemsList = order.raw_text.split(',').map((part) => {
+      const match = part.trim().match(/^(\d+)x\s*(.+)$/);
+      if (match) {
+        let name = match[2].trim();
+        const breadIdx = name.indexOf(' [bread:');
+        if (breadIdx !== -1) {
+          name = name.slice(0, breadIdx).trim();
+        }
+        return { name, qty: parseInt(match[1], 10) };
+      }
+      return { name: part.trim(), qty: 1 };
+    });
+  } else {
+    const qty = parseInt(order.quantity, 10) || 1;
+    itemsList = [{ name: item, qty }];
+  }
 
   return postToPA({
     event_type: 'new_order',
     ordered_by: employee,
-    items: [{ name: item, qty }],
+    items: itemsList,
     deliver_to: location,
     instruction: order.instruction || '',
     time: istNow(),
@@ -83,12 +101,30 @@ export async function postOrderToTeams(order) {
 export async function postCancelToTeams(order, cancelledBy = 'self') {
   const item = order.parsed_item || order.raw_text || 'Request';
   const employee = order.parsed_employee_name || 'Someone';
-  const qty = parseInt(order.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
+  let itemsList = [];
+
+  if (order.raw_text && order.raw_text.includes(',')) {
+    itemsList = order.raw_text.split(',').map((part) => {
+      const match = part.trim().match(/^(\d+)x\s*(.+)$/);
+      if (match) {
+        let name = match[2].trim();
+        const breadIdx = name.indexOf(' [bread:');
+        if (breadIdx !== -1) {
+          name = name.slice(0, breadIdx).trim();
+        }
+        return { name, qty: parseInt(match[1], 10) };
+      }
+      return { name: part.trim(), qty: 1 };
+    });
+  } else {
+    const qty = parseInt(order.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
+    itemsList = [{ name: item, qty }];
+  }
 
   return postToPA({
     event_type: 'cancelled',
     ordered_by: employee,
-    items: [{ name: item, qty }],
+    items: itemsList,
     cancelled_by: cancelledBy,
     time: istNow(),
   });

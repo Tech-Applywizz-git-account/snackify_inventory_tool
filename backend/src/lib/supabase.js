@@ -24,7 +24,7 @@ export const supabaseAnon = createClient(url || 'http://localhost', anonKey || '
 
 // Per-request client that respects RLS for the calling user.
 export function supabaseAsUser(jwt) {
-  return createClient(url || 'http://localhost', serviceKey || 'noop', {
+  return createClient(url || 'http://localhost', anonKey || 'noop', {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { headers: { Authorization: `Bearer ${jwt}` } },
   });

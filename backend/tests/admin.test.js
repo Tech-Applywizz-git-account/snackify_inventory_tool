@@ -34,9 +34,11 @@ function makeSupabaseAdminForReset({
   factors = [],
   deleteFactorError = null,
   auditInsertError = null,
+  mfaResetInsertError = null,
 } = {}) {
   const deleteFactorCalls = [];
   const auditLogRows = [];
+  const mfaResetLogsRows = [];
 
   return {
     auth: {
@@ -62,10 +64,19 @@ function makeSupabaseAdminForReset({
           },
         };
       }
+      if (table === 'mfa_reset_logs') {
+        return {
+          insert: (payload) => {
+            mfaResetLogsRows.push(payload);
+            return makeChain(mfaResetInsertError ? { data: null, error: mfaResetInsertError } : {});
+          },
+        };
+      }
       return makeChain();
     },
     getDeleteFactorCalls: () => deleteFactorCalls,
     getAuditLogRows: () => auditLogRows,
+    getMfaResetLogRows: () => mfaResetLogsRows,
   };
 }
 
@@ -261,6 +272,12 @@ describe('POST /api/admin/users/:userId/reset-authenticator', () => {
     assert.equal(supabaseAdmin.getAuditLogRows()[0].action, 'AUTHENTICATOR_RESET');
     assert.equal(supabaseAdmin.getAuditLogRows()[0].user_id, leadershipUser.id);
     assert.equal(supabaseAdmin.getAuditLogRows()[0].entity_id, 'user-1');
+
+    assert.equal(supabaseAdmin.getMfaResetLogRows().length, 1);
+    assert.equal(supabaseAdmin.getMfaResetLogRows()[0].reset_by, leadershipUser.id);
+    assert.equal(supabaseAdmin.getMfaResetLogRows()[0].reset_by_email, leadershipUser.email);
+    assert.equal(supabaseAdmin.getMfaResetLogRows()[0].target_user_id, 'user-1');
+    assert.equal(supabaseAdmin.getMfaResetLogRows()[0].target_user_email, 'bhanuteja@applywizz.ai');
   });
 
   it('returns 409 when the user has no verified TOTP factor', async () => {

@@ -27,6 +27,81 @@ function mapFulfillmentType(reqRow) {
   };
 }
 
+async function autoConfirmExpiredOrders() {
+  const thirtySecsAgo = new Date(Date.now() - 30000).toISOString();
+  const { data: expired } = await supabaseAdmin
+    .from('requests')
+    .select('*')
+    .eq('status', 'confirming')
+    .lt('created_at', thirtySecsAgo);
+
+  if (expired && expired.length > 0) {
+    for (const order of expired) {
+      const morning = isMorningShift(order.created_at);
+      const updateData = morning
+        ? { status: 'pending', live_status: 'placed' }
+        : { status: 'done', live_status: 'Recorded', fulfilled_at: new Date().toISOString() };
+
+      const { data: updated, error } = await supabaseAdmin
+        .from('requests')
+        .update(updateData)
+        .eq('id', order.id)
+        .select()
+        .single();
+
+      if (error || !updated) continue;
+
+      if (morning) {
+        let qty = 1;
+        if (order.raw_text) {
+          const matches = [...order.raw_text.matchAll(/(\d+)x/g)];
+          if (matches.length > 0) {
+            qty = matches.reduce((sum, m) => sum + parseInt(m[1], 10), 0);
+          }
+        }
+        const itemName = order.parsed_item || order.raw_text || 'New order';
+        const locPart = order.parsed_location ? ` to ${order.parsed_location}` : '';
+
+        postOrderToTeams({ ...updated, priority: 'Normal', quantity: String(qty) }).catch((e) =>
+          console.error('[Teams confirm-order-auto]', e.message)
+        );
+
+        sendPushToUsers([order.submitted_by], {
+          title: '✅ Order Placed!',
+          body: `Your ${itemName} is confirmed and the office boy has been notified.`,
+          url: `/track/${updated.id}`,
+          tag: `placed-${updated.id}`,
+        }).catch(() => {});
+
+        supabaseAdmin
+          .from('profiles')
+          .select('id')
+          .in('role', ['office_boy', 'facility_manager'])
+          .then(({ data: staffRows }) => {
+            if (staffRows?.length)
+              sendPushToUsers(
+                staffRows.map((u) => u.id),
+                {
+                  title: '🔔 New Order',
+                  body: `${order.parsed_employee_name || 'Someone'}: ${qty}x ${itemName}${locPart}`,
+                  url: '/queue',
+                  tag: `order-${updated.id}`,
+                }
+              ).catch(() => {});
+          });
+      } else {
+        const itemName = order.parsed_item || order.raw_text || 'Your order';
+        sendPushToUsers([order.submitted_by], {
+          title: '🌙 Order Recorded',
+          body: `Your order for ${itemName} has been recorded for night shift.`,
+          url: `/track/${updated.id}`,
+          tag: `status-${updated.id}`,
+        }).catch(() => {});
+      }
+    }
+  }
+}
+
 // Map well-known cafeteria items to categories
 const ITEM_CATEGORY = {
   'ccd coffee': 'beverage',
@@ -368,6 +443,84 @@ const createSchema = z.object({
 
 router.post('/', async (req, res, next) => {
   try {
+    // ── Multi-item Quick Order ───────────────────────────────────
+    if (req.body.items && Array.isArray(req.body.items)) {
+      const { items, location, note = '', delivery_mode } = req.body;
+      if (items.length === 0) {
+        return res.status(400).json({ error: 'Please place an order of at least one item.' });
+      }
+
+      // Normalize delivery mode
+      let deliveryMode = delivery_mode;
+      if (!deliveryMode) {
+        if (req.body.fulfillmentType === 'pickup') deliveryMode = 'self_pickup';
+        else if (req.body.fulfillmentType === 'delivery') deliveryMode = 'get_it_here';
+        else deliveryMode = 'get_it_here';
+      }
+      if (!['get_it_here', 'self_pickup'].includes(deliveryMode)) {
+        deliveryMode = 'get_it_here';
+      }
+
+      // 1. Check stock of all items first
+      try {
+        for (const it of items) {
+          const qty = parseInt(it.qty, 10) || 1;
+          await checkStockOnly(req.user, it.name, qty, it.breadType || '');
+        }
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+
+      // 2. Perform actual stock deduction
+      for (const it of items) {
+        const qty = parseInt(it.qty, 10) || 1;
+        await deductStockForRequest(req.user, it.name, qty, '', it.breadType || '');
+      }
+
+      // 3. Build text descriptions and summary
+      // Format rawText as: "1x Espresso, 2x Assam Tea"
+      const rawText = items
+        .map((it) => `${it.qty}x ${it.name}${it.breadType ? ` [bread:${it.breadType}]` : ''}`)
+        .join(', ');
+      
+      // Format parsedItem as: "Espresso, Assam Tea"
+      const parsedItem = items.map((it) => it.name).join(', ');
+
+      // Build itemsSummary for instruction: "1x Espresso and 2x Assam Tea"
+      const itemsSummary = items.map((it) => `${it.qty}x ${it.name}`).join(' and ');
+      const instruction = await generateMultiItemInstruction(
+        req.user,
+        itemsSummary,
+        deliveryMode === 'self_pickup' ? null : location,
+        note
+      );
+
+      // Determine category (use first item's category)
+      const category =
+        ITEM_CATEGORY[items[0].name.toLowerCase()] ||
+        (isSandwichSpread(items[0].name) ? 'food' : 'other');
+
+      // 4. Save consolidated request row in Database
+      const { data: qData, error: qErr } = await supabaseAdmin
+        .from('requests')
+        .insert({
+          raw_text: rawText,
+          category,
+          parsed_item: parsedItem,
+          parsed_location: deliveryMode === 'self_pickup' ? null : location || null,
+          instruction,
+          submitted_by: req.user.id,
+          live_status: 'confirming',
+          status: 'confirming',
+          delivery_mode: deliveryMode,
+        })
+        .select()
+        .single();
+      if (qErr) throw qErr;
+
+      return res.status(201).json({ needs_followup: false, request: mapFulfillmentType(qData) });
+    }
+
     // ── Quick order (cafeteria tap — no AI needed) ───────────────
     const {
       quick_item,
@@ -589,7 +742,13 @@ router.post('/:id/confirm', async (req, res, next) => {
 
     // NOW fire notifications if morning shift (active delivery/pickup workflow)
     if (morning) {
-      const qty = parseInt(order.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
+      let qty = 1;
+      if (order.raw_text) {
+        const matches = [...order.raw_text.matchAll(/(\d+)x/g)];
+        if (matches.length > 0) {
+          qty = matches.reduce((sum, m) => sum + parseInt(m[1], 10), 0);
+        }
+      }
       const itemName = order.parsed_item || order.raw_text || 'New order';
       const locPart = order.parsed_location ? ` to ${order.parsed_location}` : '';
 
@@ -641,6 +800,8 @@ router.post('/:id/confirm', async (req, res, next) => {
 
 router.get('/', async (req, res, next) => {
   try {
+    await autoConfirmExpiredOrders().catch((err) => console.error('[AutoConfirm GET /]', err));
+
     const status = req.query.status;
     const isStaff = ['office_boy', 'facility_manager', 'leadership'].includes(req.user.role);
 
@@ -664,6 +825,8 @@ router.get('/', async (req, res, next) => {
 // GET /api/requests/:id — for live tracking
 router.get('/:id', async (req, res, next) => {
   try {
+    await autoConfirmExpiredOrders().catch((err) => console.error('[AutoConfirm GET /:id]', err));
+
     const { data, error } = await supabaseAdmin
       .from('v_request_queue')
       .select('*')
@@ -1051,6 +1214,109 @@ function getOOSMessage(_userTone, itemName) {
   return `${itemName} is currently out of stock.`;
 }
 
+async function checkStockOnly(user, itemName, qty, breadType) {
+  const nameLower = (itemName || '').toLowerCase();
+  const virtualIngredients = VIRTUAL_DRINK_MAP[nameLower];
+
+  if (virtualIngredients !== undefined) {
+    if (virtualIngredients.length === 0) return;
+    for (const { item: backingItemName, servings: servingsPerCup } of virtualIngredients) {
+      const deductAmt = Math.ceil(qty * servingsPerCup);
+      const { data: backingRow } = await supabaseAdmin
+        .from('cafeteria_items')
+        .select('stock_today, stock_servings')
+        .ilike('item_name', backingItemName)
+        .maybeSingle();
+
+      if (!backingRow) {
+        if (backingItemName === 'Milk') {
+          const userTone = await getUserTone(user.id);
+          throw new Error(getOOSMessage(userTone, `${itemName} (Milk ran out)`));
+        }
+        continue;
+      }
+
+      const effectiveStock = backingRow.stock_servings ?? backingRow.stock_today;
+      if (effectiveStock !== null && effectiveStock !== undefined && effectiveStock < deductAmt) {
+        const userTone = await getUserTone(user.id);
+        throw new Error(getOOSMessage(userTone, `${itemName} (${backingItemName} ran out)`));
+      }
+    }
+
+    if (isBeverageUsingStirrer(itemName)) {
+      const stirrerNeeded = Math.round(qty * 1.5);
+      const { data: stirItem } = await supabaseAdmin
+        .from('cafeteria_items')
+        .select('stock_servings')
+        .ilike('item_name', 'Stirrers')
+        .maybeSingle();
+      if (stirItem && stirItem.stock_servings !== null && stirItem.stock_servings < stirrerNeeded) {
+        throw new Error(`Sorry, not enough stirrers left to prepare your ${itemName}.`);
+      }
+    }
+    return;
+  }
+
+  const itemRow = await findCafeteriaItemForOrder(
+    itemName,
+    'stock_today, stock_servings'
+  );
+
+  if (!itemRow) {
+    if (isSandwichSpread(itemName)) {
+      const userTone = await getUserTone(user.id);
+      throw new Error(getOOSMessage(userTone, displayOrderItemName(itemName)));
+    }
+    return;
+  }
+
+  const effectiveStock = itemRow.stock_servings ?? itemRow.stock_today;
+  if (effectiveStock !== null && effectiveStock !== undefined && effectiveStock < qty) {
+    const userTone = await getUserTone(user.id);
+    throw new Error(getOOSMessage(userTone, displayOrderItemName(itemName, itemRow)));
+  }
+
+  if (isBeverageUsingStirrer(itemName)) {
+    const stirrerNeeded = Math.round(qty * 1.5);
+    const { data: stir } = await supabaseAdmin
+      .from('cafeteria_items')
+      .select('stock_servings')
+      .ilike('item_name', 'Stirrers')
+      .maybeSingle();
+    if (stir && stir.stock_servings !== null && stir.stock_servings < stirrerNeeded) {
+      throw new Error(`Sorry, not enough stirrers left to prepare your ${itemName}.`);
+    }
+  }
+}
+
+async function generateMultiItemInstruction(user, itemsSummary, location, notes) {
+  const firstName =
+    user.preferred_name || (user.full_name || user.email || 'Someone').split(' ')[0];
+  const userTone = await getUserTone(user.id);
+  const locPart = location ? ` to ${location}` : '';
+  const notePart = notes ? ` Note: ${notes}.` : '';
+
+  switch (userTone) {
+    case 'Mom Mode':
+      return `Beta ${firstName} needs ${itemsSummary}${locPart}. Please deliver with love!${notePart}`;
+    case 'gen_z':
+      return `Vibe check! ${firstName} needs ${itemsSummary}${locPart} immediately. No cap.${notePart}`;
+    case 'Funny':
+      return `Emergency refueling: ${itemsSummary}${locPart} for ${firstName}! Please save them!${notePart}`;
+    case 'boyfriend':
+      return `Babe ${firstName} needs ${itemsSummary}${locPart} right now. Deliver it promptly!${notePart}`;
+    case 'girlfriend':
+      return `Hey, please deliver ${itemsSummary}${locPart} to ${firstName} with extra care! 💖${notePart}`;
+    case 'Professional':
+      return `Request for ${itemsSummary}${locPart} by ${firstName}. Please process promptly.${notePart}`;
+    case 'Minimal':
+      return `${itemsSummary}${locPart} for ${firstName}.${notePart}`;
+    case 'Friendly':
+    default:
+      return `🚀 ${firstName} needs ${itemsSummary}${locPart}. Please deliver promptly!${notePart}`;
+  }
+}
+
 async function deductStockForRequest(user, itemName, qty, instruction, breadType) {
   const nameLower = (itemName || '').toLowerCase();
 
@@ -1253,19 +1519,12 @@ async function deductStockForRequest(user, itemName, qty, instruction, breadType
   }
 }
 
-async function restoreStockForRequest(order) {
-  if (!order?.parsed_item) return;
-
-  const itemName = order.parsed_item;
-  const rawQty = parseInt(order.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
-  const isBoth = /both\s*(side|slice)/i.test(order.instruction || '');
-
+async function restoreSingleItemStock(itemName, rawQty, isBoth, breadType) {
   const nameLower = (itemName || '').toLowerCase();
   const virtualIngredients = VIRTUAL_DRINK_MAP[nameLower];
 
   if (virtualIngredients !== undefined) {
-    // ── Virtual drink restore path ────────────────────────────────────────────
-    if (virtualIngredients.length === 0) return; // Hot Water — nothing to restore
+    if (virtualIngredients.length === 0) return;
 
     for (const { item: backingItemName, servings: servingsPerCup } of virtualIngredients) {
       const restoreAmt = Math.ceil(rawQty * servingsPerCup);
@@ -1289,7 +1548,6 @@ async function restoreStockForRequest(order) {
       }
     }
 
-    // Restore stirrers for virtual beverages
     if (isBeverageUsingStirrer(itemName)) {
       const { data: stirItem } = await supabaseAdmin
         .from('cafeteria_items')
@@ -1306,8 +1564,6 @@ async function restoreStockForRequest(order) {
     return;
   }
 
-  // ── Regular (non-virtual) restore path ───────────────────────────────────
-
   const itemRow = await findCafeteriaItemForOrder(
     itemName,
     'id, item_name, display_name, frontend_name, stock_today, stock_servings, sides_option, dependencies'
@@ -1317,7 +1573,6 @@ async function restoreStockForRequest(order) {
     return;
   }
 
-  // 1. Restore stirrers
   if (isBeverageUsingStirrer(itemName)) {
     const { data: stirItem } = await supabaseAdmin
       .from('cafeteria_items')
@@ -1325,7 +1580,6 @@ async function restoreStockForRequest(order) {
       .ilike('item_name', 'Stirrers')
       .maybeSingle();
     if (stirItem && stirItem.stock_servings !== null) {
-      // Use Math.round to match deduction: integer column can't store floats
       await supabaseAdmin
         .from('cafeteria_items')
         .update({ stock_servings: (stirItem.stock_servings || 0) + Math.round(rawQty * 1.5) })
@@ -1336,7 +1590,6 @@ async function restoreStockForRequest(order) {
   const isSandwich = isSandwichSpread(itemName) || isSandwichSpread(itemRow);
   const sidesM = (itemRow.sides_option || isSandwich) && isBoth ? 2 : 1;
 
-  // 2. Restore main item servings/stock
   const neededForMain = itemRow.stock_servings !== null ? rawQty * sidesM : rawQty;
   const restoreMain = {};
   if (itemRow.stock_servings !== null) {
@@ -1348,9 +1601,6 @@ async function restoreStockForRequest(order) {
     await supabaseAdmin.from('cafeteria_items').update(restoreMain).eq('id', itemRow.id);
   }
 
-  // 3. Restore dependencies
-  const staffBreadMatch = order.raw_text?.match(/\[bread:(.+?)\]/);
-  const breadType = staffBreadMatch ? staffBreadMatch[1] : null;
   const baseDeps = Array.isArray(itemRow.dependencies) ? itemRow.dependencies : [];
   const requiresBread = isSandwich || hasBreadDependency(baseDeps);
   const deps = requiresBread && !hasBreadDependency(baseDeps) ? [...baseDeps, 'Bread'] : baseDeps;
@@ -1369,17 +1619,54 @@ async function restoreStockForRequest(order) {
       const isBread = isBreadName(depItem.item_name) || isBreadName(depName);
       const neededDepServings = isBread ? rawQty * 2 : rawQty * sidesM;
 
-      const restoreDep = {};
-      if (depItem.stock_servings !== null) {
-        restoreDep.stock_servings = (depItem.stock_servings || 0) + neededDepServings;
-      } else if (depItem.stock_today !== null) {
-        restoreDep.stock_today = (depItem.stock_today || 0) + neededDepServings;
+      const depStock = depItem.stock_today;
+      const depServings = depItem.stock_servings;
+
+      const depUpdateFields = {};
+      if (depServings !== null) {
+        depUpdateFields.stock_servings = (depServings || 0) + neededDepServings;
+      } else if (depStock !== null) {
+        depUpdateFields.stock_today = (depStock || 0) + neededDepServings;
       }
 
-      if (Object.keys(restoreDep).length > 0) {
-        await supabaseAdmin.from('cafeteria_items').update(restoreDep).eq('id', depItem.id);
+      if (Object.keys(depUpdateFields).length > 0) {
+        await supabaseAdmin.from('cafeteria_items').update(depUpdateFields).eq('id', depItem.id);
       }
     }
+  }
+}
+
+async function restoreStockForRequest(order) {
+  if (!order) return;
+
+  const isBoth = /both\s*(side|slice)/i.test(order.instruction || '');
+
+  // Extract bread type if present
+  const staffBreadMatch = order.raw_text?.match(/\[bread:(.+?)\]/);
+  const breadType = staffBreadMatch ? staffBreadMatch[1] : null;
+
+  if (order.raw_text && order.raw_text.includes(',')) {
+    const parsedList = order.raw_text.split(',').map((part) => {
+      const match = part.trim().match(/^(\d+)x\s*(.+)$/);
+      if (match) {
+        let name = match[2].trim();
+        const breadIdx = name.indexOf(' [bread:');
+        if (breadIdx !== -1) {
+          name = name.slice(0, breadIdx).trim();
+        }
+        return { name, qty: parseInt(match[1], 10) };
+      }
+      return { name: part.trim(), qty: 1 };
+    });
+
+    for (const it of parsedList) {
+      await restoreSingleItemStock(it.name, it.qty, isBoth, breadType);
+    }
+  } else {
+    const itemName = order.parsed_item;
+    if (!itemName) return;
+    const rawQty = parseInt(order.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
+    await restoreSingleItemStock(itemName, rawQty, isBoth, breadType);
   }
 }
 

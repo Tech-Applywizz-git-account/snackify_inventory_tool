@@ -1,3 +1,4 @@
+// Force backend server restart to reload latest env variables
 import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';

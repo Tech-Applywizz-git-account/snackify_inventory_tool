@@ -13,12 +13,17 @@
 
 import 'dotenv/config';
 import net from 'node:net';
+import fs from 'node:fs';
+import path from 'node:path';
+import { exec } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL  = process.env.SUPABASE_URL;
 const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 const PRINTER_IP    = process.env.PRINTER_IP || '192.168.1.100';
 const PRINTER_PORT  = parseInt(process.env.PRINTER_PORT || '9100', 10);
+const PRINTER_NAME  = process.env.PRINTER_NAME || '58mm Series Printer';
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('[print-agent] SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in .env');
@@ -26,6 +31,29 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+const PRINTED_LOG = path.join(__dirname, 'printed.json');
+
+let printedIds = new Set();
+if (fs.existsSync(PRINTED_LOG)) {
+  try {
+    const saved = JSON.parse(fs.readFileSync(PRINTED_LOG, 'utf8'));
+    printedIds = new Set(saved);
+    console.log(`[print-agent] Loaded ${printedIds.size} previously printed orders`);
+  } catch {
+    // Ignore corrupt file.
+  }
+}
+
+function savePrinted() {
+  try {
+    fs.writeFileSync(PRINTED_LOG, JSON.stringify([...printedIds]), 'utf8');
+  } catch (err) {
+    console.error('[print-agent] Failed to save printed.json:', err.message);
+  }
+}
 
 // ── ESC/POS Helpers ──────────────────────────────────────────────────────────
 const ESC = '\x1B';
@@ -130,6 +158,25 @@ function formatReceipt(order) {
   const noteMatch = order.instruction?.match(/Note:\s*(.+?)\.?$/i);
   const note = stripEmojis(noteMatch?.[1] || '');
 
+  const itemLines = [];
+  if (order.raw_text && order.raw_text.includes(',')) {
+    order.raw_text.split(',').forEach((part) => {
+      const match = part.trim().match(/^(\d+)x\s*(.+)$/);
+      if (match) {
+        let name = match[2].trim();
+        const breadIdx = name.indexOf(' [bread:');
+        if (breadIdx !== -1) {
+          name = name.slice(0, breadIdx).trim();
+        }
+        itemLines.push(`  ${match[1]}x ${name}`);
+      } else {
+        itemLines.push(`  1x ${part.trim()}`);
+      }
+    });
+  } else {
+    itemLines.push(`  ${qty}x ${item}`);
+  }
+
   const lines = [
     CMD.INIT,
     CMD.CENTER,
@@ -149,7 +196,7 @@ function formatReceipt(order) {
     `${CMD.BOLD_ON}Location${CMD.BOLD_OFF}  ${location}`,
     DASH,
     CMD.BOLD_ON,
-    `  ${qty}x ${item}`,
+    ...itemLines,
     CMD.BOLD_OFF,
   ];
 
@@ -202,6 +249,25 @@ function formatNightReceipt(order) {
     hour12: true,
   });
 
+  const itemLines = [];
+  if (order.raw_text && order.raw_text.includes(',')) {
+    order.raw_text.split(',').forEach((part) => {
+      const match = part.trim().match(/^(\d+)x\s*(.+)$/);
+      if (match) {
+        let name = match[2].trim();
+        const breadIdx = name.indexOf(' [bread:');
+        if (breadIdx !== -1) {
+          name = name.slice(0, breadIdx).trim();
+        }
+        itemLines.push(`  ${match[1]}x ${name}`);
+      } else {
+        itemLines.push(`  1x ${part.trim()}`);
+      }
+    });
+  } else {
+    itemLines.push(`  ${qty}x ${item}`);
+  }
+
   const lines = [
     CMD.INIT,
     CMD.CENTER,
@@ -221,7 +287,7 @@ function formatNightReceipt(order) {
     `${CMD.BOLD_ON}Location${CMD.BOLD_OFF}  ${location}`,
     DASH,
     CMD.BOLD_ON,
-    `  ${qty}x ${item}`,
+    ...itemLines,
     CMD.BOLD_OFF,
   ];
 
@@ -326,8 +392,93 @@ function formatMealToken(booking, profile, isDuplicate = false) {
   return lines.join('\n');
 }
 
+function printViaWindowsSpooler(content, label, printerName) {
+  return new Promise((resolve, reject) => {
+    console.log(`[print-agent] Printing ${label} via Windows Spooler → ${printerName}`);
+    try {
+      const tempFile = path.join(__dirname, `temp_print_${Date.now()}.bin`);
+      fs.writeFileSync(tempFile, Buffer.from(content, 'binary'));
+
+      const psScriptPath = path.join(__dirname, `print_${Date.now()}.ps1`);
+      const psScript = `
+$code = @"
+using System;
+using System.Runtime.InteropServices;
+public class RawPrinterHelper {
+    [DllImport("winspool.drv", CharSet = CharSet.Ansi, SetLastError = true)]
+    public static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int Level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA pDocInfo);
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public class DOCINFOA {
+        public string pDocName;
+        public string pOutputFile;
+        public string pDatatype;
+    }
+    public static void SendBytesToPrinter(string printerName, byte[] bytes) {
+        IntPtr hPrinter;
+        if (OpenPrinter(printerName, out hPrinter, IntPtr.Zero)) {
+            DOCINFOA di = new DOCINFOA { pDocName = "ApplyWizz Receipt", pOutputFile = null, pDatatype = "RAW" };
+            if (StartDocPrinter(hPrinter, 1, di)) {
+                StartPagePrinter(hPrinter);
+                IntPtr pBytes = Marshal.AllocCoTaskMem(bytes.Length);
+                Marshal.Copy(bytes, 0, pBytes, bytes.Length);
+                int dwWritten;
+                WritePrinter(hPrinter, pBytes, bytes.Length, out dwWritten);
+                Marshal.FreeCoTaskMem(pBytes);
+                EndPagePrinter(hPrinter);
+                EndDocPrinter(hPrinter);
+            }
+            ClosePrinter(hPrinter);
+        }
+    }
+}
+"@
+Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+$bytes = [System.IO.File]::ReadAllBytes('${tempFile.replace(/\\/g, '\\\\')}')
+[RawPrinterHelper]::SendBytesToPrinter('${printerName}', $bytes)
+`;
+
+      fs.writeFileSync(psScriptPath, psScript, 'utf8');
+
+      exec(`powershell -ExecutionPolicy Bypass -File "${psScriptPath}"`, (err) => {
+        try { fs.unlinkSync(tempFile); } catch {}
+        try { fs.unlinkSync(psScriptPath); } catch {}
+
+        if (err) {
+          console.error(`[print-agent] Spooler error: ${err.message}`);
+          reject(err);
+        } else {
+          console.log(`[print-agent] ✅ Spooled successfully: ${label}`);
+          resolve();
+        }
+      });
+    } catch (err) {
+      console.error(`[print-agent] Windows printing setup error: ${err.message}`);
+      reject(err);
+    }
+  });
+}
+
 // ── Send any content to printer ──────────────────────────────────────────────
 function sendToPrinter(content, label, retries = 1) {
+  const isLanIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(PRINTER_IP) && !PRINTER_IP.endsWith('.0');
+  
+  if (process.platform === 'win32' && (!isLanIp || process.env.PRINTER_NAME)) {
+    const pName = process.env.PRINTER_NAME || PRINTER_NAME || '58mm Series Printer';
+    return printViaWindowsSpooler(content, label, pName);
+  }
+
   return new Promise((resolve, reject) => {
     console.log(`[print-agent] Printing ${label} → ${PRINTER_IP}:${PRINTER_PORT}`);
 
@@ -385,25 +536,33 @@ function startListening() {
         // ── Daytime: confirming → pending (office hours 8:30AM–5PM) ──────────
         if (oldStatus === 'confirming' && newStatus === 'pending') {
           const order = payload.new;
-          const orderId = order.user_order_number || (order.id || '').slice(0, 8);
-          console.log(`[print-agent] 🔔 Order confirmed: #${orderId} — ${order.parsed_item}`);
-          try {
-            await printReceipt(order);
-          } catch (err) {
-            console.error(`[print-agent] Failed to print after retries:`, err.message);
+          if (!printedIds.has(order.id)) {
+            printedIds.add(order.id);
+            savePrinted();
+            const orderId = order.user_order_number || (order.id || '').slice(0, 8);
+            console.log(`[print-agent] 🔔 Order confirmed: #${orderId} — ${order.parsed_item}`);
+            try {
+              await printReceipt(order);
+            } catch (err) {
+              console.error(`[print-agent] Failed to print after retries:`, err.message);
+            }
           }
         }
 
         // ── Night shift: confirming → done/Recorded (after 5PM) ──────────────
         if (oldStatus === 'confirming' && newStatus === 'done' && newLive === 'Recorded') {
           const order   = payload.new;
-          const orderId = order.user_order_number || (order.id || '').slice(0, 8);
-          console.log(`[print-agent] 🌙 Night shift recorded: #${orderId} — ${order.parsed_item}`);
-          try {
-            const receipt = formatNightReceipt(order);
-            await sendToPrinter(receipt, `night-#${orderId}`);
-          } catch (err) {
-            console.error(`[print-agent] Failed to print night receipt:`, err.message);
+          if (!printedIds.has(order.id)) {
+            printedIds.add(order.id);
+            savePrinted();
+            const orderId = order.user_order_number || (order.id || '').slice(0, 8);
+            console.log(`[print-agent] 🌙 Night shift recorded: #${orderId} — ${order.parsed_item}`);
+            try {
+              const receipt = formatNightReceipt(order);
+              await sendToPrinter(receipt, `night-#${orderId}`);
+            } catch (err) {
+              console.error(`[print-agent] Failed to print night receipt:`, err.message);
+            }
           }
         }
       }
@@ -571,14 +730,58 @@ async function autoConfirmStuck() {
   }
 }
 
+// ── Auto-print any missed pending orders (startup & safety net) ──────────────
+async function printUnprintedPendingOrders(forceAll = false) {
+  try {
+    // Fetch all pending orders from the last 12 hours
+    const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+    const { data: pendingOrders, error } = await supabase
+      .from('requests')
+      .select('*')
+      .eq('status', 'pending')
+      .gt('created_at', twelveHoursAgo)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    if (pendingOrders && pendingOrders.length > 0) {
+      console.log(`[print-agent] Found ${pendingOrders.length} pending orders from last 12h, checking print status...`);
+      for (const order of pendingOrders) {
+        if (forceAll || !printedIds.has(order.id)) {
+          const isAlreadyInPrinted = printedIds.has(order.id);
+          printedIds.add(order.id);
+          savePrinted();
+          const orderId = order.user_order_number || (order.id || '').slice(0, 8);
+          if (forceAll && isAlreadyInPrinted) {
+            console.log(`[print-agent] 🖨 Re-printing pending order on startup: #${orderId} — ${order.parsed_item}`);
+          } else {
+            console.log(`[print-agent] 🖨 Printing missed/pending order: #${orderId} — ${order.parsed_item}`);
+          }
+          try {
+            await printReceipt(order);
+          } catch (err) {
+            console.error(`[print-agent] Print failed:`, err.message);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[print-agent] Failed to check missed pending orders:', err.message);
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 const channel = startListening();
 
-// Heartbeat + stuck order check
+// Pull and print all pending orders on startup
+printUnprintedPendingOrders(true).catch((err) => console.error('[print-agent] Startup missed print check failed:', err.message));
+
+// Heartbeat + stuck order check + missed pending check
 setInterval(() => {
   const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   console.log(`[print-agent] ♥ Heartbeat — ${now} — printer: ${PRINTER_IP}:${PRINTER_PORT}`);
   autoConfirmStuck();
+  printUnprintedPendingOrders(false).catch((err) => console.error('[print-agent] Interval missed print check failed:', err.message));
 }, 60_000);
 
 console.log(`[print-agent] 🖨 Ready — Listening for orders, printing to ${PRINTER_IP}:${PRINTER_PORT}`);

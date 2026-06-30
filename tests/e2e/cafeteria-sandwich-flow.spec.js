@@ -9,7 +9,11 @@ function mockJwt(payload) {
 }
 
 async function loginAsStaff(page) {
-  const tokenKeys = ['sb-twmadauhauuypioznpus-auth-token', 'sb-localhost-auth-token'];
+  const tokenKeys = [
+    'sb-twmadauhauuypioznpus-auth-token',
+    'sb-bshwmjrkweedetraukem-auth-token',
+    'sb-localhost-auth-token',
+  ];
   const session = {
     access_token: mockJwt({
       aal: 'aal2',
@@ -168,11 +172,15 @@ test.describe('cafeteria sandwich spread flow', () => {
     await page.getByRole('button', { name: /place order/i }).click();
 
     await expect.poll(() => submittedBody).toMatchObject({
-      quick_item: 'Peanut Butter Sandwich',
-      quick_bread_type: 'MDRN AT SHK BRD400G',
+      items: [
+        {
+          name: 'Peanut Butter Sandwich',
+          breadType: 'MDRN AT SHK BRD400G',
+        }
+      ]
     });
-    expect(submittedBody.quick_instruction).toContain('Spread on both slices');
-    expect(submittedBody.quick_instruction).toContain('Uses 2 bread slices');
+    expect(submittedBody.items[0].customNote).toContain('Spread on both slices');
+    expect(submittedBody.items[0].customNote).toContain('Uses 2 bread slices');
   });
 
   test('Mix Fruit Jam Sandwich stays visible but disabled when bread is out of stock', async ({ page }) => {

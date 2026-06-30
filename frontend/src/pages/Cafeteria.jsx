@@ -515,7 +515,9 @@ function ActiveOrderBanner({ order, onPress }) {
         <span className="text-2xl">{stage.icon}</span>
         <div>
           <div className="text-xs font-bold uppercase tracking-wider opacity-80">Active Order</div>
-          <div className="font-bold text-sm">{order.parsed_item || order.raw_text}</div>
+          <div className="font-bold text-sm">
+            {order.raw_text && (/^\d+x/.test(order.raw_text) || order.raw_text.includes(',')) ? order.raw_text : (order.parsed_item || order.raw_text)}
+          </div>
           <div className="text-xs opacity-80">{stage.label}</div>
         </div>
       </div>
@@ -1154,7 +1156,7 @@ function OrderSheet({
   const [note, setNote] = useState('');
 
   const cartItems = Object.entries(cart)
-    .filter(([, qty]) => qty > 0)
+    .filter(([, qty]) => qty >= 0)
     .map(([id, qty]) => ({
       item: items.find((i) => i.id === id),
       qty,
@@ -1223,8 +1225,9 @@ function OrderSheet({
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <button
+                    disabled={qty === 0}
                     onClick={() => onUpdateQty?.(item.id, -1)}
-                    className="h-6 w-6 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-rose-50 hover:text-rose-500 transition-all"
+                    className="h-6 w-6 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-rose-50 hover:text-rose-500 transition-all disabled:opacity-30 disabled:pointer-events-none"
                   >
                     <Minus size={10} />
                   </button>
@@ -1426,7 +1429,7 @@ function OrderSheet({
         </div>
 
         <button
-          disabled={(effectiveMode !== 'self_pickup' && !location) || busy}
+          disabled={(effectiveMode !== 'self_pickup' && !location) || busy || totalCount === 0}
           onClick={() =>
             onConfirm({
               location: effectiveMode === 'self_pickup' ? 'Pantry Counter' : location,
@@ -1441,6 +1444,10 @@ function OrderSheet({
             <>
               <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />{' '}
               Placing...
+            </>
+          ) : totalCount === 0 ? (
+            <>
+              Please place an order of at least one
             </>
           ) : (
             <>
@@ -1718,16 +1725,43 @@ export default function Cafeteria() {
 
   useEffect(() => {
     const state = location.state;
-    if (state?.reorderItem && items.length > 0) {
-      const match = items.find(
-        (i) =>
-          i.item_name?.toLowerCase() === state.reorderItem?.toLowerCase() ||
-          i.display_name?.toLowerCase() === state.reorderItem?.toLowerCase() ||
-          i.frontend_name?.toLowerCase() === state.reorderItem?.toLowerCase() ||
-          (i.item_name && state.reorderItem?.toLowerCase().includes(i.item_name.toLowerCase()))
-      );
-      if (match) {
-        setCart({ [match.id]: state.reorderQty || 1 });
+    if ((state?.reorderItem || state?.reorderRawText) && items.length > 0) {
+      if (state.reorderRawText && state.reorderRawText.includes(',')) {
+        const parsed = {};
+        state.reorderRawText.split(',').forEach((part) => {
+          const match = part.trim().match(/^(\d+)x\s*(.+)$/);
+          if (match) {
+            let name = match[2].trim().toLowerCase();
+            const breadIdx = name.indexOf(' [bread:');
+            if (breadIdx !== -1) {
+              name = name.slice(0, breadIdx).trim();
+            }
+            const matchedItem = items.find(
+              (i) =>
+                i.item_name?.toLowerCase() === name ||
+                i.display_name?.toLowerCase() === name ||
+                i.frontend_name?.toLowerCase() === name
+            );
+            if (matchedItem) {
+              parsed[matchedItem.id] = parseInt(match[1], 10) || 1;
+            }
+          }
+        });
+        if (Object.keys(parsed).length > 0) {
+          setCart(parsed);
+        }
+      } else {
+        const reorderName = state.reorderItem || '';
+        const match = items.find(
+          (i) =>
+            i.item_name?.toLowerCase() === reorderName.toLowerCase() ||
+            i.display_name?.toLowerCase() === reorderName.toLowerCase() ||
+            i.frontend_name?.toLowerCase() === reorderName.toLowerCase() ||
+            (i.item_name && reorderName.toLowerCase().includes(i.item_name.toLowerCase()))
+        );
+        if (match) {
+          setCart({ [match.id]: state.reorderQty || 1 });
+        }
       }
       navigate(location.pathname, { replace: true, state: null });
     }
@@ -1843,8 +1877,7 @@ export default function Cafeteria() {
   function updateCartQty(id, delta) {
     setCart((c) => {
       const newQty = (c[id] || 0) + delta;
-      if (newQty <= 0) {
-        deleteFromCart(id);
+      if (newQty < 0) {
         return c;
       }
       return { ...c, [id]: newQty };
@@ -1873,22 +1906,24 @@ export default function Cafeteria() {
     setOrderBusy(true);
     setErrorMsg('');
     try {
-      let lastReq = null;
-      for (const { item, qty, customNote } of cartItems) {
-        const instruction = [customNote, note].filter(Boolean).join('. ');
+      const itemsPayload = cartItems.map(({ item, qty, customNote }) => {
         const breadType = customizations[`${item.id}__bread`] || '';
-        const quickItem = getOrderItemName(item);
-        const r = await api.quickOrder({
-          quick_item: quickItem,
-          quick_location: delivery_mode === 'self_pickup' ? null : location,
-          quick_quantity: qty,
-          quick_instruction: instruction,
-          quick_bread_type: breadType,
-          delivery_mode: delivery_mode,
-          fulfillmentType: delivery_mode === 'self_pickup' ? 'pickup' : 'delivery',
-        });
-        lastReq = r?.request;
-      }
+        return {
+          name: getOrderItemName(item),
+          qty,
+          breadType,
+          customNote
+        };
+      });
+
+      const r = await api.quickOrder({
+        items: itemsPayload,
+        location: delivery_mode === 'self_pickup' ? null : location,
+        note: note,
+        delivery_mode: delivery_mode,
+        fulfillmentType: delivery_mode === 'self_pickup' ? 'pickup' : 'delivery',
+      });
+      const lastReq = r?.request;
       setCart({});
       setCustomizations({});
       setShowSheet(false);
@@ -2305,7 +2340,7 @@ export default function Cafeteria() {
                   <span className="text-lg">{r.status === 'done' ? '✅' : '❌'}</span>
                   <div className="text-left">
                     <div className="text-sm font-semibold text-slate-800">
-                      {r.parsed_item || r.raw_text}
+                      {r.raw_text && (/^\d+x/.test(r.raw_text) || r.raw_text.includes(',')) ? r.raw_text : (r.parsed_item || r.raw_text)}
                     </div>
                     <div className="text-xs text-slate-400">
                       {r.parsed_location || 'No location'} · {r.status}
@@ -2400,7 +2435,13 @@ export default function Cafeteria() {
             items={items}
             onClose={() => {
               setShowSheet(false);
-              if (Object.keys(cart).length === 0) setCart({});
+              setCart((c) => {
+                const cleaned = {};
+                for (const [id, qty] of Object.entries(c)) {
+                  if (qty > 0) cleaned[id] = qty;
+                }
+                return cleaned;
+              });
             }}
             onConfirm={handleConfirmOrder}
             busy={orderBusy}

@@ -3,18 +3,18 @@
 //  Runs on the Office PC, watches Supabase, prints on order
 // ============================================================
 
-const { createClient }                 = require('@supabase/supabase-js');
+const { createClient } = require('@supabase/supabase-js');
 const { ThermalPrinter, PrinterTypes } = require('node-thermal-printer');
-const fs                               = require('fs');
-const path                             = require('path');
-const { exec }                         = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const { exec } = require('child_process');
 
 // -- Config ----------------------------------------------------
-const SUPABASE_URL = 'https://twmadauhauuypioznpus.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR3bWFkYXVoYXV1eXBpb3pucHVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3Mzk1MCwiZXhwIjoyMDk0MzE1NTUwfQ.0zDhGqnWUZAMHaR8rcPc1OkPHjpwWbKQy3SRoCwJGYk';
+const SUPABASE_URL = 'https://bshwmjrkweedetraukem.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzaHdtanJrd2VlZGV0cmF1a2VtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI3MzM5MDEsImV4cCI6MjA5ODMwOTkwMX0.OwOi5JoZfh3J5tvgpLOCxlwOOhckIipXNuESu2jCsXY';
 const PRINTER_NAME = '58mm Series Printer';
 const POLL_SECONDS = 10;
-const PRINTED_LOG  = path.join(__dirname, 'printed.json');
+const PRINTED_LOG = path.join(__dirname, 'printed.json');
 
 // -- Supabase client ------------------------------------------
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -44,12 +44,12 @@ function stripEmojis(str) {
 function formatReceiptDate(iso) {
   return new Date(iso || Date.now()).toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
-    day:      '2-digit',
-    month:    'short',
-    year:     'numeric',
-    hour:     '2-digit',
-    minute:   '2-digit',
-    hour12:   true,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
   });
 }
 
@@ -58,6 +58,12 @@ function getOrderNumber(order) {
 }
 
 function getQty(order) {
+  if (order.raw_text && order.raw_text.includes(',')) {
+    const matches = [...order.raw_text.matchAll(/(\d+)x/g)];
+    if (matches.length > 0) {
+      return matches.reduce((sum, m) => sum + parseInt(m[1], 10), 0);
+    }
+  }
   return parseInt(order.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
 }
 
@@ -136,14 +142,14 @@ async function printReceipt(order) {
 
   const isNightShift = order.status === 'done' && order.live_status === 'Recorded';
 
-  const orderId  = getOrderNumber(order);
-  const qty      = getQty(order);
-  const item     = stripEmojis(order.parsed_item || order.raw_text || 'Unknown Item');
+  const orderId = getOrderNumber(order);
+  const qty = getQty(order);
+  const item = stripEmojis(order.parsed_item || order.raw_text || 'Unknown Item');
   const employee = getEmployeeName(order);
   const location = stripEmojis(order.parsed_location || 'Not specified');
-  const dateStr  = formatReceiptDate(order.created_at);
-  const note     = stripEmojis(order.instruction || '');
-  const quote    = getQuote(order);
+  const dateStr = formatReceiptDate(order.created_at);
+  const note = stripEmojis(order.instruction || '');
+  const quote = getQuote(order);
 
   // Header
   printer.alignCenter();
@@ -264,8 +270,8 @@ $bytes = [System.IO.File]::ReadAllBytes('${tempFile.replace(/\\/g, '\\\\')}')
 
     return new Promise((resolve) => {
       exec(`powershell -ExecutionPolicy Bypass -File "${psScriptPath}"`, (err) => {
-        try { fs.unlinkSync(tempFile); } catch {}
-        try { fs.unlinkSync(psScriptPath); } catch {}
+        try { fs.unlinkSync(tempFile); } catch { }
+        try { fs.unlinkSync(psScriptPath); } catch { }
 
         if (err) {
           console.error(`Print error: ${err.message}`);

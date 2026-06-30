@@ -244,6 +244,14 @@ export function createAdminRouter(overrides = {}) {
       });
       if (auditErr) throw auditErr;
 
+      const { error: logErr } = await d.supabaseAdmin.from('mfa_reset_logs').insert({
+        reset_by: req.user.id,
+        reset_by_email: req.user.email || null,
+        target_user_id: req.params.userId,
+        target_user_email: targetUser.email || null,
+      });
+      if (logErr) throw logErr;
+
       res.json({
         ok: true,
         user_id: req.params.userId,

@@ -3,6 +3,7 @@ import { ArrowLeft, ChevronRight, Clock, Loader2, RotateCcw, Search, XCircle } f
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
+import { useAuth } from '../hooks/useAuth.js';
 
 const CANCEL_WINDOW_SEC = 30;
 
@@ -107,7 +108,9 @@ function deliveryDuration(createdAt, fulfilledAt) {
 }
 
 // ── Order Card (Zomato/Swiggy style) ──────────────────────────────────────────
-function OrderCard({ order, onTap, onReorder, onCancel }) {
+function OrderCard({ order, onTap, onReorder, onCancel, onSetStatus }) {
+  const { profile } = useAuth();
+  const isStaff = ['office_boy', 'facility_manager', 'leadership'].includes(profile?.role);
   const emoji = CATEGORY_EMOJI[order.category] || '📦';
   const status = STATUS_CONFIG[order.status] || STATUS_CONFIG.pending;
   const liveLabel = LIVE_STATUS_LABEL[order.live_status] || order.live_status;
@@ -150,8 +153,8 @@ function OrderCard({ order, onTap, onReorder, onCancel }) {
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="font-bold text-slate-900 text-[15px] leading-tight">
-            {order.parsed_item || order.raw_text}
-            {qty > 1 && <span className="text-brand ml-1">×{qty}</span>}
+            {order.raw_text && (/^\d+x/.test(order.raw_text) || order.raw_text.includes(',')) ? order.raw_text : (order.parsed_item || order.raw_text)}
+            {!(order.raw_text && (/^\d+x/.test(order.raw_text) || order.raw_text.includes(','))) && qty > 1 && <span className="text-brand ml-1">×{qty}</span>}
           </h3>
           {order.parsed_location && (
             <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
@@ -229,6 +232,73 @@ function OrderCard({ order, onTap, onReorder, onCancel }) {
           </button>
         ) : null}
       </div>
+
+      {isStaff && isActive && (
+        <div className="border-t border-slate-50 pt-3 flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
+          {order.status === 'pending' && (
+            <button
+              onClick={() => onSetStatus(order.id, 'in_progress', 'accepted')}
+              className="bg-brand text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+            >
+              Accept
+            </button>
+          )}
+
+          {order.status === 'in_progress' && order.live_status === 'accepted' && (
+            <button
+              onClick={() => onSetStatus(order.id, 'in_progress', 'preparing')}
+              className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+            >
+              Preparing
+            </button>
+          )}
+
+          {order.status === 'in_progress' &&
+            order.live_status === 'preparing' &&
+            (order.delivery_mode === 'self_pickup' ? (
+              <button
+                onClick={() => onSetStatus(order.id, 'in_progress', 'ready_for_pickup')}
+                className="bg-teal-600 hover:bg-teal-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+              >
+                ✅ Mark as Ready
+              </button>
+            ) : (
+              <button
+                onClick={() => onSetStatus(order.id, 'in_progress', 'on_the_way')}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+              >
+                On the Way
+              </button>
+            ))}
+
+          {order.status === 'in_progress' && order.live_status === 'ready_for_pickup' && (
+            <button
+              onClick={() => onSetStatus(order.id, 'done', 'done')}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+            >
+              ✓ Mark as Collected
+            </button>
+          )}
+
+          {order.status === 'in_progress' &&
+            order.delivery_mode !== 'self_pickup' &&
+            order.live_status === 'on_the_way' && (
+              <button
+                onClick={() => onSetStatus(order.id, 'done', 'done')}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+              >
+                Mark Done
+              </button>
+            )}
+
+          <button
+            onClick={() => onSetStatus(order.id, 'cancelled', 'cancelled')}
+            className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -320,6 +390,7 @@ export default function OrderHistory() {
         reorderItem: order.parsed_item,
         reorderQty: qty,
         reorderLocation: order.parsed_location,
+        reorderRawText: order.raw_text,
       },
     });
   }
@@ -335,6 +406,15 @@ export default function OrderHistory() {
       alert(`Failed to cancel: ${e.message}`);
     } finally {
       setCancelling(false);
+    }
+  }
+
+  async function handleSetStatus(id, status, liveStatus) {
+    try {
+      await api.setRequestStatus(id, status, liveStatus);
+      load(); // refresh list
+    } catch (e) {
+      alert(`Failed to update status: ${e.message}`);
     }
   }
 
@@ -431,6 +511,7 @@ export default function OrderHistory() {
                     onTap={() => navigate(`/track/${order.id}`)}
                     onReorder={handleReorder}
                     onCancel={setCancelTarget}
+                    onSetStatus={handleSetStatus}
                   />
                 ))}
               </div>

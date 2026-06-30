@@ -50,8 +50,28 @@ function buildReceiptHTML(order) {
   const location = order.parsed_location || 'Not specified';
   const instruction = order.instruction || '';
   const isSelfPickup = order.delivery_mode === 'self_pickup';
-  const qtyMatch = order.raw_text?.match(/^(\d+)x/);
-  const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+
+  let itemsHTML = '';
+  if (order.raw_text && order.raw_text.includes(',')) {
+    const parsedList = order.raw_text.split(',').map((part) => {
+      const match = part.trim().match(/^(\d+)x\s*(.+)$/);
+      if (match) {
+        let name = match[2].trim();
+        const breadIdx = name.indexOf(' [bread:');
+        if (breadIdx !== -1) {
+          name = name.slice(0, breadIdx).trim();
+        }
+        return `<tr><td style="text-align:left;padding:2px 0;">${name}</td><td style="text-align:right;font-weight:bold;padding:2px 0;">x${match[1]}</td></tr>`;
+      }
+      return `<tr><td style="text-align:left;padding:2px 0;">${part.trim()}</td><td style="text-align:right;font-weight:bold;padding:2px 0;">x1</td></tr>`;
+    });
+    itemsHTML = `<table style="width:100%;font-size:13px;margin:8px 0;border-collapse:collapse;">${parsedList.join('')}</table>`;
+  } else {
+    const qtyMatch = order.raw_text?.match(/^(\d+)x/);
+    const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+    itemsHTML = `<div class="big center" style="padding:4px 0;">${item}${qty > 1 ? ` x${qty}` : ''}</div>`;
+  }
+
   const dateStr = new Date(order.created_at || Date.now()).toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
     day: '2-digit',
@@ -97,7 +117,7 @@ function buildReceiptHTML(order) {
   <div class="row"><span>Location</span><span>${isSelfPickup ? 'Pantry Counter' : location}</span></div>
   <div class="row"><span>Mode</span><span>${isSelfPickup ? '🏃 SELF PICK' : '🛵 DELIVER'}</span></div>
   <div class="line"></div>
-  <div class="big center" style="padding:4px 0;">${item}${qty > 1 ? ` x${qty}` : ''}</div>
+  ${itemsHTML}
   ${note ? `<div style="padding:2px 0;font-size:11px;">Note: ${note}</div>` : ''}
   <div class="line"></div>
   <div class="footer">${isSelfPickup ? '⏳ PREPARE & KEEP READY' : '🛵 DELIVER ASAP!'}</div>
@@ -146,12 +166,12 @@ export default function RequestQueue() {
   const load = useCallback(async () => {
     setErr('');
     try {
-      const data = await api.listRequests(filter === 'all' ? '' : filter);
+      const data = await api.listRequests('');
       setRows(data);
     } catch (e) {
       setErr(e.message);
     }
-  }, [filter]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -171,6 +191,13 @@ export default function RequestQueue() {
   }
 
   const isStaff = ['office_boy', 'facility_manager', 'leadership'].includes(profile?.role);
+
+  const filteredRows = useMemo(() => {
+    if (!rows) return [];
+    const active = rows.filter((r) => r.status !== 'confirming');
+    if (filter === 'all') return active;
+    return active.filter((r) => r.status === filter);
+  }, [rows, filter]);
 
   const grouped = useMemo(() => {
     if (!rows) return null;
@@ -217,11 +244,11 @@ export default function RequestQueue() {
 
       {err && <div className="text-sm text-rose-700 bg-rose-50 p-3 rounded-md">{err}</div>}
 
-      {rows.length === 0 ? (
+      {filteredRows.length === 0 ? (
         <div className="card text-slate-500">Nothing here. {isStaff && 'Have a sip of chai.'}</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {rows.map((r) => {
+          {filteredRows.map((r) => {
             const isSelfPickup = r.delivery_mode === 'self_pickup';
             const displayStatus =
               r.live_status === 'ready_for_pickup' ? 'ready_for_pickup' : r.status;
@@ -239,7 +266,7 @@ export default function RequestQueue() {
                 </div>
 
                 <div className="text-base font-semibold text-slate-900">
-                  {r.parsed_item || 'Request'}
+                  {r.raw_text && (/^\d+x/.test(r.raw_text) || r.raw_text.includes(',')) ? r.raw_text : (r.parsed_item || 'Request')}
                   {!isSelfPickup && r.parsed_location && (
                     <span className="text-slate-500 font-normal"> · {r.parsed_location}</span>
                   )}

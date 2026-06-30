@@ -5,6 +5,7 @@ import Layout from './components/Layout.jsx';
 import { useAuth } from './hooks/useAuth.js';
 import { supabase } from './lib/supabase.js';
 import AdminPage from './pages/Admin.jsx';
+import MfaResetPage from './pages/MfaReset.jsx';
 import AuditLogPage from './pages/AuditLog.jsx';
 import BillApprovalPage from './pages/BillApproval.jsx';
 import BillUploadPage from './pages/BillUpload.jsx';
@@ -212,6 +213,14 @@ export default function App() {
           element={
             <Protected allow={['leadership']}>
               <AdminPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/reset-authenticator"
+          element={
+            <Protected allow={['leadership']}>
+              <MfaResetPage />
             </Protected>
           }
         />

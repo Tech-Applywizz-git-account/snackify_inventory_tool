@@ -341,7 +341,13 @@ function OrderConfirmedScreen({ req, queueAhead, onDismiss, onCancelled }) {
   }
 
   const emoji = CATEGORY_EMOJI[req.category] || '📦';
-  const qty = parseInt(req.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
+  let qty = 1;
+  if (req.raw_text) {
+    const matches = [...req.raw_text.matchAll(/(\d+)x/g)];
+    if (matches.length > 0) {
+      qty = matches.reduce((sum, m) => sum + parseInt(m[1], 10), 0);
+    }
+  }
   const eta = calcETA(qty, queueAhead, req.category === 'beverage');
 
   if (cancelled) {
@@ -435,7 +441,7 @@ function OrderConfirmedScreen({ req, queueAhead, onDismiss, onCancelled }) {
           </div>
           <div className="min-w-0">
             <h3 className="font-bold text-slate-900 text-sm truncate">
-              {req.parsed_item || req.raw_text}
+              {req.raw_text && (/^\d+x/.test(req.raw_text) || req.raw_text.includes(',')) ? req.raw_text : (req.parsed_item || req.raw_text)}
             </h3>
             {req.parsed_location && (
               <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
@@ -443,7 +449,7 @@ function OrderConfirmedScreen({ req, queueAhead, onDismiss, onCancelled }) {
               </p>
             )}
           </div>
-          {qty > 1 && <span className="text-brand font-bold text-sm shrink-0">×{qty}</span>}
+          {!(req.raw_text && (/^\d+x/.test(req.raw_text) || req.raw_text.includes(','))) && qty > 1 && <span className="text-brand font-bold text-sm shrink-0">×{qty}</span>}
         </div>
 
         {/* ETA */}
@@ -638,7 +644,7 @@ function OrderView({ req, onRate, onRefresh }) {
         <div className="flex justify-between items-start">
           <div>
             <div className="font-medium text-slate-900 text-base">
-              {req.parsed_item || 'Your Request'}
+              {req.raw_text && (/^\d+x/.test(req.raw_text) || req.raw_text.includes(',')) ? req.raw_text : (req.parsed_item || 'Your Request')}
             </div>
             {req.parsed_employee_name && (
               <div className="text-xs text-slate-500 mt-0.5">For: {req.parsed_employee_name}</div>

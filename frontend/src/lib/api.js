@@ -36,6 +36,9 @@ async function request(path, opts = {}) {
         if (body?.error) msg = body.error;
       }
     } catch {}
+    if (res.status === 401 && (msg.toLowerCase().includes('token') || msg.toLowerCase().includes('jwt') || msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('session'))) {
+      supabase.auth.signOut().catch(() => {});
+    }
     throw new Error(msg);
   }
   if (res.status === 204) return null;
