@@ -1535,10 +1535,17 @@ export default function Cafeteria() {
       const n = (i.item_name || '').toLowerCase();
       return n === 'milk' || n.includes('toned milk') || n.includes('milk tetra');
     });
+    const waterRow = rawItems.find((i) => {
+      const n = (i.item_name || '').toLowerCase();
+      return n === 'water' || n.includes('mineral water');
+    });
 
     // ponytail: use stock_servings only — stock_today is purchase units, not servings
     const milkAvail = milkRow ? (milkRow.stock_servings ?? null) : null;
     const milkInStock = milkRow ? milkAvail === null || milkAvail > 0 : false;
+
+    const waterAvail = waterRow ? (waterRow.stock_servings ?? waterRow.stock_today ?? null) : null;
+    const waterInStock = waterRow ? waterAvail === null || waterAvail > 0 : true;
 
     // Mark backing ingredients as non-orderable (hidden from direct menu)
     const hiddenNames = new Set();
@@ -1563,8 +1570,16 @@ export default function Cafeteria() {
       ) {
         return {
           ...i,
-          orderable: selfInStock && milkInStock,
+          orderable: selfInStock && milkInStock && waterInStock,
           _needs_milk: true,
+        };
+      }
+
+      const isTeaOrCoffee = nameL.includes('tea') || nameL.includes('coffee') || nameL.includes('cappuccino') || nameL.includes('latte') || nameL.includes('espresso');
+      if (isTeaOrCoffee && nameL !== 'lemon tea') {
+        return {
+          ...i,
+          orderable: selfInStock && milkInStock && waterInStock,
         };
       }
 
@@ -1578,36 +1593,39 @@ export default function Cafeteria() {
       const cupsAvail = coffeeBeansRow.stock_servings ?? null;
       const coffeeInStock = cupsAvail === null || cupsAvail > 0;
 
-      // 1. Water-dependent Coffees
-      [
-        {
-          name: 'Espresso',
-          emoji: '☕',
-          id: '_espresso',
-          note: 'Intense coffee quickly brewed at high pressure',
-        },
-        {
-          name: 'Americano',
-          emoji: '🫖',
-          id: '_americano',
-          note: 'Traditional espresso mixed with hot water',
-        },
-      ].forEach(({ name, emoji, id, note }) => {
-        virtual.push({
-          id: coffeeBeansRow.id + id,
-          item_name: name,
-          display_name: name,
-          description: note,
-          category: 'beverage',
-          emoji,
-          stock_servings: cupsAvail,
-          stock_today: null,
-          orderable: coffeeInStock,
-          _virtual: true,
-          _backing: coffeeBeansRow.item_name,
-          _machine: true,
-        });
+      // 1a. Espresso — always available as long as coffee beans & water are in stock (no milk needed)
+      virtual.push({
+        id: coffeeBeansRow.id + '_espresso',
+        item_name: 'Espresso',
+        display_name: 'Espresso',
+        description: 'Intense coffee quickly brewed at high pressure',
+        category: 'beverage',
+        emoji: '☕',
+        stock_servings: cupsAvail,
+        stock_today: null,
+        orderable: coffeeInStock && waterInStock,
+        _virtual: true,
+        _backing: coffeeBeansRow.item_name,
+        _machine: true,
       });
+
+      // 1b. Americano — disabled when milk is out of stock
+      virtual.push({
+        id: coffeeBeansRow.id + '_americano',
+        item_name: 'Americano',
+        display_name: 'Americano',
+        description: 'Traditional espresso mixed with hot water',
+        category: 'beverage',
+        emoji: '🫖',
+        stock_servings: cupsAvail,
+        stock_today: null,
+        orderable: coffeeInStock && milkInStock && waterInStock,
+        _virtual: true,
+        _backing: coffeeBeansRow.item_name,
+        _machine: true,
+        _needs_milk: true,
+      });
+
 
       // 2. Milk-dependent Coffees
       [
@@ -1636,7 +1654,7 @@ export default function Cafeteria() {
               ? null
               : Math.min(cupsAvail ?? 9999, milkAvail ?? 9999),
           stock_today: null,
-          orderable: coffeeInStock && milkInStock,
+          orderable: coffeeInStock && milkInStock && waterInStock,
           _virtual: true,
           _backing: coffeeBeansRow.item_name,
           _machine: true,
@@ -1657,7 +1675,7 @@ export default function Cafeteria() {
         emoji: '🍋',
         stock_servings: sachetsAvail,
         stock_today: null,
-        orderable: sachetsAvail === null || sachetsAvail > 0,
+        orderable: (sachetsAvail === null || sachetsAvail > 0) && waterInStock,
         _virtual: true,
         _backing: lemonSachetsRow.item_name,
         _machine: false,

@@ -4,6 +4,7 @@ import { learnFromRating } from '../lib/learning.js';
 import { chatCompletion } from '../lib/openai.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { postCancelToTeams, postOrderToTeams, postStockAlertToTeams } from '../lib/teams.js';
+import { sendLowStockEmail } from '../lib/microsoftGraph.js';
 import { sendPushToUsers } from './push.js';
 
 const router = Router();
@@ -1362,6 +1363,13 @@ async function deductStockForRequest(user, itemName, qty, instruction, breadType
       }
       if (Object.keys(updatePayload).length > 0) {
         await supabaseAdmin.from('cafeteria_items').update(updatePayload).eq('id', backingRow.id);
+        // Email alert: fire exactly at 10 servings (low stock) and 5 servings (critical)
+        const newStock = updatePayload.stock_servings ?? updatePayload.stock_today;
+        if (newStock === 10) {
+          sendLowStockEmail(backingRow.item_name, newStock, supabaseAdmin, false).catch(() => {});
+        } else if (newStock === 5) {
+          sendLowStockEmail(backingRow.item_name, newStock, supabaseAdmin, true).catch(() => {});
+        }
       }
     }
 
@@ -1504,6 +1512,12 @@ async function deductStockForRequest(user, itemName, qty, instruction, breadType
     const alertServings = mainUpdate.stock_servings ?? mainUpdate.stock_today;
     if (alertServings !== null && alertServings <= 3 && alertServings >= 0) {
       postStockAlertToTeams({ ...itemRow, stock_servings: alertServings }).catch(() => {});
+    }
+    // Email alert: fire exactly at 10 servings (low stock) and 5 servings (critical)
+    if (alertServings === 10) {
+      sendLowStockEmail(itemRow.display_name || itemRow.item_name, alertServings, supabaseAdmin, false).catch(() => {});
+    } else if (alertServings === 5) {
+      sendLowStockEmail(itemRow.display_name || itemRow.item_name, alertServings, supabaseAdmin, true).catch(() => {});
     }
   }
 

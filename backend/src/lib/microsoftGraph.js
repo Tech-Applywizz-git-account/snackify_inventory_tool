@@ -129,3 +129,71 @@ export async function sendOtpEmail(email, code) {
 export function isSendMailConfigured() {
   return isGraphConfigured();
 }
+
+/**
+ * Send a low-stock warning email to all leadership users.
+ * Triggered automatically when an item's stock_servings drops to <= 10 after an order.
+ * @param {string} itemName      — display name of the item running low
+ * @param {number} remaining     — number of servings remaining after deduction
+ * @param {object} supabaseAdmin — supabase admin client (passed in to avoid circular imports)
+ */
+export async function sendLowStockEmail(itemName, remaining, supabaseAdmin, isCritical = false) {
+  if (!isGraphConfigured()) {
+    console.warn('[LowStock] Microsoft Graph not configured — skipping email alert.');
+    return;
+  }
+
+  // Fetch all leadership email addresses from profiles table
+  const { data: leaders, error } = await supabaseAdmin
+    .from('profiles')
+    .select('email')
+    .eq('role', 'leadership');
+
+  if (error || !leaders || leaders.length === 0) {
+    console.warn('[LowStock] No leadership emails found — skipping low stock email.');
+    return;
+  }
+
+  const token = await getGraphToken();
+  const toRecipients = leaders
+    .filter((l) => l.email)
+    .map((l) => ({ emailAddress: { address: l.email } }));
+
+  if (toRecipients.length === 0) return;
+
+  const subject = isCritical
+    ? `🚨 Critical Stock Alert: ${itemName} — Only ${remaining} servings left!`
+    : `⚠️ Low Stock Alert: ${itemName}`;
+  const body =
+    `Hello,\n\n` +
+    `This is an automated alert from Snackify.\n\n` +
+    (isCritical
+      ? `🚨 URGENT: The item "${itemName}" is critically low in the cafeteria!\n`
+      : `The item "${itemName}" is running low in the cafeteria.\n`) +
+    `Remaining servings: ${remaining}\n\n` +
+    `Please arrange a restock at your earliest convenience.\n\n` +
+    `— Snackify Inventory System`;
+
+  const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'Text', content: body },
+        toRecipients,
+      },
+      saveToSentItems: false,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    console.error(`[LowStock] Graph sendMail failed (${res.status}): ${text.slice(0, 200)}`);
+  } else {
+    console.log(`[LowStock] Low stock email sent for "${itemName}" (${remaining} servings left) to ${toRecipients.length} leaders.`);
+  }
+}
