@@ -436,6 +436,20 @@ export default function MealBooking() {
   const [booking, setBooking] = useState(false);
   const [_loading, setLoading] = useState(true);
   const [userPrefs, setUserPrefs] = useState({ shift: 'morning', notification_tone: 'Friendly' });
+  const [onionSlices, setOnionSlices] = useState('no onion');
+
+  const selectedDateParts = selectedDate ? selectedDate.split('-').map(Number) : [];
+  const selectedDay = selectedDate ? new Date(Date.UTC(selectedDateParts[0], selectedDateParts[1] - 1, selectedDateParts[2])).getUTCDay() : null;
+  const isNonVegDay = selectedDay === 3 || selectedDay === 5; // Wednesday (3) or Friday (5)
+
+  useEffect(() => {
+    if (selectedDate) {
+      const b = bookings.find((bk) => bk.meal_date === selectedDate);
+      setOnionSlices(b?.onion_slices || 'no onion');
+    } else {
+      setOnionSlices('no onion');
+    }
+  }, [selectedDate]);
 
   // Confirmation sheet state
   const [confirmData, setConfirmData] = useState(null); // { dateStr, choice, existingChoice }
@@ -527,7 +541,7 @@ export default function MealBooking() {
     const { dateStr, choice } = confirmData;
     setBooking(true);
     try {
-      const result = await api.bookMeal({ date: dateStr, choice });
+      const result = await api.bookMeal({ date: dateStr, choice, onion_slices: onionSlices });
       const updated = await api.myMealBookings(monthStr);
       setBookings(updated);
       setConfirmData(null);
@@ -815,6 +829,11 @@ export default function MealBooking() {
                       <div>
                         <div className={`font-bold text-sm ${ui.text}`}>
                           ✅ {b.choice === 'skip' ? 'Skipped' : `${ui.label} booked`}
+                          {b.choice !== 'skip' && b.onion_slices && b.onion_slices !== 'no onion' && (
+                            <span className="ml-2 inline-flex items-center gap-0.5 px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-bold">
+                              🧅 {b.onion_slices}
+                            </span>
+                          )}
                         </div>
                         {b.booked_at && (
                           <div className="text-[10px] text-slate-400 mt-0.5">
@@ -871,6 +890,72 @@ export default function MealBooking() {
                     </button>
                   )}
                 </div>
+
+                {/* Onion slices customization (Wednesday & Friday only) */}
+                {isNonVegDay && (() => {
+                  const match = onionSlices ? onionSlices.match(/^(\d+)/) : null;
+                  const count = match ? parseInt(match[1], 10) : 0;
+                  const disabled = booking || !canBook;
+                  const showSaveButton = b && b.choice !== 'skip' && (b.onion_slices || 'no onion') !== onionSlices;
+
+                  const updateSlices = (newCount) => {
+                    const opt = newCount <= 0 ? 'no onion' : newCount === 1 ? '1 slice' : `${newCount} slices`;
+                    setOnionSlices(opt);
+                  };
+
+                  const saveSlicesOnBackend = () => {
+                    setBooking(true);
+                    api.bookMeal({ date: selectedDate, choice: b.choice, onion_slices: onionSlices })
+                      .then(async () => {
+                        const updated = await api.myMealBookings(monthStr);
+                        setBookings(updated);
+                        setToast({ message: 'Onions updated successfully!', type: 'success' });
+                      })
+                      .catch((err) => setToast({ message: err.message || 'Failed to update onions', type: 'error' }))
+                      .finally(() => setBooking(false));
+                  };
+
+                  return (
+                    <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl p-3">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                        <span>🧅</span>
+                        <span>Onion Slices</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          disabled={disabled || count === 0}
+                          onClick={() => updateSlices(count - 1)}
+                          className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-slate-600 hover:border-slate-300 disabled:opacity-50 cursor-pointer"
+                        >
+                          -
+                        </button>
+                        <span className="text-xs font-bold text-slate-800 w-16 text-center">
+                          {count === 0 ? 'No Onion' : count === 1 ? '1 Slice' : `${count} Slices`}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => updateSlices(count + 1)}
+                          className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-slate-600 hover:border-slate-300 disabled:opacity-50 cursor-pointer"
+                        >
+                          +
+                        </button>
+                        {showSaveButton && (
+                          <button
+                            type="button"
+                            disabled={booking}
+                            onClick={saveSlicesOnBackend}
+                            className="px-3 py-1.5 rounded-lg bg-brand text-white font-bold text-xs hover:bg-brand/90 transition-all cursor-pointer ml-1 shadow"
+                          >
+                            Save
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <div className="flex gap-2">
                   {dayOpts.map((opt) => {
                     const ui = CHOICE_UI[opt];

@@ -105,11 +105,21 @@ export default function MealCard() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [targetDate] = useState(getNextWorkingDay);
+  const [onionSlices, setOnionSlices] = useState('no onion');
+
+  const dateParts = targetDate.split('-').map(Number);
+  const targetDay = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2])).getUTCDay();
+  const isNonVegDay = targetDay === 3 || targetDay === 5; // Wednesday (3) or Friday (5)
 
   const load = useCallback(async () => {
     try {
       const result = await api.mealOptions(targetDate);
       setData(result);
+      if (result?.booking?.onion_slices) {
+        setOnionSlices(result.booking.onion_slices);
+      } else {
+        setOnionSlices('no onion');
+      }
     } catch (e) {
       console.error('MealCard load error:', e);
     } finally {
@@ -121,11 +131,11 @@ export default function MealCard() {
     load();
   }, [load]);
 
-  async function book(choice) {
+  async function book(choice, slices = onionSlices) {
     setBusy(true);
     setMsg('');
     try {
-      const result = await api.bookMeal({ date: targetDate, choice });
+      const result = await api.bookMeal({ date: targetDate, choice, onion_slices: slices });
       setMsg(result.message || 'Booked!');
       await load(); // refresh state
       setTimeout(() => setMsg(''), 3000);
@@ -268,6 +278,59 @@ export default function MealCard() {
           </motion.button>
         </div>
       )}
+
+      {/* Onion slices customization (Wednesday & Friday only) */}
+      {isNonVegDay && (canBook || currentChoice) && currentChoice !== 'skip' && (() => {
+        const match = onionSlices ? onionSlices.match(/^(\d+)/) : null;
+        const count = match ? parseInt(match[1], 10) : 0;
+        const disabled = !canBook || busy;
+        const showSaveButton = currentChoice && currentChoice !== 'skip' && (booking?.onion_slices || 'no onion') !== onionSlices;
+
+        const updateSlices = (newCount) => {
+          const opt = newCount <= 0 ? 'no onion' : newCount === 1 ? '1 slice' : `${newCount} slices`;
+          setOnionSlices(opt);
+        };
+
+        return (
+          <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl p-3">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+              <span>🧅</span>
+              <span>Onion Slices</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                disabled={disabled || count === 0}
+                onClick={() => updateSlices(count - 1)}
+                className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-slate-600 hover:border-slate-300 disabled:opacity-50 cursor-pointer"
+              >
+                -
+              </button>
+              <span className="text-xs font-bold text-slate-800 w-16 text-center">
+                {count === 0 ? 'No Onion' : count === 1 ? '1 Slice' : `${count} Slices`}
+              </span>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => updateSlices(count + 1)}
+                className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-slate-600 hover:border-slate-300 disabled:opacity-50 cursor-pointer"
+              >
+                +
+              </button>
+              {showSaveButton && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => book(currentChoice, onionSlices)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-700 text-white font-bold text-xs hover:bg-slate-800 transition-all cursor-pointer ml-1 shadow"
+                >
+                  Save
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Flash message */}
       <AnimatePresence>

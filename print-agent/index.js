@@ -371,6 +371,7 @@ function formatMealToken(booking, profile, isDuplicate = false) {
     DASH,
     CMD.BOLD_ON,
     stripEmojis(`${choiceEmoji[booking.choice] || ''} ${choiceLabel[booking.choice] || booking.choice}`),
+    booking.onion_slices && booking.onion_slices !== 'no onion' ? `Onion    ${booking.onion_slices.toUpperCase()}` : null,
     CMD.BOLD_OFF,
     DASH,
     `Name     ${name}`,
@@ -387,7 +388,7 @@ function formatMealToken(booking, profile, isDuplicate = false) {
     CMD.PARTIAL_CUT
   );
 
-  return lines.join('\n');
+  return lines.filter((l) => l !== null && l !== undefined).join('\n');
 }
 
 function printViaWindowsSpooler(content, label, printerName) {
@@ -612,7 +613,7 @@ async function executePrintJob(job) {
       // Single reprint for one employee
       const { data } = await supabase
         .from('meal_bookings')
-        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date')
+        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices')
         .eq('user_id', job.booking_user_id)
         .eq('meal_date', job.meal_date)
         .neq('choice', 'skip')
@@ -622,7 +623,7 @@ async function executePrintJob(job) {
       // Cabin batch (cabin_batch or manual_cabin)
       const { data } = await supabase
         .from('meal_bookings')
-        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date')
+        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices')
         .eq('meal_date', job.meal_date)
         .eq('cabin_name', job.cabin_name)
         .neq('choice', 'skip')

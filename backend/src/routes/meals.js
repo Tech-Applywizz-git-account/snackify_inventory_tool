@@ -214,7 +214,7 @@ router.get('/options', async (req, res, next) => {
 // Body: { date: "2026-05-21", choice: "veg" | "non_veg" | "egg" | "skip" }
 router.post('/book', async (req, res, next) => {
   try {
-    const { date, choice } = req.body;
+    const { date, choice, onion_slices } = req.body;
     if (!date || !choice) return res.status(400).json({ error: 'date and choice required' });
 
     // Validate working day
@@ -262,6 +262,33 @@ router.post('/book', async (req, res, next) => {
       }
     }
 
+    // Validate onion slices on Wednesday (3) and Friday (5)
+    const mealDay = getMealDateDay(date);
+    const isNonVegDay = mealDay === 3 || mealDay === 5;
+    let savedOnionSlices = null;
+    if (isNonVegDay && choice !== 'skip') {
+      if (onion_slices) {
+        const cleaned = String(onion_slices).trim().toLowerCase();
+        const match = cleaned.match(/^(\d+)\s*slices?$/);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num === 0) {
+            savedOnionSlices = 'no onion';
+          } else if (num === 1) {
+            savedOnionSlices = '1 slice';
+          } else {
+            savedOnionSlices = `${num} slices`;
+          }
+        } else if (cleaned === 'no onion' || cleaned === 'no_onion') {
+          savedOnionSlices = 'no onion';
+        } else {
+          savedOnionSlices = 'no onion';
+        }
+      } else {
+        savedOnionSlices = 'no onion';
+      }
+    }
+
     const bookedAt = new Date().toISOString();
     const existing = await findMealBooking(req.user.id, date, 'id');
     let data;
@@ -269,7 +296,7 @@ router.post('/book', async (req, res, next) => {
     if (existing?.id) {
       const { data: updated, error } = await supabaseAdmin
         .from('meal_bookings')
-        .update({ choice, booked_at: bookedAt })
+        .update({ choice, booked_at: bookedAt, onion_slices: savedOnionSlices })
         .eq('id', existing.id)
         .select()
         .single();
@@ -283,6 +310,7 @@ router.post('/book', async (req, res, next) => {
           meal_date: date,
           choice,
           booked_at: bookedAt,
+          onion_slices: savedOnionSlices,
         })
         .select()
         .single();
@@ -295,7 +323,7 @@ router.post('/book', async (req, res, next) => {
 
         const { data: retryUpdated, error: retryErr } = await supabaseAdmin
           .from('meal_bookings')
-          .update({ choice, booked_at: bookedAt })
+          .update({ choice, booked_at: bookedAt, onion_slices: savedOnionSlices })
           .eq('id', retryExisting.id)
           .select()
           .single();
@@ -305,6 +333,7 @@ router.post('/book', async (req, res, next) => {
         data = inserted;
       }
     }
+
 
     const emoji = { veg: '🥬', non_veg: '🍗', egg: '🥚', skip: '🚫' };
     res.json({
