@@ -114,8 +114,64 @@ async function processBufferedPurchase(chatId, group) {
   // 4. AI extraction
   const extracted = await extractManualPurchase(combinedText, photoUrls);
 
-  // 5. If AI extracted nothing at all, ask user to describe manually
+  // 5. If AI extracted nothing at all, check if it's a formal bill/invoice first before asking to describe manually
   if (!extracted.item_name && !extracted.quantity && !extracted.amount) {
+    if (photoUrls.length > 0) {
+      try {
+        console.log('[ManualPurchase] Vision extraction empty for manual purchase. Trying formal bill extraction...');
+        const { content } = await visionCompletion({
+          system: EXTRACTION_SYSTEM,
+          user: 'Extract all details from this bill image. List every single item with its item_name, quantity, unit_rate, tax, and total_amount. Return valid JSON only.',
+          imageUrl: photoUrls[0],
+          model: 'gpt-4o',
+          temperature: 0.1,
+        });
+        const parsed = JSON.parse(cleanJson(content));
+        if (parsed.grand_total && parsed.items?.length) {
+          const duplicate = await findDuplicate(parsed);
+          if (duplicate) {
+            const ageMs = duplicate.created_at
+              ? Date.now() - new Date(duplicate.created_at).getTime()
+              : Infinity;
+            const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+            if (ageMs < FIFTEEN_MINUTES_MS) {
+              console.log(
+                '[Telegram] Suppressing duplicate roast — likely Telegram retry within 15 min for invoice',
+                duplicate.invoice_number
+              );
+              return;
+            }
+            const roast = DUPLICATE_MESSAGES[Math.floor(Math.random() * DUPLICATE_MESSAGES.length)];
+            await sendTelegramMessage(
+              chatId,
+              `Duplicate Bill Detected\n\nVendor: ${duplicate.vendor_name || '-'}\nInvoice: #${duplicate.invoice_number || '-'}\nTotal: ₹${duplicate.grand_total || '-'}\n\n${roast}`,
+              replyTo
+            );
+            return;
+          }
+          const { bill, itemCount, normalizedItems } = await saveBill({ parsed, fileUrl: photoUrls[0] });
+          const itemsList = (normalizedItems || [])
+            .map((i) => `  ${i.emoji} ${i.item_name} — ${i.quantity} ${i.unit}`)
+            .join('\n');
+          await sendTelegramMessage(
+            chatId,
+            `✅ Bill Auto-Approved & Inventory Updated!\n\n🏢 Vendor: ${bill.vendor_name || '-'}\n🧾 Invoice: #${bill.invoice_number || '-'}\n💰 Total: ₹${bill.grand_total || '-'}\n\n📦 ${itemCount} items added to stock:\n${itemsList}\n\n🟢 Status: Auto-Verified\n🔄 Cafeteria menu & inventory updated automatically!`,
+            replyTo
+          );
+          postBillToTeams({
+            vendor_name: bill.vendor_name,
+            invoice_number: bill.invoice_number,
+            grand_total: bill.grand_total,
+            items_count: itemCount,
+            uploaded_by: 'Telegram Bot',
+          }).catch((e) => console.error('[Teams bill]', e.message));
+          return;
+        }
+      } catch (e) {
+        console.error('[ManualPurchase] Bill fallback extraction failed:', e.message);
+      }
+    }
+
     await sendTelegramMessage(
       chatId,
       `❓ Could not read this image clearly.\n\nPlease type what you bought:\n"Item name, weight, price"\n\nExample: Bread, 400g, ₹60`,

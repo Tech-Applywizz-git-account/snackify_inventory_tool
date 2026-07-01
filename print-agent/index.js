@@ -82,7 +82,7 @@ function stripEmojis(str) {
 }
 
 function getQuote(order) {
-  const name = stripEmojis(order.parsed_employee_name || order.submitter_name || 'Employee');
+  const name = stripEmojis(order.parsed_employee_name || order.submitter_name || order.full_name || 'Employee');
   const item = stripEmojis(order.parsed_item || order.raw_text || 'Refreshment');
 
   const quotes = {
@@ -139,7 +139,7 @@ function getQuote(order) {
 function formatReceipt(order) {
   const qty = parseInt(order.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
   const item = stripEmojis(order.parsed_item || order.raw_text || 'Unknown Item');
-  const employee = stripEmojis(order.parsed_employee_name || 'Unknown');
+  const employee = stripEmojis(order.parsed_employee_name || order.submitter_name || order.full_name || 'Unknown');
   const location = stripEmojis(order.parsed_location || 'Not specified');
   const orderId = order.user_order_number || (order.id || '').slice(0, 8).toUpperCase();
 
@@ -154,9 +154,7 @@ function formatReceipt(order) {
     hour12: true,
   });
 
-  // Parse note from instruction (remove the prefix like "Jagan needs 1x ...")
-  const noteMatch = order.instruction?.match(/Note:\s*(.+?)\.?$/i);
-  const note = stripEmojis(noteMatch?.[1] || '');
+  const note = stripEmojis(order.instruction || '');
 
   const itemLines = [];
   if (order.raw_text && order.raw_text.includes(',')) {
