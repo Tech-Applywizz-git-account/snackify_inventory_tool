@@ -61,27 +61,7 @@ export async function generateOtp(email) {
     .eq('email', normalized)
     .lt('created_at', oneHourAgo);
 
-  // Rate limit: count sends in last 1 hour
-  const { count } = await supabaseAdmin
-    .from('enrollment_otps')
-    .select('id', { count: 'exact', head: true })
-    .eq('email', normalized)
-    .gte('created_at', oneHourAgo);
 
-  if (count >= MAX_SENDS_PER_HOUR) throw new Error('RATE_LIMITED');
-
-  // Cooldown: check most recent row
-  const { data: last } = await supabaseAdmin
-    .from('enrollment_otps')
-    .select('created_at')
-    .eq('email', normalized)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (last && Date.now() - new Date(last.created_at).getTime() < RESEND_COOLDOWN_MS) {
-    throw new Error('COOLDOWN');
-  }
 
   // Generate cryptographically secure 6-digit code
   const code = crypto.randomInt(100000, 1000000).toString();

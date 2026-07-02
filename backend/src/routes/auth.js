@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import QRCode from 'qrcode';
 import { isSendMailConfigured, sendOtpEmail } from '../lib/microsoftGraph.js';
 import { cancelOtp, generateOtp, normalizeEmail, verifyOtp } from '../lib/otpService.js';
 import { supabaseAdmin, supabaseAnon, supabaseAsUser } from '../lib/supabase.js';
@@ -31,6 +32,7 @@ function staleLeaseIso() {
 
 export function createAuthRouter(overrides = {}) {
   const d = {
+    QRCode,
     supabaseAdmin,
     supabaseAnon,
     supabaseAsUser,
@@ -329,6 +331,21 @@ export function createAuthRouter(overrides = {}) {
 
       const { id: factorId, totp } = enrollData;
 
+      let qrCode = totp.qr_code;
+      if (totp.uri && totp.uri.startsWith('otpauth://totp/')) {
+        try {
+          const parsed = new URL(totp.uri);
+          parsed.searchParams.set('issuer', 'snakify.applywizz.ai');
+          parsed.pathname = `/snakify.applywizz.ai:${email}`;
+          const modifiedUri = parsed.toString();
+
+          const svg = await d.QRCode.toString(modifiedUri, { type: 'svg' });
+          qrCode = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+        } catch (qrErr) {
+          console.error('[Auth] Failed to rewrite or generate QR code from modified URI:', qrErr.message);
+        }
+      }
+
       // Persist the enrollment transaction. If this fails, delete the orphan factor.
       let txData;
       try {
@@ -353,7 +370,7 @@ export function createAuthRouter(overrides = {}) {
         throw txInsertErr;
       }
 
-      res.json({ enrollmentTransactionId: txData.id, qrCode: totp.qr_code });
+      res.json({ enrollmentTransactionId: txData.id, qrCode });
     } catch (e) {
       if (e instanceof z.ZodError) {
         return res.status(400).json({ error: 'Invalid request.' });

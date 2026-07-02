@@ -888,6 +888,21 @@ export default function Onboarding({ onComplete }) {
       };
     });
   }
+
+  // Drink selection enforces mutual exclusivity with the 'None' sentinel.
+  // 'None for me' clears all real drinks; any real drink clears 'None'.
+  function toggleDrink(value) {
+    setPrefs((p) => {
+      if (value === 'None') {
+        return { ...p, drinks: p.drinks.includes('None') ? [] : ['None'] };
+      }
+      const base = p.drinks.filter((d) => d !== 'None');
+      return {
+        ...p,
+        drinks: base.includes(value) ? base.filter((d) => d !== value) : [...base, value],
+      };
+    });
+  }
   function set(field, value) {
     setPrefs((p) => ({ ...p, [field]: value }));
   }
@@ -987,7 +1002,7 @@ export default function Onboarding({ onComplete }) {
     <StepDrinks
       key={3}
       prefs={prefs}
-      toggle={(v) => toggleArr('drinks', v)}
+      toggle={toggleDrink}
       onNext={next}
       onBack={back}
     />,

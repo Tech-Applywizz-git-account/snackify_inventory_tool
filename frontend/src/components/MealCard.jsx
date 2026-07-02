@@ -279,58 +279,6 @@ export default function MealCard() {
         </div>
       )}
 
-      {/* Onion slices customization (Wednesday & Friday only) */}
-      {isNonVegDay && (canBook || currentChoice) && currentChoice !== 'skip' && (() => {
-        const match = onionSlices ? onionSlices.match(/^(\d+)/) : null;
-        const count = match ? parseInt(match[1], 10) : 0;
-        const disabled = !canBook || busy;
-        const showSaveButton = currentChoice && currentChoice !== 'skip' && (booking?.onion_slices || 'no onion') !== onionSlices;
-
-        const updateSlices = (newCount) => {
-          const opt = newCount <= 0 ? 'no onion' : newCount === 1 ? '1 slice' : `${newCount} slices`;
-          setOnionSlices(opt);
-        };
-
-        return (
-          <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl p-3">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-              <span>🧅</span>
-              <span>Onion Slices</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                disabled={disabled || count === 0}
-                onClick={() => updateSlices(count - 1)}
-                className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-slate-600 hover:border-slate-300 disabled:opacity-50 cursor-pointer"
-              >
-                -
-              </button>
-              <span className="text-xs font-bold text-slate-800 w-16 text-center">
-                {count === 0 ? 'No Onion' : count === 1 ? '1 Slice' : `${count} Slices`}
-              </span>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => updateSlices(count + 1)}
-                className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-slate-600 hover:border-slate-300 disabled:opacity-50 cursor-pointer"
-              >
-                +
-              </button>
-              {showSaveButton && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => book(currentChoice, onionSlices)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-700 text-white font-bold text-xs hover:bg-slate-800 transition-all cursor-pointer ml-1 shadow"
-                >
-                  Save
-                </button>
-              )}
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Flash message */}
       <AnimatePresence>

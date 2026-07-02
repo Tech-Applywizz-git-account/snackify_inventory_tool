@@ -331,7 +331,7 @@ function Toast({ message, type, onDismiss }) {
 }
 
 // ── Confirmation bottom sheet ─────────────────────────────────────────────────
-function ConfirmSheet({ dateStr, choice, existingChoice, busy, onConfirm, onClose }) {
+function ConfirmSheet({ dateStr, choice, existingChoice, busy, onionSlices, setOnionSlices, onConfirm, onClose }) {
   const ui = CHOICE_UI[choice];
   const existingUi = existingChoice ? CHOICE_UI[existingChoice] : null;
   const isChange = existingChoice && existingChoice !== choice;
@@ -341,6 +341,10 @@ function ConfirmSheet({ dateStr, choice, existingChoice, busy, onConfirm, onClos
     month: 'short',
     timeZone: 'Asia/Kolkata',
   });
+
+  const dateParts = dateStr.split('-').map(Number);
+  const targetDay = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2])).getUTCDay();
+  const isNonVegDay = targetDay === 3 || targetDay === 5; // Wednesday (3) or Friday (5)
 
   return (
     <motion.div
@@ -388,6 +392,46 @@ function ConfirmSheet({ dateStr, choice, existingChoice, busy, onConfirm, onClos
             </>
           )}
         </div>
+
+        {/* Onion slices customization inside confirmation dialog */}
+        {isNonVegDay && choice === 'non_veg' && (() => {
+          const match = onionSlices ? onionSlices.match(/^(\d+)/) : null;
+          const count = match ? parseInt(match[1], 10) : 0;
+          const updateSlices = (newCount) => {
+            const opt = newCount <= 0 ? 'no onion' : newCount === 1 ? '1 slice' : `${newCount} slices`;
+            setOnionSlices(opt);
+          };
+
+          return (
+            <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl p-3 mb-6">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                <span>🧅</span>
+                <span>Onion Slices</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={busy || count === 0}
+                  onClick={() => updateSlices(count - 1)}
+                  className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-slate-600 hover:border-slate-300 disabled:opacity-50 cursor-pointer text-sm"
+                >
+                  -
+                </button>
+                <span className="text-xs font-bold text-slate-800 w-16 text-center">
+                  {count === 0 ? 'No Onion' : count === 1 ? '1 Slice' : `${count} Slices`}
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => updateSlices(count + 1)}
+                  className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-slate-600 hover:border-slate-300 disabled:opacity-50 cursor-pointer text-sm"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Buttons */}
         <div className="flex gap-3">
@@ -532,6 +576,11 @@ export default function MealBooking() {
   // Step 1: User taps a choice → show confirmation sheet
   function requestBook(dateStr, choice) {
     const existing = getBookingForDate(dateStr);
+    if (existing && existing.onion_slices) {
+      setOnionSlices(existing.onion_slices);
+    } else {
+      setOnionSlices('no onion');
+    }
     setConfirmData({ dateStr, choice, existingChoice: existing?.choice || null });
   }
 
@@ -588,6 +637,8 @@ export default function MealBooking() {
             choice={confirmData.choice}
             existingChoice={confirmData.existingChoice}
             busy={booking}
+            onionSlices={onionSlices}
+            setOnionSlices={setOnionSlices}
             onConfirm={confirmBook}
             onClose={() => !booking && setConfirmData(null)}
           />
@@ -891,8 +942,8 @@ export default function MealBooking() {
                   )}
                 </div>
 
-                {/* Onion slices customization (Wednesday & Friday only) */}
-                {isNonVegDay && (() => {
+                {/* Onion slices customization (Wednesday & Friday only, and only for non-veg meals) */}
+                {isNonVegDay && b?.choice === 'non_veg' && (() => {
                   const match = onionSlices ? onionSlices.match(/^(\d+)/) : null;
                   const count = match ? parseInt(match[1], 10) : 0;
                   const disabled = booking || !canBook;

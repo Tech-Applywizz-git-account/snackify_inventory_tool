@@ -266,7 +266,7 @@ router.post('/book', async (req, res, next) => {
     const mealDay = getMealDateDay(date);
     const isNonVegDay = mealDay === 3 || mealDay === 5;
     let savedOnionSlices = null;
-    if (isNonVegDay && choice !== 'skip') {
+    if (isNonVegDay && choice === 'non_veg') {
       if (onion_slices) {
         const cleaned = String(onion_slices).trim().toLowerCase();
         const match = cleaned.match(/^(\d+)\s*slices?$/);
