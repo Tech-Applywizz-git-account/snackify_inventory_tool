@@ -315,6 +315,21 @@ function CabinCard({ cabin, date, onTrigger, onReprint }) {
                           >
                             {b.choice === 'veg' ? 'Veg' : b.choice === 'non_veg' ? 'Non-Veg' : b.choice === 'egg' ? 'Egg' : b.choice}
                           </span>
+                          {b.onion_slices && (
+                            <span
+                              style={{
+                                fontSize: 9,
+                                fontWeight: 700,
+                                textTransform: 'uppercase',
+                                padding: '1px 5px',
+                                borderRadius: 4,
+                                background: '#F1F5F9',
+                                color: '#475569',
+                              }}
+                            >
+                              🧅 {b.onion_slices}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div style={{ textAlign: 'right', fontSize: 10 }}>

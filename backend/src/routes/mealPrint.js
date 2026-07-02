@@ -346,7 +346,7 @@ router.get(
 
       const { data: bookings, error } = await supabaseAdmin
         .from('meal_bookings')
-        .select('id, choice, token_number, cabin_name, print_count, last_printed_at, user_id')
+        .select('id, choice, token_number, cabin_name, print_count, last_printed_at, user_id, onion_slices')
         .eq('meal_date', mealDate)
         .neq('choice', 'skip');
 
