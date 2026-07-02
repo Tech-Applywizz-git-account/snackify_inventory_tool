@@ -300,7 +300,22 @@ function CabinCard({ cabin, date, onTrigger, onReprint }) {
                         <div style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
                           {name}
                         </div>
-                        <div style={{ fontSize: 10, color: '#94A3B8' }}>{code}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                          <span style={{ fontSize: 10, color: '#94A3B8' }}>{code}</span>
+                          <span
+                            style={{
+                              fontSize: 9,
+                              fontWeight: 700,
+                              textTransform: 'uppercase',
+                              padding: '1px 5px',
+                              borderRadius: 4,
+                              background: b.choice === 'veg' ? '#ECFDF5' : b.choice === 'non_veg' ? '#FEF2F2' : '#FFFBEB',
+                              color: b.choice === 'veg' ? '#047857' : b.choice === 'non_veg' ? '#B91C1C' : '#B45309',
+                            }}
+                          >
+                            {b.choice === 'veg' ? 'Veg' : b.choice === 'non_veg' ? 'Non-Veg' : b.choice === 'egg' ? 'Egg' : b.choice}
+                          </span>
+                        </div>
                       </div>
                       <div style={{ textAlign: 'right', fontSize: 10 }}>
                         {b.token_number ? (
@@ -406,6 +421,10 @@ export default function MealTokenDashboard() {
   const filteredCabins = search
     ? cabins.filter((c) => c.cabin_name.toLowerCase().includes(search.toLowerCase()))
     : cabins;
+
+  const totalVeg = cabins.reduce((sum, c) => sum + (c.veg || 0), 0);
+  const totalNonVeg = cabins.reduce((sum, c) => sum + (c.non_veg || 0), 0);
+  const totalEgg = cabins.reduce((sum, c) => sum + (c.egg || 0), 0);
 
   const summary = data?.summary;
   const printedCabins = cabins.filter((c) => c.status === 'completed').length;
@@ -566,7 +585,13 @@ export default function MealTokenDashboard() {
             }}
           >
             {[
-              { label: 'Total Meals', value: summary.totalMeals, emoji: '🍱', color: '#6366F1' },
+              {
+                label: 'Total Meals',
+                value: summary.totalMeals,
+                emoji: '🍱',
+                color: '#6366F1',
+                extra: `V: ${totalVeg} | NV: ${totalNonVeg} | E: ${totalEgg}`,
+              },
               {
                 label: 'Printed',
                 value: `${printedCabins}/${cabins.filter((c) => c.total > 0).length} cabins`,
@@ -599,6 +624,21 @@ export default function MealTokenDashboard() {
                 >
                   {card.label}
                 </div>
+                {card.extra && (
+                  <div
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: '#64748B',
+                      marginTop: 4,
+                      background: '#F1F5F9',
+                      borderRadius: 6,
+                      padding: '2px 4px',
+                    }}
+                  >
+                    {card.extra}
+                  </div>
+                )}
               </div>
             ))}
           </div>

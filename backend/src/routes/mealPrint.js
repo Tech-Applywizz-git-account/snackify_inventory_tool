@@ -19,6 +19,19 @@ function getISTDateString() {
   return getISTNow().toISOString().slice(0, 10);
 }
 
+function getCabinName(bookingCabin, preferredLocation) {
+  if (bookingCabin) return bookingCabin;
+  const locationToCabin = {
+    'Balaji Cabin': 'Balaji Cabin',
+    'RK Cabin': 'Rama Krishna Cabin',
+    'Manisha Cabin': 'Manisha Cabin',
+    'Resume Cabin': 'Resume Cabin',
+    'Tech Team': 'Tech Cabin',
+    'Marketing Team': 'Marketing Cabin',
+  };
+  return locationToCabin[preferredLocation] || preferredLocation || 'Unassigned';
+}
+
 // ── Reprint time-window enforcement ──────────────────────────────────────────
 // Returns null if allowed, or an error string if not.
 function checkReprintWindow(userRole) {
@@ -104,21 +117,34 @@ router.get(
       // Also get booking counts per cabin for display
       const { data: counts, error: countErr } = await supabaseAdmin
         .from('meal_bookings')
-        .select('cabin_name, choice')
+        .select('user_id, cabin_name, choice')
         .eq('meal_date', date)
         .neq('choice', 'skip');
 
       if (countErr) throw countErr;
 
+      // Fetch all employee cafeteria preferences to map user_id -> cabin
+      const { data: prefs, error: prefsErr } = await supabaseAdmin
+        .from('employee_cafeteria_preferences')
+        .select('user_id, cabin, preferred_location');
+
+      if (prefsErr) throw prefsErr;
+
+      const cabinMap = {};
+      for (const p of prefs || []) {
+        cabinMap[p.user_id] = getCabinName(p.cabin, p.preferred_location);
+      }
+
       // Build cabin count map
       const cabinCounts = {};
       for (const b of counts || []) {
-        if (!b.cabin_name) continue;
-        if (!cabinCounts[b.cabin_name])
-          cabinCounts[b.cabin_name] = { total: 0, veg: 0, non_veg: 0, egg: 0 };
-        cabinCounts[b.cabin_name].total++;
-        if (cabinCounts[b.cabin_name][b.choice] !== undefined) {
-          cabinCounts[b.cabin_name][b.choice]++;
+        const cabin = b.cabin_name || cabinMap[b.user_id];
+        if (!cabin) continue;
+        if (!cabinCounts[cabin])
+          cabinCounts[cabin] = { total: 0, veg: 0, non_veg: 0, egg: 0 };
+        cabinCounts[cabin].total++;
+        if (cabinCounts[cabin][b.choice] !== undefined) {
+          cabinCounts[cabin][b.choice]++;
         }
       }
 
@@ -320,17 +346,58 @@ router.get(
 
       const { data: bookings, error } = await supabaseAdmin
         .from('meal_bookings')
-        .select(`
-          id, choice, token_number, cabin_name, print_count, last_printed_at,
-          profiles!inner(full_name, preferred_name, employee_code)
-        `)
+        .select('id, choice, token_number, cabin_name, print_count, last_printed_at, user_id')
         .eq('meal_date', mealDate)
-        .eq('cabin_name', cabin)
-        .neq('choice', 'skip')
-        .order('token_number');
+        .neq('choice', 'skip');
 
       if (error) throw error;
-      res.json(bookings || []);
+
+      // Fetch all profiles to map user_id -> profile details
+      const { data: profiles, error: profErr } = await supabaseAdmin
+        .from('profiles')
+        .select('id, full_name, preferred_name, employee_code');
+
+      if (profErr) throw profErr;
+
+      const profileMap = {};
+      for (const p of profiles || []) {
+        profileMap[p.id] = p;
+      }
+
+      // Fetch all employee cafeteria preferences to map user_id -> cabin
+      const { data: prefs, error: prefsErr } = await supabaseAdmin
+        .from('employee_cafeteria_preferences')
+        .select('user_id, cabin, preferred_location');
+
+      if (prefsErr) throw prefsErr;
+
+      const cabinMap = {};
+      for (const p of prefs || []) {
+        cabinMap[p.user_id] = getCabinName(p.cabin, p.preferred_location);
+      }
+
+      const filtered = (bookings || []).filter((b) => {
+        const c = b.cabin_name || cabinMap[b.user_id];
+        return c === cabin;
+      });
+
+      // Map the profile details to the booking row
+      const mapped = filtered.map((b) => ({
+        ...b,
+        profiles: profileMap[b.user_id] || null,
+      }));
+
+      // Sort by token_number, or fallback to user preferred/full name
+      mapped.sort((x, y) => {
+        if (x.token_number && y.token_number) return x.token_number.localeCompare(y.token_number);
+        if (x.token_number) return -1;
+        if (y.token_number) return 1;
+        const nameX = x.profiles?.preferred_name || x.profiles?.full_name || '';
+        const nameY = y.profiles?.preferred_name || y.profiles?.full_name || '';
+        return nameX.localeCompare(nameY);
+      });
+
+      res.json(mapped);
     } catch (e) {
       next(e);
     }

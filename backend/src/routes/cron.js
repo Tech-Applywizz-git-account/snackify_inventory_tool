@@ -23,6 +23,19 @@ const CABIN_PRINT_ORDER = [
 // Exported so mealPrint.js can use the same cabin list
 export { CABIN_PRINT_ORDER };
 
+export function getCabinName(bookingCabin, preferredLocation) {
+  if (bookingCabin) return bookingCabin;
+  const locationToCabin = {
+    'Balaji Cabin': 'Balaji Cabin',
+    'RK Cabin': 'Rama Krishna Cabin',
+    'Manisha Cabin': 'Manisha Cabin',
+    'Resume Cabin': 'Resume Cabin',
+    'Tech Team': 'Tech Cabin',
+    'Marketing Team': 'Marketing Cabin',
+  };
+  return locationToCabin[preferredLocation] || preferredLocation || 'Unassigned';
+}
+
 // ── Helper: get IST date string "YYYY-MM-DD" ─────────────────────────────────
 function getISTDateString() {
   const now = new Date();
@@ -158,16 +171,10 @@ router.post('/schedule-meal-print', async (req, res) => {
   console.log(`[Cron] schedule-meal-print for ${mealDate}`);
 
   try {
-    // Fetch all non-skip bookings for today, joined with cafeteria preferences for cabin
+    // Fetch all non-skip bookings for today
     const { data: bookings, error: bookErr } = await supabaseAdmin
       .from('meal_bookings')
-      .select(`
-        id,
-        user_id,
-        choice,
-        meal_date,
-        employee_cafeteria_preferences!inner(cabin)
-      `)
+      .select('id, user_id, choice, meal_date')
       .eq('meal_date', mealDate)
       .neq('choice', 'skip');
 
@@ -177,10 +184,22 @@ router.post('/schedule-meal-print', async (req, res) => {
       return res.json({ ok: true, jobsCreated: 0, message: 'No bookings found' });
     }
 
+    // Fetch all employee cafeteria preferences to map user_id -> cabin
+    const { data: prefs, error: prefsErr } = await supabaseAdmin
+      .from('employee_cafeteria_preferences')
+      .select('user_id, cabin, preferred_location');
+
+    if (prefsErr) throw prefsErr;
+
+    const cabinMap = {};
+    for (const p of prefs || []) {
+      cabinMap[p.user_id] = getCabinName(p.cabin, p.preferred_location);
+    }
+
     // Group bookings by cabin
     const byCabin = {};
     for (const b of bookings) {
-      const cabin = b.employee_cafeteria_preferences?.cabin || 'Unassigned';
+      const cabin = cabinMap[b.user_id] || 'Unassigned';
       if (!byCabin[cabin]) byCabin[cabin] = [];
       byCabin[cabin].push(b);
     }
