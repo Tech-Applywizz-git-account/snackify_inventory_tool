@@ -42,7 +42,7 @@ export default function WakingUp({ loading }) {
   if (!loading || !slow) return null;
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-md">
+    <div className="fixed bottom-6 left-0 right-0 mx-auto z-50 w-[calc(100%-2rem)] max-w-md">
       <div className="bg-slate-900 text-white rounded-2xl px-5 py-4 shadow-2xl flex items-start gap-4">
         {/* Spinner */}
         <div className="shrink-0 mt-0.5">

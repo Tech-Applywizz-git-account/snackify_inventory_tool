@@ -2382,7 +2382,7 @@ export default function Cafeteria() {
             initial={{ y: 80, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 80, opacity: 0 }}
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-full max-w-sm px-4"
+            className="fixed bottom-6 left-0 right-0 mx-auto z-40 w-full max-w-sm px-4"
           >
             <button
               onClick={() => {
@@ -2487,7 +2487,7 @@ export default function Cafeteria() {
             initial={{ opacity: 0, y: 50, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 50, scale: 0.9 }}
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] w-full max-w-sm px-4"
+            className="fixed bottom-6 left-0 right-0 mx-auto z-[9999] w-full max-w-sm px-4"
           >
             <div className="bg-white rounded-2xl shadow-2xl border border-rose-200 overflow-hidden">
               {/* Red accent bar */}
