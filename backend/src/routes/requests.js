@@ -502,7 +502,7 @@ router.post('/', async (req, res, next) => {
         (isSandwichSpread(items[0].name) ? 'food' : 'other');
 
       // 4. Save consolidated request row in Database
-      const { data: qData, error: qErr } = await supabaseAdmin
+      let { data: qData, error: qErr } = await supabaseAdmin
         .from('requests')
         .insert({
           raw_text: rawText,
@@ -517,6 +517,28 @@ router.post('/', async (req, res, next) => {
         })
         .select()
         .single();
+
+      if (qErr) {
+        if (qErr.message?.includes('request_category') || qErr.details?.includes('request_category')) {
+          const retry = await supabaseAdmin
+            .from('requests')
+            .insert({
+              raw_text: rawText,
+              category: 'other',
+              parsed_item: parsedItem,
+              parsed_location: deliveryMode === 'self_pickup' ? null : location || null,
+              instruction,
+              submitted_by: req.user.id,
+              live_status: 'confirming',
+              status: 'confirming',
+              delivery_mode: deliveryMode,
+            })
+            .select()
+            .single();
+          qData = retry.data;
+          qErr = retry.error;
+        }
+      }
       if (qErr) throw qErr;
 
       return res.status(201).json({ needs_followup: false, request: mapFulfillmentType(qData) });
@@ -566,7 +588,7 @@ router.post('/', async (req, res, next) => {
         return res.status(400).json({ error: err.message });
       }
 
-      const { data: qData, error: qErr } = await supabaseAdmin
+      let { data: qData, error: qErr } = await supabaseAdmin
         .from('requests')
         .insert({
           raw_text: rawText,
@@ -581,6 +603,28 @@ router.post('/', async (req, res, next) => {
         })
         .select()
         .single();
+
+      if (qErr) {
+        if (qErr.message?.includes('request_category') || qErr.details?.includes('request_category')) {
+          const retry = await supabaseAdmin
+            .from('requests')
+            .insert({
+              raw_text: rawText,
+              category: 'other',
+              parsed_item: quick_item,
+              parsed_location: deliveryMode === 'self_pickup' ? null : quick_location || null,
+              instruction,
+              submitted_by: req.user.id,
+              live_status: 'confirming',
+              status: 'confirming',
+              delivery_mode: deliveryMode,
+            })
+            .select()
+            .single();
+          qData = retry.data;
+          qErr = retry.error;
+        }
+      }
       if (qErr) throw qErr;
 
       // NOTE: Teams + push notifications are NOT sent here.
@@ -651,7 +695,7 @@ router.post('/', async (req, res, next) => {
       deliveryMode = 'get_it_here';
     }
 
-    const { data, error } = await supabaseAdmin
+    let { data, error } = await supabaseAdmin
       .from('requests')
       .insert({
         raw_text,
@@ -667,6 +711,29 @@ router.post('/', async (req, res, next) => {
       })
       .select()
       .single();
+
+    if (error) {
+      if (error.message?.includes('request_category') || error.details?.includes('request_category')) {
+        const retry = await supabaseAdmin
+          .from('requests')
+          .insert({
+            raw_text,
+            category: 'other',
+            parsed_item: parsed.item || parsed.request_details || parsed.request_type || null,
+            parsed_employee_name: parsed.employee_name || req.user.full_name || req.user.email,
+            parsed_location: parsed.location || null,
+            instruction: parsed.instruction,
+            submitted_by: req.user.id,
+            live_status: 'confirming',
+            status: 'confirming',
+            delivery_mode: deliveryMode,
+          })
+          .select()
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
+    }
     if (error) throw error;
 
     // NOTE: Teams + push notifications are NOT sent here.

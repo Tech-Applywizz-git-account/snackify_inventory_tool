@@ -769,11 +769,39 @@ async function printUnprintedPendingOrders(forceAll = false) {
   }
 }
 
+// ── Auto-print any missed pending meal print jobs (startup & safety net) ──────
+async function printUnprintedPendingMealJobs() {
+  try {
+    const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+      .toISOString()
+      .slice(0, 10);
+
+    const { data: pendingJobs, error } = await supabase
+      .from('meal_print_jobs')
+      .select('*')
+      .eq('status', 'pending')
+      .eq('meal_date', today);
+
+    if (error) throw error;
+
+    if (pendingJobs && pendingJobs.length > 0) {
+      console.log(`[print-agent] Found ${pendingJobs.length} pending meal print jobs for today, executing...`);
+      for (const job of pendingJobs) {
+        // Execute immediately on startup
+        await executePrintJob(job);
+      }
+    }
+  } catch (err) {
+    console.error('[print-agent] Failed to check missed pending meal jobs:', err.message);
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 const channel = startListening();
 
-// Pull and print all pending orders on startup
+// Pull and print all pending orders and meal jobs on startup
 printUnprintedPendingOrders(true).catch((err) => console.error('[print-agent] Startup missed print check failed:', err.message));
+printUnprintedPendingMealJobs().catch((err) => console.error('[print-agent] Startup missed meal check failed:', err.message));
 
 // Heartbeat + stuck order check + missed pending check
 setInterval(() => {
@@ -781,6 +809,7 @@ setInterval(() => {
   console.log(`[print-agent] ♥ Heartbeat — ${now} — printer: ${PRINTER_IP}:${PRINTER_PORT}`);
   autoConfirmStuck();
   printUnprintedPendingOrders(false).catch((err) => console.error('[print-agent] Interval missed print check failed:', err.message));
+  printUnprintedPendingMealJobs().catch((err) => console.error('[print-agent] Interval missed meal check failed:', err.message));
 }, 60_000);
 
 console.log(`[print-agent] 🖨 Ready — Listening for orders, printing to ${PRINTER_IP}:${PRINTER_PORT}`);
@@ -794,3 +823,4 @@ function shutdown() {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
