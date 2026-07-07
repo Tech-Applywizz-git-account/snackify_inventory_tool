@@ -244,5 +244,65 @@ describe('Meal Booking Reminder Cron Endpoint', () => {
     assert.ok(recipients.includes('bob@applywizz.ai'));
     assert.ok(recipients.includes('charlie@applywizz.ai'));
     assert.ok(!recipients.includes('alice@applywizz.ai'));
+
+    // Verify funny text is included
+    const bodyContent = JSON.parse(sendMailCalls[0].options.body).message.body.content;
+    assert.ok(bodyContent.includes('Because "I forgot" doesn\'t taste very good.'));
+  });
+
+  it('sends final reminder emails with a warning when triggered at or after 5:15 PM IST', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/cron', cronRouter);
+
+    // Mock Date so today is Tuesday 2026-07-07 at 17:15:00 (5:15 PM IST)
+    globalThis.Date = class extends originalDate {
+      constructor(...args) {
+        if (args.length === 0) {
+          return new originalDate('2026-07-07T17:15:00+05:30');
+        }
+        return new originalDate(...args);
+      }
+    };
+
+    const mockProfiles = [
+      { id: 'user-2', email: 'bob@applywizz.ai', full_name: 'Bob' },
+    ];
+    const mockBookings = [];
+
+    supabaseAdmin.from = (table) => {
+      dbQueries.push(table);
+      if (table === 'profiles') {
+        return makeMockChain(mockProfiles);
+      }
+      if (table === 'meal_bookings') {
+        return makeMockChain(mockBookings);
+      }
+      return makeMockChain([]);
+    };
+
+    const res = await postToApp(
+      app,
+      '/api/cron/meal-booking-reminder',
+      {},
+      { 'x-cron-secret': 'app_wizz_cron_secret_change_in_production' }
+    );
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.queuedCount, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const sendMailCalls = fetchCalls.filter((c) => c.url.includes('sendMail'));
+    assert.equal(sendMailCalls.length, 1);
+    
+    // Verify subject line contains "Final Reminder"
+    const subject = JSON.parse(sendMailCalls[0].options.body).message.subject;
+    assert.ok(subject.includes('Final Reminder'));
+
+    // Verify funny text is included
+    const bodyContent = JSON.parse(sendMailCalls[0].options.body).message.body.content;
+    assert.ok(bodyContent.includes('Because "I forgot" doesn\'t taste very good.'));
   });
 });

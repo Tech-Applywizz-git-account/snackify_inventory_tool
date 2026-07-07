@@ -202,15 +202,25 @@ export async function sendLowStockEmail(itemName, remaining, supabaseAdmin, isCr
  * Send a meal booking reminder email to a user.
  * @param {string} email - recipient address
  * @param {string} mealDate - the date of the meal (YYYY-MM-DD)
+ * @param {boolean} isFinal - whether this is the final reminder before cutoff
  */
-export async function sendMealBookingReminderEmail(email, mealDate) {
+export async function sendMealBookingReminderEmail(email, mealDate, isFinal = false) {
   if (!isGraphConfigured()) {
     console.warn('[MealReminder] Microsoft Graph not configured — skipping email reminder.');
     return;
   }
 
   const token = await getGraphToken();
-  const subject = `🍽️ Reminder: Book your meal for tomorrow (${mealDate})`;
+  const subject = isFinal 
+    ? `🚨 Final Reminder: Book your meal for tomorrow (${mealDate})`
+    : `🍽️ Reminder: Book your meal for tomorrow (${mealDate})`;
+
+  const warningText = isFinal
+    ? `<p style="margin: 0 0 20px 0; font-size: 15px; line-height: 24px; color: #dc2626; font-weight: 600;">
+         ⚠️ The meal booking window closes at 6:00 PM IST today
+       </p>`
+    : '';
+
   const body = `
     <div style="background-color: #f6f9fc; padding: 48px 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; min-height: 100%;">
       <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 540px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #eef2f6; box-shadow: 0 20px 24px -4px rgba(16, 24, 40, 0.03), 0 8px 8px -4px rgba(16, 24, 40, 0.02); overflow: hidden;">
@@ -222,8 +232,12 @@ export async function sendMealBookingReminderEmail(email, mealDate) {
         <tr>
           <td align="center" style="padding: 40px 40px 20px 40px;">
             <span style="font-size: 42px;">🍲</span>
-            <h2 style="margin: 16px 0 8px 0; color: #1e293b; font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 32px;">Don't Miss Tomorrow's Meal!</h2>
-            <p style="margin: 0; color: #64748b; font-size: 14px; font-weight: 500;">Snackify Cafeteria Notification</p>
+            <h2 style="margin: 16px 0 8px 0; color: #1e293b; font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 32px;">
+              ${isFinal ? 'Final Call: Book Your Meal' : "Don't Miss Tomorrow's Meal!"}
+            </h2>
+            <p style="margin: 0; color: #64748b; font-size: 14px; font-weight: 500;">
+              ${isFinal ? 'Urgent Cafeteria Notification' : 'Snackify Cafeteria Notification'}
+            </p>
           </td>
         </tr>
         <!-- Content Body -->
@@ -231,8 +245,11 @@ export async function sendMealBookingReminderEmail(email, mealDate) {
           <td style="padding: 0 40px 30px 40px;">
             <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
             <p style="margin: 0 0 16px 0; font-size: 16px; line-height: 26px; color: #334155;">Hello,</p>
+            
+            ${warningText}
+
             <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 26px; color: #475569;">
-              We noticed you haven't booked your lunch for tomorrow, <strong style="color: #0f172a;">${mealDate}</strong>. To help our kitchen team minimize food waste and prepare the perfect number of servings, please let us know your choice:
+              We noticed you still haven't booked your lunch for tomorrow, <strong style="color: #0f172a;">${mealDate}</strong>. Please let us know your choice:
             </p>
 
             <!-- Date Card Badge -->
@@ -246,7 +263,7 @@ export async function sendMealBookingReminderEmail(email, mealDate) {
             </table>
 
             <!-- CTA Button -->
-            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 32px 0 16px 0;">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 32px 0 8px 0;">
               <tr>
                 <td align="center">
                   <a href="https://snackify.applywizz.ai/" target="_blank" style="background-color: #FF5A5F; color: #ffffff; padding: 16px 36px; border-radius: 10px; font-size: 15px; font-weight: 600; text-decoration: none; display: inline-block; box-shadow: 0 4px 12px rgba(255, 90, 95, 0.2); text-align: center;">
@@ -255,6 +272,11 @@ export async function sendMealBookingReminderEmail(email, mealDate) {
                 </td>
               </tr>
             </table>
+
+            <!-- Funny Text -->
+            <p style="margin: 8px 0 24px 0; font-size: 13px; font-style: italic; color: #64748b; text-align: center; font-weight: 500;">
+              Because "I forgot" doesn't taste very good. 😄
+            </p>
             
             <p style="margin: 24px 0 0 0; font-size: 14px; line-height: 24px; color: #64748b; text-align: center;">
               If you plan to skip tomorrow's meal, please mark it as <strong>Skip</strong> in the portal so we are informed.

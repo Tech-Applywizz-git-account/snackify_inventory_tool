@@ -391,7 +391,11 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
 
     // 1. Calculate tomorrow in IST
     const now = new Date();
-    const istTomorrow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const currentHour = istNow.getHours();
+    const isFinal = currentHour >= 17; // 5:15 PM is 17:15
+
+    const istTomorrow = new Date(istNow);
     istTomorrow.setDate(istTomorrow.getDate() + 1);
 
     const yyyy = istTomorrow.getFullYear();
@@ -453,8 +457,8 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
     Promise.allSettled(
       nonBookedUsers.map(async (user) => {
         try {
-          await sendMealBookingReminderEmail(user.email, tomorrowStr);
-          console.log(`[MealReminder] Email sent successfully to ${user.email} (${user.full_name}) for ${tomorrowStr}`);
+          await sendMealBookingReminderEmail(user.email, tomorrowStr, isFinal);
+          console.log(`[MealReminder] Email sent successfully to ${user.email} (${user.full_name}) for ${tomorrowStr} (isFinal: ${isFinal})`);
         } catch (e) {
           console.error(`[MealReminder] Failed to send email to ${user.email}:`, e.message);
         }
