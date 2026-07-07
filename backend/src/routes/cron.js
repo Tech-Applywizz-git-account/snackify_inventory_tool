@@ -5,6 +5,7 @@ import { checkAndNotifyLowStock, sendDailyStockDigest } from '../lib/stockAlerts
 import { supabaseAdmin } from '../lib/supabase.js';
 import { postAIReminderToTeams } from '../lib/teams.js';
 import { sendPushToUsers } from './push.js';
+import { sendMealBookingReminderEmail } from '../lib/microsoftGraph.js';
 
 const router = Router();
 
@@ -376,5 +377,92 @@ async function sendWeeklyForecastDigest(items, botToken) {
     )
   );
 }
+
+// POST /api/cron/meal-booking-reminder
+// Called by pg_cron at 3:30 PM IST everyday.
+router.post('/meal-booking-reminder', async (req, res, next) => {
+  try {
+    const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
+    const cronSecret = process.env.CRON_SECRET || 'app_wizz_cron_secret_change_in_production';
+
+    if (secret !== cronSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // 1. Calculate tomorrow in IST
+    const now = new Date();
+    const istTomorrow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    istTomorrow.setDate(istTomorrow.getDate() + 1);
+
+    const yyyy = istTomorrow.getFullYear();
+    const mm = String(istTomorrow.getMonth() + 1).padStart(2, '0');
+    const dd = String(istTomorrow.getDate()).padStart(2, '0');
+    const tomorrowStr = `${yyyy}-${mm}-${dd}`;
+
+    // 2. Check if tomorrow is a working day (Mon-Fri)
+    const tomorrowDay = istTomorrow.getDay(); // 0=Sun, 6=Sat
+    const isTomorrowWorkingDay = tomorrowDay >= 1 && tomorrowDay <= 5;
+
+    if (!isTomorrowWorkingDay) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: `Tomorrow (${tomorrowStr}) is not a working day. Reminders are only sent for working days.`,
+      });
+    }
+
+    // 3. Query active profiles with emails
+    const { data: profiles, error: profilesErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email, full_name')
+      .eq('active', true)
+      .not('email', 'is', null);
+
+    if (profilesErr) throw profilesErr;
+
+    // 4. Query meal bookings for tomorrow
+    const { data: bookings, error: bookingsErr } = await supabaseAdmin
+      .from('meal_bookings')
+      .select('user_id')
+      .eq('meal_date', tomorrowStr);
+
+    if (bookingsErr) throw bookingsErr;
+
+    const bookedUserIds = new Set(bookings.map((b) => b.user_id));
+
+    // 5. Filter users who haven't booked
+    const nonBookedUsers = profiles.filter((p) => !bookedUserIds.has(p.id));
+
+    if (nonBookedUsers.length === 0) {
+      return res.json({
+        ok: true,
+        message: 'All active users have already booked their meals for tomorrow.',
+        emailsSent: 0,
+      });
+    }
+
+    // Respond immediately to prevent cron timeout
+    res.json({
+      ok: true,
+      message: `Sending reminders to ${nonBookedUsers.length} users.`,
+      tomorrow: tomorrowStr,
+      queuedCount: nonBookedUsers.length,
+    });
+
+    // 6. Send emails in the background (fire-and-forget)
+    Promise.allSettled(
+      nonBookedUsers.map(async (user) => {
+        try {
+          await sendMealBookingReminderEmail(user.email, tomorrowStr);
+          console.log(`[MealReminder] Email sent successfully to ${user.email} (${user.full_name}) for ${tomorrowStr}`);
+        } catch (e) {
+          console.error(`[MealReminder] Failed to send email to ${user.email}:`, e.message);
+        }
+      })
+    );
+  } catch (e) {
+    next(e);
+  }
+});
 
 export default router;

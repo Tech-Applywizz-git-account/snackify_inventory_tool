@@ -197,3 +197,102 @@ export async function sendLowStockEmail(itemName, remaining, supabaseAdmin, isCr
     console.log(`[LowStock] Low stock email sent for "${itemName}" (${remaining} servings left) to ${toRecipients.length} leaders.`);
   }
 }
+
+/**
+ * Send a meal booking reminder email to a user.
+ * @param {string} email - recipient address
+ * @param {string} mealDate - the date of the meal (YYYY-MM-DD)
+ */
+export async function sendMealBookingReminderEmail(email, mealDate) {
+  if (!isGraphConfigured()) {
+    console.warn('[MealReminder] Microsoft Graph not configured — skipping email reminder.');
+    return;
+  }
+
+  const token = await getGraphToken();
+  const subject = `🍽️ Reminder: Book your meal for tomorrow (${mealDate})`;
+  const body = `
+    <div style="background-color: #f6f9fc; padding: 48px 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; min-height: 100%;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 540px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #eef2f6; box-shadow: 0 20px 24px -4px rgba(16, 24, 40, 0.03), 0 8px 8px -4px rgba(16, 24, 40, 0.02); overflow: hidden;">
+        <!-- Top Accent Line -->
+        <tr>
+          <td height="6" style="background: linear-gradient(90deg, #ff4e50, #f9d423);"></td>
+        </tr>
+        <!-- Header -->
+        <tr>
+          <td align="center" style="padding: 40px 40px 20px 40px;">
+            <span style="font-size: 42px;">🍲</span>
+            <h2 style="margin: 16px 0 8px 0; color: #1e293b; font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 32px;">Don't Miss Tomorrow's Meal!</h2>
+            <p style="margin: 0; color: #64748b; font-size: 14px; font-weight: 500;">Snackify Cafeteria Notification</p>
+          </td>
+        </tr>
+        <!-- Content Body -->
+        <tr>
+          <td style="padding: 0 40px 30px 40px;">
+            <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
+            <p style="margin: 0 0 16px 0; font-size: 16px; line-height: 26px; color: #334155;">Hello,</p>
+            <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 26px; color: #475569;">
+              We noticed you haven't booked your lunch for tomorrow, <strong style="color: #0f172a;">${mealDate}</strong>. To help our kitchen team minimize food waste and prepare the perfect number of servings, please let us know your choice:
+            </p>
+
+            <!-- Date Card Badge -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 24px 0; padding: 16px 20px;">
+              <tr>
+                <td>
+                  <span style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 700; margin-bottom: 4px;">Target Meal Date</span>
+                  <span style="display: block; font-size: 18px; font-weight: 700; color: #0f172a;">📅 ${mealDate}</span>
+                </td>
+              </tr>
+            </table>
+
+            <!-- CTA Button -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 32px 0 16px 0;">
+              <tr>
+                <td align="center">
+                  <a href="https://snackify.applywizz.ai/" target="_blank" style="background-color: #FF5A5F; color: #ffffff; padding: 16px 36px; border-radius: 10px; font-size: 15px; font-weight: 600; text-decoration: none; display: inline-block; box-shadow: 0 4px 12px rgba(255, 90, 95, 0.2); text-align: center;">
+                    Select Choice & Book Now →
+                  </a>
+                </td>
+              </tr>
+            </table>
+            
+            <p style="margin: 24px 0 0 0; font-size: 14px; line-height: 24px; color: #64748b; text-align: center;">
+              If you plan to skip tomorrow's meal, please mark it as <strong>Skip</strong> in the portal so we are informed.
+            </p>
+          </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+          <td style="background-color: #f8fafc; border-top: 1px solid #f1f5f9; padding: 24px 40px; text-align: center;">
+            <p style="margin: 0; font-size: 12px; color: #94a3b8; line-height: 18px;">
+              ApplyWizz Snackify • Automated Notification System<br>
+              For support or queries, contact <a href="mailto:support@applywizz.ai" style="color: #64748b; text-decoration: underline;">support@applywizz.ai</a>
+            </p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+
+  const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'Html', content: body },
+        toRecipients: [{ emailAddress: { address: email } }],
+      },
+      saveToSentItems: false,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Graph sendMail failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+}
+
