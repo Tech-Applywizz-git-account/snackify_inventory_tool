@@ -738,17 +738,20 @@ async function handleRestockCommand(message, chatId, replyTo) {
           .maybeSingle();
 
         if (existingCafe) {
-          await supabaseAdmin
+          const { error: updErr } = await supabaseAdmin
             .from('cafeteria_items')
             .update({
-              stock_today: (existingCafe.stock_today || 0) + finalQty,
+              stock_today: (existingCafe.stock_today || 0) + Math.round(finalQty),
               stock_servings:
                 servings !== null
-                  ? (existingCafe.stock_servings || 0) + servings
+                  ? (existingCafe.stock_servings || 0) + Math.round(servings)
                   : existingCafe.stock_servings,
               available: true,
             })
             .eq('id', existingCafe.id);
+          if (updErr) {
+            throw updErr;
+          }
         }
       }
     } catch (cafErr) {
