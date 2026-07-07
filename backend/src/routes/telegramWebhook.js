@@ -778,7 +778,6 @@ async function handleRestockCommand(message, chatId, replyTo) {
     null,
     'Markdown'
   );
-  );
 }
 
 // Roles allowed to START a stock-take (send the photo).
