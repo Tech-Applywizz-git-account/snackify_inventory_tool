@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { applyPurchaseToInventory } from '../lib/applyPurchase.js';
+import { applyPurchaseToInventory, normalizeQuantityToPurchaseUnit } from '../lib/applyPurchase.js';
 import { fileCompletion, visionCompletion } from '../lib/openai.js';
 import { normalizeName } from '../lib/productConversion.js';
 import {
@@ -604,6 +604,7 @@ async function handleRestockCommand(message, chatId, replyTo) {
 
   const itemName = match[1].trim();
   const qty = parseFloat(match[2]);
+  const restockUnit = match[4] || '';
 
   if (qty <= 0) {
     await sendTelegramMessage(chatId, '❌ Restock quantity must be greater than zero.', replyTo);
@@ -626,6 +627,26 @@ async function handleRestockCommand(message, chatId, replyTo) {
       replyTo
     );
     return;
+  }
+
+  // Look up conversion master rule to see if we need to scale quantity
+  let master = null;
+  let finalQty = qty;
+  try {
+    const normalized = normalizeName(prod.name);
+    const { data } = await supabaseAdmin
+      .from('product_conversion_master')
+      .select('*')
+      .eq('active', true)
+      .eq('approval_status', 'approved')
+      .contains('aliases', [normalized])
+      .maybeSingle();
+    master = data;
+    if (master) {
+      finalQty = normalizeQuantityToPurchaseUnit(qty, restockUnit, master);
+    }
+  } catch (err) {
+    console.error('[handleRestockCommand] Master lookup error:', err.message);
   }
 
   // Perishable safeguard check
@@ -655,13 +676,13 @@ async function handleRestockCommand(message, chatId, replyTo) {
     }
 
     const expectedCons = dailyUsageRate * workingDaysLeft;
-    if (qty > expectedCons) {
-      const wasted = (qty - expectedCons).toFixed(1);
+    if (finalQty > expectedCons) {
+      const wasted = (finalQty - expectedCons).toFixed(1);
       const expiresOnDayName = new Date(
         istDate.getTime() + shelfLife * 24 * 60 * 60 * 1000
       ).toLocaleDateString('en-US', { weekday: 'long' });
 
-      warningMessage = `\n\n⚠️ *Perishable Warning:* Today is Friday/Weekend. ${prod.name} expires in ${shelfLife} days. Over the weekend, the office is closed (0 headcount). With morning shift (70 people) and evening shift (20 people), you will only consume ~${expectedCons.toFixed(1)} ${prod.unit || 'units'} before expiration on ${expiresOnDayName}. *Restocking ${qty} ${prod.unit || 'units'} could waste ~${wasted} ${prod.unit || 'units'}.*`;
+      warningMessage = `\n\n⚠️ *Perishable Warning:* Today is Friday/Weekend. ${prod.name} expires in ${shelfLife} days. Over the weekend, the office is closed (0 headcount). With morning shift (70 people) and evening shift (20 people), you will only consume ~${expectedCons.toFixed(1)} ${prod.unit || 'units'} before expiration on ${expiresOnDayName}. *Restocking ${qty}${restockUnit} could waste ~${wasted} ${prod.unit || 'units'}.*`;
     }
   }
 
@@ -678,7 +699,7 @@ async function handleRestockCommand(message, chatId, replyTo) {
   }
 
   const currentVal = inv ? Number(inv.current_stock) : 0;
-  const newVal = currentVal + qty;
+  const newVal = currentVal + finalQty;
 
   if (inv) {
     const { error: updErr } = await supabaseAdmin
@@ -703,52 +724,45 @@ async function handleRestockCommand(message, chatId, replyTo) {
   }
 
   // Update cafeteria items stock if applicable
-  try {
-    const normalized = normalizeName(prod.name);
-    const { data: master } = await supabaseAdmin
-      .from('product_conversion_master')
-      .select('*')
-      .eq('active', true)
-      .eq('approval_status', 'approved')
-      .contains('aliases', [normalized])
-      .maybeSingle();
+  if (master) {
+    try {
+      const skipClasses = new Set(['internal_supply', 'equipment_asset', 'finance_expense']);
+      if (master.cafeteria_item_name && !skipClasses.has(master.classification)) {
+        const servings =
+          master.units_per_purchase_unit != null ? finalQty * master.units_per_purchase_unit : null;
 
-    const skipClasses = new Set(['internal_supply', 'equipment_asset', 'finance_expense']);
-    if (master?.cafeteria_item_name && !skipClasses.has(master.classification)) {
-      const servings =
-        master.units_per_purchase_unit != null ? qty * master.units_per_purchase_unit : null;
-
-      const { data: existingCafe } = await supabaseAdmin
-        .from('cafeteria_items')
-        .select('id, stock_today, stock_servings')
-        .eq('item_name', master.cafeteria_item_name)
-        .maybeSingle();
-
-      if (existingCafe) {
-        await supabaseAdmin
+        const { data: existingCafe } = await supabaseAdmin
           .from('cafeteria_items')
-          .update({
-            stock_today: (existingCafe.stock_today || 0) + qty,
-            stock_servings:
-              servings !== null
-                ? (existingCafe.stock_servings || 0) + servings
-                : existingCafe.stock_servings,
-            available: true,
-          })
-          .eq('id', existingCafe.id);
+          .select('id, stock_today, stock_servings')
+          .eq('item_name', master.cafeteria_item_name)
+          .maybeSingle();
+
+        if (existingCafe) {
+          await supabaseAdmin
+            .from('cafeteria_items')
+            .update({
+              stock_today: (existingCafe.stock_today || 0) + finalQty,
+              stock_servings:
+                servings !== null
+                  ? (existingCafe.stock_servings || 0) + servings
+                  : existingCafe.stock_servings,
+              available: true,
+            })
+            .eq('id', existingCafe.id);
+        }
       }
+    } catch (cafErr) {
+      console.error('[handleRestockCommand] Failed to update cafeteria items:', cafErr.message);
     }
-  } catch (cafErr) {
-    console.error('[handleRestockCommand] Failed to update cafeteria items:', cafErr.message);
   }
 
   // 5. Log transaction
   const { error: txErr } = await supabaseAdmin.from('transactions').insert({
     product_id: prod.id,
     type: 'add',
-    quantity: qty,
+    quantity: finalQty,
     unit_cost: prod.cost_per_unit || 0,
-    total_cost: Number((qty * (prod.cost_per_unit || 0)).toFixed(2)),
+    total_cost: Number((finalQty * (prod.cost_per_unit || 0)).toFixed(2)),
     facility_manager_id: mapping.user_id,
     notes: 'restocked via Telegram bot',
   });
@@ -759,10 +773,11 @@ async function handleRestockCommand(message, chatId, replyTo) {
 
   await sendTelegramMessage(
     chatId,
-    `✅ *${prod.name} restocked!*\nNew stock: *${newVal} ${prod.unit || 'units'}* (added ${qty})${warningMessage}`,
+    `✅ *${prod.name} restocked!*\nNew stock: *${newVal} ${prod.unit || 'units'}* (added ${qty}${restockUnit})${warningMessage}`,
     replyTo,
     null,
     'Markdown'
+  );
   );
 }
 
