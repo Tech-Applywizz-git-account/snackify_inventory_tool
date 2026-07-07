@@ -203,6 +203,7 @@ function AISummaryCard() {
           <div className="text-xs text-slate-400">
             {data?.period_start ? `${data.period_start} → ${data.period_end}` : 'AI summary'}
             {data?.from_cache && ' · cached'}
+            {data?.is_fallback && ' · rule-based fallback'}
           </div>
         </div>
         <button
@@ -214,10 +215,21 @@ function AISummaryCard() {
         </button>
       </div>
       {err && (
-        <div className="text-xs text-rose-700 bg-rose-50 p-2 rounded">
+        <div className="text-xs text-rose-700 bg-rose-50 p-2.5 rounded border border-rose-200/50">
           {err.includes('OPENAI_API_KEY')
             ? 'Add OPENAI_API_KEY to backend env to enable the AI summary.'
-            : err}
+            : (err.includes('insufficient_quota') || err.includes('quota') || err.includes('429'))
+              ? 'OpenAI API quota exceeded or billing issue. Please check your OpenAI account plan/billing status or update the OPENAI_API_KEY in backend/.env.'
+              : err}
+        </div>
+      )}
+      {data?.is_fallback && (
+        <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200/50 p-2.5 rounded mb-3 flex items-start gap-2">
+          <span className="shrink-0 text-base">⚠️</span>
+          <div>
+            <strong className="font-semibold block">OpenAI Quota Exceeded (429)</strong>
+            <span>The AI assistant reached its billing limit. Displaying a rule-based deterministic summary of active metrics.</span>
+          </div>
         </div>
       )}
       {!err && !data && <div className="text-sm text-slate-500">Loading...</div>}

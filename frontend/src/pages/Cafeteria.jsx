@@ -2102,7 +2102,34 @@ export default function Cafeteria() {
   // ── Group items by category ────────────────────────────────────────────────────
   // Include greyed-out dependency-backed items so users understand why they cannot order.
   // Exclude only items that are truly hidden backing stock rows.
-  const visibleItems = dedupeItemsById(items.filter(isCustomerCatalogItem));
+  // Also exclude items the facility manager has explicitly marked as out of stock today (stock_today = 0).
+  //
+  // Special case for sandwich-spread items: both the named sandwich item ("Pineapple Jam Sandwich")
+  // and the backing ingredient ("Pineapple Jam") match the same spread config key and can both render
+  // as the same UI card. If the FM marks ANY row with that spread key as out-of-stock, hide ALL rows
+  // sharing that key so the card is fully hidden from employees.
+  const oosSpreadKeys = new Set(
+    items
+      .filter((item) => {
+        const stockToday = item.stock_today;
+        return stockToday !== null && stockToday !== undefined && stockToday <= 0;
+      })
+      .map((item) => getSandwichSpreadConfig(item)?.key)
+      .filter(Boolean)
+  );
+
+  const visibleItems = dedupeItemsById(
+    items.filter(isCustomerCatalogItem).filter((item) => {
+      const stockToday = item.stock_today;
+      const obMarkedOut =
+        stockToday !== null && stockToday !== undefined && stockToday <= 0;
+      if (obMarkedOut) return false;
+      // Also hide if another row for the same sandwich-spread key was marked out-of-stock
+      const spreadKey = getSandwichSpreadConfig(item)?.key;
+      if (spreadKey && oosSpreadKeys.has(spreadKey)) return false;
+      return true;
+    })
+  );
   const grouped = visibleItems.reduce((acc, item) => {
     const cat = getDisplayCategory(item);
     if (!acc[cat]) acc[cat] = [];

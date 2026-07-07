@@ -101,6 +101,56 @@ async function gatherWeekData() {
   };
 }
 
+function generateFallbackSummary(d) {
+  const wow =
+    d.prev_week.total > 0
+      ? `${(((d.this_week.total - d.prev_week.total) / d.prev_week.total) * 100).toFixed(0)}%`
+      : 'n/a';
+
+  const bullets = [];
+
+  // Spend info
+  if (d.this_week.total > 0) {
+    bullets.push(
+      `Total restock spend this week is ${INR(d.this_week.total)} (prior week: ${INR(d.prev_week.total)}, WoW change: ${wow}).`
+    );
+  } else {
+    bullets.push(`No restock spend was recorded this week (prior week: ${INR(d.prev_week.total)}).`);
+  }
+
+  // Spend by category
+  const catEntries = Object.entries(d.this_week.byCat);
+  if (catEntries.length > 0) {
+    const catStr = catEntries.map(([c, v]) => `${c.replace('_', ' ')}: ${INR(v)}`).join(', ');
+    bullets.push(`Spend by category: ${catStr}.`);
+  }
+
+  // Top consumed
+  if (d.top_consumed.length > 0) {
+    const topStr = d.top_consumed.map((p) => `${p.name} (${p.qty} units)`).join(', ');
+    bullets.push(`Top consumed items: ${topStr}.`);
+  }
+
+  // Alerts
+  const lowCount = d.low_stock.length;
+  const expiringCount = d.expiring.length;
+  if (lowCount > 0 || expiringCount > 0) {
+    const parts = [];
+    if (lowCount > 0) parts.push(`${lowCount} items are low or out of stock`);
+    if (expiringCount > 0) parts.push(`${expiringCount} items are expired or expiring soon`);
+    bullets.push(`Inventory alerts: ${parts.join(' and ')}.`);
+  }
+
+  // Recommendation
+  if (lowCount > 0) {
+    bullets.push(`Recommendation: Review and approve restock orders for items low/out of stock.`);
+  } else {
+    bullets.push(`Recommendation: Inventory levels are healthy; continue monitoring usage trends.`);
+  }
+
+  return bullets.map(b => `• ${b}`).join('\n');
+}
+
 function buildPrompt(d) {
   const wow =
     d.prev_week.total > 0
@@ -160,11 +210,38 @@ router.get('/ai-summary', async (req, res, next) => {
     // 2. Gather data + ask GPT
     const data = await gatherWeekData();
     const userPrompt = buildPrompt(data);
-    const { content, model, usage } = await chatCompletion({
-      system: SYSTEM_PROMPT,
-      user: userPrompt,
-      model: 'gpt-4o-mini',
-    });
+    
+    let content;
+    let model = 'gpt-4o-mini';
+    let usage = {};
+    let isFallback = false;
+
+    try {
+      const gptRes = await chatCompletion({
+        system: SYSTEM_PROMPT,
+        user: userPrompt,
+        model: 'gpt-4o-mini',
+      });
+      content = gptRes.content;
+      model = gptRes.model;
+      usage = gptRes.usage;
+    } catch (apiErr) {
+      console.error('OpenAI generation failed, falling back to rule-based summary:', apiErr);
+      isFallback = true;
+      content = generateFallbackSummary(data);
+      model = 'rule-based-fallback';
+    }
+
+    if (isFallback) {
+      return res.json({
+        period_start: periodStart,
+        period_end: periodEnd,
+        content,
+        model,
+        is_fallback: true,
+        from_cache: false,
+      });
+    }
 
     // 3. Store
     const { data: stored, error: storeErr } = await supabaseAdmin

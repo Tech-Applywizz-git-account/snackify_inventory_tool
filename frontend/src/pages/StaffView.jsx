@@ -248,12 +248,12 @@ export default function StaffView() {
         headers: { Authorization: `Bearer ${window.__supabaseSession?.access_token || ''}` },
       })
         .then((r) => r.json())
-        .then(setCafItems)
+        .then((data) => { if (Array.isArray(data)) setCafItems(data); })
         .catch(() => {});
       // Use api method (already filters available=true, but that's fine for display)
       api
         .cafeteriaItems()
-        .then(setCafItems)
+        .then((data) => { if (Array.isArray(data)) setCafItems(data); })
         .catch(() => {});
     }
   }, [isStaff]);
@@ -280,7 +280,7 @@ export default function StaffView() {
   // Reset all items' stock to available
   async function resetAllStock() {
     if (!confirm('Mark all items as available again?')) return;
-    const outItems = cafItems.filter((i) => i.stock_today !== null && i.stock_today <= 0);
+    const outItems = (Array.isArray(cafItems) ? cafItems : []).filter((i) => i.stock_today !== null && i.stock_today <= 0);
     for (const item of outItems) {
       await api.updateCafeteriaItem(item.id, { stock_today: null }).catch(() => {});
     }
@@ -304,7 +304,8 @@ export default function StaffView() {
   }, {});
 
   // Group cafeteria items by category
-  const cafGrouped = cafItems.reduce((acc, item) => {
+  const safeCafItems = Array.isArray(cafItems) ? cafItems : [];
+  const cafGrouped = safeCafItems.reduce((acc, item) => {
     const cat = item.category || 'other';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(item);
@@ -312,7 +313,7 @@ export default function StaffView() {
   }, {});
   const cafCats = ['beverage', 'food', 'snack', 'other'].filter((c) => cafGrouped[c]?.length);
 
-  const outOfStockCount = cafItems.filter(
+  const outOfStockCount = safeCafItems.filter(
     (i) => i.stock_today !== null && i.stock_today !== undefined && i.stock_today <= 0
   ).length;
 
@@ -322,7 +323,7 @@ export default function StaffView() {
       {profile?.role === 'office_boy' && <OBLeaveSection userId={profile.id} />}
 
       {/* ── Today's Cafeteria Stock (office boy controls) ── */}
-      {isStaff && cafItems.length > 0 && (
+      {isStaff && safeCafItems.length > 0 && (
         <div className="card space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
