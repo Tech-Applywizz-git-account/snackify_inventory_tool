@@ -453,17 +453,25 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
       queuedCount: nonBookedUsers.length,
     });
 
-    // 6. Send emails in the background (fire-and-forget)
-    Promise.allSettled(
-      nonBookedUsers.map(async (user) => {
+    // 6. Send emails sequentially in the background (fire-and-forget)
+    // Sequential with delay to avoid Microsoft Graph MailboxConcurrency throttle (HTTP 429)
+    (async () => {
+      let sent = 0;
+      let failed = 0;
+      for (const user of nonBookedUsers) {
         try {
           await sendMealBookingReminderEmail(user.email, tomorrowStr, isFinal);
           console.log(`[MealReminder] Email sent successfully to ${user.email} (${user.full_name}) for ${tomorrowStr} (isFinal: ${isFinal})`);
+          sent++;
         } catch (e) {
           console.error(`[MealReminder] Failed to send email to ${user.email}:`, e.message);
+          failed++;
         }
-      })
-    );
+        // 400ms delay between each email to stay within Microsoft Graph concurrency limits
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      console.log(`[MealReminder] Done. Sent: ${sent}, Failed: ${failed}, Total: ${nonBookedUsers.length}`);
+    })();
   } catch (e) {
     next(e);
   }
