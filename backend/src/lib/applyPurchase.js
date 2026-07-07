@@ -11,6 +11,7 @@
  */
 
 import { supabaseAdmin } from './supabase.js';
+import { normalizeName } from './productConversion.js';
 
 /**
  * @param {object} purchase Full manual_purchases row
@@ -73,6 +74,46 @@ export async function applyPurchaseToInventory(purchase, { writeFinance = true }
       total_cost: amount,
       notes: `Manual purchase — ${purchase.vendor_name || 'Local Shop'} — ${purchase.payment_method || 'Cash'} — No invoice`,
     });
+  }
+
+  // 4. Update cafeteria stock if applicable
+  try {
+    const normalized = normalizeName(itemName);
+    const { data: master } = await supabaseAdmin
+      .from('product_conversion_master')
+      .select('*')
+      .eq('active', true)
+      .eq('approval_status', 'approved')
+      .contains('aliases', [normalized])
+      .maybeSingle();
+
+    const skipClasses = new Set(['internal_supply', 'equipment_asset', 'finance_expense']);
+    if (master?.cafeteria_item_name && !skipClasses.has(master.classification)) {
+      const servings =
+        master.units_per_purchase_unit != null ? qty * master.units_per_purchase_unit : null;
+
+      const { data: existingCafe } = await supabaseAdmin
+        .from('cafeteria_items')
+        .select('id, stock_today, stock_servings')
+        .eq('item_name', master.cafeteria_item_name)
+        .maybeSingle();
+
+      if (existingCafe) {
+        await supabaseAdmin
+          .from('cafeteria_items')
+          .update({
+            stock_today: (existingCafe.stock_today || 0) + qty,
+            stock_servings:
+              servings !== null
+                ? (existingCafe.stock_servings || 0) + servings
+                : existingCafe.stock_servings,
+            available: true,
+          })
+          .eq('id', existingCafe.id);
+      }
+    }
+  } catch (cafErr) {
+    console.error('[applyPurchaseToInventory] Failed to update cafeteria items:', cafErr.message);
   }
 
   return { productId };
