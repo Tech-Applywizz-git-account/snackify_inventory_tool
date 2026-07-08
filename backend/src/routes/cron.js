@@ -5,7 +5,7 @@ import { checkAndNotifyLowStock, sendDailyStockDigest } from '../lib/stockAlerts
 import { supabaseAdmin } from '../lib/supabase.js';
 import { postAIReminderToTeams } from '../lib/teams.js';
 import { sendPushToUsers } from './push.js';
-import { sendMealBookingReminderEmail, sendMealSkipReminderEmail } from '../lib/microsoftGraph.js';
+import { sendMealBookingReminderEmail, sendMealSkipReminderEmail, sendMealNightReportEmail, sendMealBookingConfirmationEmail } from '../lib/microsoftGraph.js';
 
 const router = Router();
 
@@ -512,12 +512,11 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
       });
     }
 
-    // 3. Query meal bookings for tomorrow
+    // 3. Query ALL meal bookings for tomorrow (including skips)
     const { data: bookings, error: bookingsErr } = await supabaseAdmin
       .from('meal_bookings')
-      .select('choice')
-      .eq('meal_date', tomorrowStr)
-      .neq('choice', 'skip');
+      .select('user_id, choice')
+      .eq('meal_date', tomorrowStr);
 
     if (bookingsErr) throw bookingsErr;
 
@@ -526,6 +525,7 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
       veg: 0,
       non_veg: 0,
       egg: 0,
+      skip: 0,
     };
     const others = {};
 
@@ -537,9 +537,59 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
       }
     }
 
-    const total = (bookings || []).length;
+    // Booked count (excluding skip)
+    const bookedCount = counts.veg + counts.non_veg + counts.egg + Object.values(others).reduce((a, b) => a + b, 0);
+    const skippedCount = counts.skip;
 
-    // 4. Query mappings for office_boy, facility_manager, and leadership
+    // 4. Query active profiles to calculate not booked and list unbooked names
+    const { data: activeProfiles, error: profilesErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, email, role')
+      .eq('active', true);
+
+    if (profilesErr) throw profilesErr;
+
+    const bookedUserIds = new Set(bookings?.map((b) => b.user_id).filter(Boolean) || []);
+    
+    // Unbooked users are active profiles who did not book at all (no row in meal_bookings for tomorrow)
+    const unbookedUsers = activeProfiles.filter((p) => !bookedUserIds.has(p.id));
+    const notBookedCount = unbookedUsers.length;
+    const unbookedNames = unbookedUsers.map((u) => u.full_name);
+
+    // 5. Send Email Summary Report to leadership, office_boy, and facility_manager
+    const dateLabel = istTomorrow.toLocaleDateString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+
+    const reportRecipients = activeProfiles
+      .filter((p) => p.email && ['leadership', 'office_boy', 'facility_manager'].includes(p.role))
+      .map((p) => p.email);
+
+    const uniqueReportRecipients = [...new Set(reportRecipients)];
+
+    if (uniqueReportRecipients.length > 0) {
+      sendMealNightReportEmail(uniqueReportRecipients, {
+        mealDate: dateLabel,
+        totalBooked: bookedCount,
+        totalSkipped: skippedCount,
+        totalNotBooked: notBookedCount,
+        vegCount: counts.veg,
+        nonVegCount: counts.non_veg,
+        eggCount: counts.egg,
+        others,
+        unbookedNames,
+      }).catch((e) => console.error('[MealNightReport] Email sending failed:', e.message));
+    }
+
+    // 6. Format and send Telegram messages (retaining original behavior)
+    // Telegram stats exclude skips
+    const telegramTotal = bookedCount;
+
+    // Fetch mappings for office_boy, facility_manager, and leadership
     const { data: mappings, error: mapErr } = await supabaseAdmin
       .from('telegram_user_map')
       .select('telegram_chat_id, profiles!user_id!inner(role)')
@@ -552,18 +602,13 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
     if (chatIds.length === 0) {
       return res.json({
         ok: true,
-        message: 'No registered Telegram chats found for office_boy, facility_manager, or leadership.',
+        message: 'Email report queued. No registered Telegram chats found for office_boy, facility_manager, or leadership.',
+        tomorrow: tomorrowStr,
+        totalBooked: bookedCount,
+        skipped: skippedCount,
+        notBooked: notBookedCount,
       });
     }
-
-    // 5. Format message
-    const dateLabel = istTomorrow.toLocaleDateString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
 
     let msg = `📋 *Meal Bookings Report*\n`;
     msg += `📅 Date: *${dateLabel}*\n\n`;
@@ -576,9 +621,8 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
       msg += `🍱 *${choice}*: ${count}\n`;
     }
 
-    msg += `\nTotal Bookings: *${total}*`;
+    msg += `\nTotal Bookings: *${telegramTotal}*`;
 
-    // 6. Send to Telegram chats
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
     if (!botToken) {
       console.warn('[MealNightReport] TELEGRAM_BOT_TOKEN not set, skipping actual send');
@@ -586,6 +630,9 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
         ok: true,
         message: 'Telegram bot token not set. Message that would have been sent: ' + msg.replace(/\n/g, ' '),
         chatCount: chatIds.length,
+        tomorrow: tomorrowStr,
+        totalBookings: telegramTotal,
+        counts: { veg: counts.veg, non_veg: counts.non_veg, egg: counts.egg, ...others },
       });
     }
 
@@ -614,8 +661,10 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
     res.json({
       ok: true,
       tomorrow: tomorrowStr,
-      totalBookings: total,
-      counts: { ...counts, ...others },
+      totalBookings: bookedCount,
+      totalSkipped: skippedCount,
+      totalNotBooked: notBookedCount,
+      counts: { veg: counts.veg, non_veg: counts.non_veg, egg: counts.egg, ...others },
       succeeded,
       failed,
     });
@@ -721,6 +770,112 @@ router.post('/meal-skip-reminder', async (req, res, next) => {
         await new Promise((r) => setTimeout(r, 400));
       }
       console.log(`[MealSkipReminder] Done. Sent: ${sent}, Failed: ${failed}, Total: ${profiles.length}`);
+    })();
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /api/cron/meal-booking-confirmation
+// Called by pg_cron at 8:20 PM IST everyday.
+router.post('/meal-booking-confirmation', async (req, res, next) => {
+  try {
+    const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
+    const cronSecret = process.env.CRON_SECRET || 'app_wizz_cron_secret_change_in_production';
+
+    if (secret !== cronSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // 1. Calculate tomorrow in IST
+    const now = new Date();
+    const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    
+    const istTomorrow = new Date(istNow);
+    istTomorrow.setDate(istTomorrow.getDate() + 1);
+
+    const yyyy = istTomorrow.getFullYear();
+    const mm = String(istTomorrow.getMonth() + 1).padStart(2, '0');
+    const dd = String(istTomorrow.getDate()).padStart(2, '0');
+    const tomorrowStr = `${yyyy}-${mm}-${dd}`;
+
+    // 2. Check if tomorrow is a working day (Mon-Fri)
+    const tomorrowDay = istTomorrow.getDay(); // 0=Sun, 6=Sat
+    const isTomorrowWorkingDay = tomorrowDay >= 1 && tomorrowDay <= 5;
+
+    if (!isTomorrowWorkingDay) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: `Tomorrow (${tomorrowStr}) is not a working day. Booking confirmations are only sent for working days.`,
+      });
+    }
+
+    // 3. Query all tomorrow's meal bookings (excluding skip)
+    const { data: bookings, error: bookingsErr } = await supabaseAdmin
+      .from('meal_bookings')
+      .select('user_id, choice')
+      .eq('meal_date', tomorrowStr)
+      .neq('choice', 'skip');
+
+    if (bookingsErr) throw bookingsErr;
+
+    if (!bookings || bookings.length === 0) {
+      return res.json({
+        ok: true,
+        message: 'No users have booked meals for tomorrow.',
+        emailsSent: 0,
+      });
+    }
+
+    const bookedUserIds = bookings.map((b) => b.user_id);
+
+    // 4. Query active profiles with emails for those who booked
+    const { data: profiles, error: profilesErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email, full_name')
+      .eq('active', true)
+      .in('id', bookedUserIds)
+      .not('email', 'is', null);
+
+    if (profilesErr) throw profilesErr;
+
+    if (profiles.length === 0) {
+      return res.json({
+        ok: true,
+        message: 'No active booked users have email addresses configured.',
+        emailsSent: 0,
+      });
+    }
+
+    const choiceMap = new Map(bookings.map((b) => [b.user_id, b.choice]));
+
+    // Respond immediately to prevent cron timeout
+    res.json({
+      ok: true,
+      message: `Sending booking confirmations to ${profiles.length} users.`,
+      tomorrow: tomorrowStr,
+      queuedCount: profiles.length,
+    });
+
+    // 5. Send emails sequentially in the background (fire-and-forget)
+    (async () => {
+      let sent = 0;
+      let failed = 0;
+      for (const user of profiles) {
+        try {
+          const choice = choiceMap.get(user.id) || 'unknown';
+          await sendMealBookingConfirmationEmail(user.email, user.full_name, choice, tomorrowStr);
+          console.log(`[MealBookingConfirmation] Confirmation email sent successfully to ${user.email} (${user.full_name}) for ${tomorrowStr}`);
+          sent++;
+        } catch (e) {
+          console.error(`[MealBookingConfirmation] Failed to send confirmation email to ${user.email}:`, e.message);
+          failed++;
+        }
+        // 400ms delay between each email to stay within Microsoft Graph concurrency limits
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      console.log(`[MealBookingConfirmation] Done. Sent: ${sent}, Failed: ${failed}, Total: ${profiles.length}`);
     })();
   } catch (e) {
     next(e);

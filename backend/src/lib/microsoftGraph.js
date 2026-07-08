@@ -436,3 +436,276 @@ export async function sendMealSkipReminderEmail(email, mealDate) {
   }
 }
 
+/**
+ * Send the nightly meal booking summary report email.
+ * @param {string[]} emails - recipient addresses
+ * @param {object} reportData - report details
+ */
+export async function sendMealNightReportEmail(emails, reportData) {
+  if (!isGraphConfigured()) {
+    console.warn('[MealNightReport] Microsoft Graph not configured — skipping email report.');
+    return;
+  }
+
+  const token = await getGraphToken();
+  const toRecipients = emails.map((email) => ({ emailAddress: { address: email } }));
+
+  if (toRecipients.length === 0) return;
+
+  const subject = `📋 Daily Meal Bookings Summary Report (${reportData.mealDate})`;
+
+  const unbookedList = (reportData.unbookedNames || []).length > 0
+    ? (reportData.unbookedNames || []).map(name => `<li style="margin-bottom: 6px; font-weight: 500;">${name}</li>`).join('')
+    : '<li style="color: #16a34a; font-style: italic; font-weight: 600;">None (All active members have responded! 🎉)</li>';
+
+  const body = `
+    <div style="background-color: #f6f9fc; padding: 48px 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; min-height: 100%;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #eef2f6; box-shadow: 0 20px 24px -4px rgba(16, 24, 40, 0.03), 0 8px 8px -4px rgba(16, 24, 40, 0.02); overflow: hidden;">
+        <!-- Top Dark Accent Line -->
+        <tr>
+          <td height="6" style="background: linear-gradient(90deg, #1e293b, #475569);"></td>
+        </tr>
+        <!-- Header -->
+        <tr>
+          <td align="center" style="padding: 40px 40px 20px 40px;">
+            <span style="font-size: 42px;">📋</span>
+            <h2 style="margin: 16px 0 8px 0; color: #1e293b; font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 32px;">
+              Meal Bookings Night Report
+            </h2>
+            <p style="margin: 0; color: #64748b; font-size: 14px; font-weight: 500;">
+              Snackify Cafeteria Notification
+            </p>
+          </td>
+        </tr>
+        <!-- Content Body -->
+        <tr>
+          <td style="padding: 0 40px 30px 40px;">
+            <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
+            
+            <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 24px; color: #475569;">
+              Here is the summary of tomorrow's meal choices and bookings status for <strong style="color: #0f172a;">${reportData.mealDate}</strong>:
+            </p>
+
+            <!-- Summary Statistics Table -->
+            <h3 style="margin: 0 0 12px 0; color: #0f172a; font-size: 16px; font-weight: 700;">Summary Statistics</h3>
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; margin-bottom: 24px;">
+              <thead>
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+                  <th align="left" style="padding: 12px 16px; font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Category</th>
+                  <th align="right" style="padding: 12px 16px; font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Headcount</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 14px 16px; font-size: 14px; color: #16a34a; font-weight: 600;">Total Booked</td>
+                  <td align="right" style="padding: 14px 16px; font-size: 14px; color: #14532d; font-weight: 700;">${reportData.totalBooked}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 14px 16px; font-size: 14px; color: #dc2626; font-weight: 600;">Skipped</td>
+                  <td align="right" style="padding: 14px 16px; font-size: 14px; color: #7f1d1d; font-weight: 700;">${reportData.totalSkipped}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 14px 16px; font-size: 14px; color: #64748b; font-weight: 600;">Not Booked</td>
+                  <td align="right" style="padding: 14px 16px; font-size: 14px; color: #334155; font-weight: 700;">${reportData.totalNotBooked}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <!-- Detailed Breakdown Table -->
+            <h3 style="margin: 28px 0 12px 0; color: #0f172a; font-size: 16px; font-weight: 700;">Breakdown by Menu Choice</h3>
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; margin-bottom: 24px;">
+              <thead>
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+                  <th align="left" style="padding: 12px 16px; font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Menu Choice</th>
+                  <th align="right" style="padding: 12px 16px; font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">Headcount</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 14px 16px; font-size: 14px; color: #334155; font-weight: 600;">🟢 Vegetarian Meal</td>
+                  <td align="right" style="padding: 14px 16px; font-size: 14px; color: #0f172a; font-weight: 700;">${reportData.vegCount}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 14px 16px; font-size: 14px; color: #334155; font-weight: 600;">🔴 Non-Vegetarian Meal</td>
+                  <td align="right" style="padding: 14px 16px; font-size: 14px; color: #0f172a; font-weight: 700;">${reportData.nonVegCount}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 14px 16px; font-size: 14px; color: #334155; font-weight: 600;">🥚 Egg Meal Option</td>
+                  <td align="right" style="padding: 14px 16px; font-size: 14px; color: #0f172a; font-weight: 700;">${reportData.eggCount}</td>
+                </tr>
+                ${Object.entries(reportData.others || {}).map(([choice, count]) => `
+                  <tr style="border-bottom: 1px solid #f1f5f9;">
+                    <td style="padding: 14px 16px; font-size: 14px; color: #334155; font-weight: 600; text-transform: capitalize;">🍱 ${choice}</td>
+                    <td align="right" style="padding: 14px 16px; font-size: 14px; color: #0f172a; font-weight: 700;">${count}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+
+            <!-- Unbooked Members List -->
+            <h3 style="margin: 28px 0 12px 0; color: #dc2626; font-size: 16px; font-weight: 700;">⚠️ Members who have NOT booked or skipped:</h3>
+            <div style="background-color: #fcfcfc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 24px;">
+              <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 14px; line-height: 22px;">
+                ${unbookedList}
+              </ul>
+            </div>
+
+            <p style="margin: 24px 0 0 0; font-size: 13px; line-height: 20px; color: #94a3b8; text-align: center;">
+              This report was auto-generated at 8:30 PM IST today for administrative cafeteria prep optimization.
+            </p>
+          </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+          <td style="background-color: #f8fafc; border-top: 1px solid #f1f5f9; padding: 24px 40px; text-align: center;">
+            <p style="margin: 0; font-size: 12px; color: #94a3b8; line-height: 18px;">
+              ApplyWizz Snackify • Automated Nightly Summaries<br>
+              For support or queries, contact <a href="mailto:support@applywizz.ai" style="color: #64748b; text-decoration: underline;">support@applywizz.ai</a>
+            </p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+
+  const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'Html', content: body },
+        toRecipients,
+      },
+      saveToSentItems: false,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Graph sendMail failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+}
+
+/**
+ * Send a meal booking confirmation email to a user.
+ * @param {string} email - recipient address
+ * @param {string} name - recipient full name
+ * @param {string} choice - meal choice (veg, non_veg, egg)
+ * @param {string} mealDate - the date of the meal (YYYY-MM-DD)
+ */
+export async function sendMealBookingConfirmationEmail(email, name, choice, mealDate) {
+  if (!isGraphConfigured()) {
+    console.warn('[MealBookingConfirmation] Microsoft Graph not configured — skipping email confirmation.');
+    return;
+  }
+
+  const token = await getGraphToken();
+  const subject = `🍽️ Booking Confirmed: Your meal for tomorrow (${mealDate})`;
+
+  const choiceLabels = {
+    veg: '🟢 Vegetarian Meal',
+    non_veg: '🔴 Non-Vegetarian Meal',
+    egg: '🥚 Egg Meal Option',
+  };
+  const choiceLabel = choiceLabels[choice.toLowerCase()] || `🍱 ${choice}`;
+
+  const body = `
+    <div style="background-color: #f6f9fc; padding: 48px 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; min-height: 100%;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 540px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #eef2f6; box-shadow: 0 20px 24px -4px rgba(16, 24, 40, 0.03), 0 8px 8px -4px rgba(16, 24, 40, 0.02); overflow: hidden;">
+        <!-- Top Accent Line -->
+        <tr>
+          <td height="6" style="background: linear-gradient(90deg, #ff5a5f, #ff7e5f);"></td>
+        </tr>
+        <!-- Header -->
+        <tr>
+          <td align="center" style="padding: 40px 40px 20px 40px;">
+            <span style="font-size: 42px;">🍽️</span>
+            <h2 style="margin: 16px 0 8px 0; color: #1e293b; font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 32px;">
+              Booking Confirmed
+            </h2>
+            <p style="margin: 0; color: #ff5a5f; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">
+              Snackify Cafeteria Notification
+            </p>
+          </td>
+        </tr>
+        <!-- Content Body -->
+        <tr>
+          <td style="padding: 0 40px 30px 40px;">
+            <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
+            <p style="margin: 0 0 16px 0; font-size: 16px; line-height: 26px; color: #334155;">Hello ${name},</p>
+            
+            <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 26px; color: #475569;">
+              Your meal booking has been successfully confirmed for tomorrow! Here are your ticket details:
+            </p>
+
+            <!-- Details Card Badge -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 24px 0; padding: 16px 20px;">
+              <tr>
+                <td style="padding-bottom: 12px; border-bottom: 1px solid #e2e8f0;">
+                  <span style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 700; margin-bottom: 4px;">Target Meal Date</span>
+                  <span style="display: block; font-size: 16px; font-weight: 700; color: #0f172a;">📅 ${mealDate}</span>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding-top: 12px;">
+                  <span style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 700; margin-bottom: 4px;">Your Meal Choice</span>
+                  <span style="display: block; font-size: 16px; font-weight: 700; color: #0f172a;">${choiceLabel}</span>
+                </td>
+              </tr>
+            </table>
+
+            <!-- CTA Button -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 32px 0 8px 0;">
+              <tr>
+                <td align="center">
+                  <a href="https://snackify.applywizz.ai/" target="_blank" style="background-color: #ff5a5f; color: #ffffff; padding: 16px 36px; border-radius: 10px; font-size: 15px; font-weight: 600; text-decoration: none; display: inline-block; box-shadow: 0 4px 12px rgba(255, 90, 95, 0.2); text-align: center;">
+                    View Booking in Portal →
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <p style="margin: 24px 0 0 0; font-size: 14px; line-height: 24px; color: #64748b; text-align: center;">
+              If your plans change, you can modify or skip your meal booking in the portal before cutoff times.
+            </p>
+          </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+          <td style="background-color: #f8fafc; border-top: 1px solid #f1f5f9; padding: 24px 40px; text-align: center;">
+            <p style="margin: 0; font-size: 12px; color: #94a3b8; line-height: 18px;">
+              ApplyWizz Snackify • Automated Notification System<br>
+              For support or queries, contact <a href="mailto:support@applywizz.ai" style="color: #64748b; text-decoration: underline;">support@applywizz.ai</a>
+            </p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+
+  const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'Html', content: body },
+        toRecipients: [{ emailAddress: { address: email } }],
+      },
+      saveToSentItems: false,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Graph sendMail failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+}
+
