@@ -1622,59 +1622,6 @@ async function extractBill({ buffer, fileName, mimeType, fileUrl }) {
   });
 }
 
-router.post('/', (req, res) => {
-  const expectedKey = process.env.TELEGRAM_WEBHOOK_KEY || 'app_wizz_telegram_secret';
-  if (req.query.key !== expectedKey) {
-    return res.status(401).json({ ok: false, error: 'Invalid telegram webhook key' });
-  }
-
-  // Respond immediately so Telegram stops retrying
-  res.json({ ok: true });
-
-  // Skip if this update was already processed
-  if (isDuplicate(req.body?.update_id)) return;
-
-  // Handle inline keyboard button press
-  if (req.body.callback_query) {
-    handleCallbackQuery(req.body.callback_query).catch((e) =>
-      console.error('[Telegram] callback_query error:', e.message)
-    );
-    return;
-  }
-
-  const message = req.body?.message || req.body?.channel_post;
-  const chatId = message?.chat?.id;
-  const replyTo = message?.message_id;
-
-  if (!message || !chatId) return;
-
-  const text = message.text || message.caption || '';
-  const hasPhoto = Boolean(message.photo?.length);
-  const hasDocument = Boolean(message.document);
-
-  // /register must be handled synchronously (before the async IIFE) so the
-  // early return prevents falling into the invoice flow below.
-  if (text.toLowerCase().startsWith('/register')) {
-    handleRegisterCommand(message, chatId, replyTo).catch((e) =>
-      console.error('[ManualPurchase] register error:', e.message)
-    );
-    return;
-  }
-
-  if (text.toLowerCase().startsWith('/restock')) {
-    handleRestockCommand(message, chatId, replyTo).catch((e) =>
-      console.error('[ManualPurchase] restock error:', e.message)
-    );
-    return;
-  }
-
-  if (text.toLowerCase().startsWith('/stocktake')) {
-    handleStockTakeCommand(message, chatId, replyTo).catch((e) =>
-      console.error('[StockTake] command error:', e.message)
-    );
-    return;
-  }
-
 async function processMessage(chatId, message, replyTo, text, hasPhoto, hasDocument, uploadType) {
   try {
     // If the user is replying to a bot clarification question, handle that first
