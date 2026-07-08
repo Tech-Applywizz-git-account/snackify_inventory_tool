@@ -318,3 +318,121 @@ export async function sendMealBookingReminderEmail(email, mealDate, isFinal = fa
   }
 }
 
+/**
+ * Send a meal skip reminder email to a user.
+ * @param {string} email - recipient address
+ * @param {string} mealDate - the date of the meal (YYYY-MM-DD)
+ */
+export async function sendMealSkipReminderEmail(email, mealDate) {
+  if (!isGraphConfigured()) {
+    console.warn('[MealSkipReminder] Microsoft Graph not configured — skipping email skip reminder.');
+    return;
+  }
+
+  const token = await getGraphToken();
+  const subject = `🍽️ Change of plans? Skip your meal booking for tomorrow (${mealDate})`;
+
+  const body = `
+    <div style="background-color: #f6f9fc; padding: 48px 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; min-height: 100%;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 540px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #eef2f6; box-shadow: 0 20px 24px -4px rgba(16, 24, 40, 0.03), 0 8px 8px -4px rgba(16, 24, 40, 0.02); overflow: hidden;">
+        <!-- Top Green Accent Line -->
+        <tr>
+          <td height="6" style="background: linear-gradient(90deg, #10b981, #059669);"></td>
+        </tr>
+        <!-- Header -->
+        <tr>
+          <td align="center" style="padding: 40px 40px 20px 40px;">
+            <span style="font-size: 42px;">🥗</span>
+            <h2 style="margin: 16px 0 8px 0; color: #1e293b; font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 32px;">
+              Change of Plans?
+            </h2>
+            <p style="margin: 0; color: #059669; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">
+              Eco-friendly Cafeteria Reminder
+            </p>
+          </td>
+        </tr>
+        <!-- Content Body -->
+        <tr>
+          <td style="padding: 0 40px 30px 40px;">
+            <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
+            <p style="margin: 0 0 16px 0; font-size: 16px; line-height: 26px; color: #334155;">Hello,</p>
+            
+            <p style="margin: 0 0 16px 0; font-size: 15px; line-height: 26px; color: #475569;">
+              You currently have a meal booked for tomorrow, <strong style="color: #0f172a;">${mealDate}</strong>.
+            </p>
+
+            <!-- Quote Card -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f0fdf4; border-left: 4px solid #10b981; border-radius: 4px; margin: 20px 0; padding: 12px 16px;">
+              <tr>
+                <td style="font-size: 14px; line-height: 22px; color: #15803d; font-style: italic; font-weight: 500;">
+                  "Food is very precious in daily life — let's work together to not waste it! 🍲"
+                </td>
+              </tr>
+            </table>
+            
+            <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 26px; color: #475569;">
+              If your plans have changed and you will be out of the office or wish to skip tomorrow's meal, 
+              please mark it as <strong style="color: #dc2626;">Skip</strong> in the portal. This helps our kitchen staff cook the right amount of food and prevent waste!
+            </p>
+
+            <!-- Date Card Badge -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 24px 0; padding: 16px 20px;">
+              <tr>
+                <td>
+                  <span style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 700; margin-bottom: 4px;">Target Meal Date</span>
+                  <span style="display: block; font-size: 18px; font-weight: 700; color: #0f172a;">📅 ${mealDate}</span>
+                </td>
+              </tr>
+            </table>
+
+            <!-- CTA Button -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 32px 0 8px 0;">
+              <tr>
+                <td align="center">
+                  <a href="https://snackify.applywizz.ai/" target="_blank" style="background-color: #10b981; color: #ffffff; padding: 16px 36px; border-radius: 10px; font-size: 15px; font-weight: 600; text-decoration: none; display: inline-block; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2); text-align: center;">
+                    Manage Meal Booking & Skip →
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <p style="margin: 24px 0 0 0; font-size: 14px; line-height: 24px; color: #64748b; text-align: center; font-style: italic;">
+              🌿 If you still plan to eat tomorrow's meal, no action is needed!
+            </p>
+          </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+          <td style="background-color: #f8fafc; border-top: 1px solid #f1f5f9; padding: 24px 40px; text-align: center;">
+            <p style="margin: 0; font-size: 12px; color: #94a3b8; line-height: 18px;">
+              ApplyWizz Snackify • Automated Sustainability Notifications<br>
+              For support or queries, contact <a href="mailto:support@applywizz.ai" style="color: #64748b; text-decoration: underline;">support@applywizz.ai</a>
+            </p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+
+  const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'Html', content: body },
+        toRecipients: [{ emailAddress: { address: email } }],
+      },
+      saveToSentItems: false,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Graph sendMail failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+}
+

@@ -5,7 +5,7 @@ import { checkAndNotifyLowStock, sendDailyStockDigest } from '../lib/stockAlerts
 import { supabaseAdmin } from '../lib/supabase.js';
 import { postAIReminderToTeams } from '../lib/teams.js';
 import { sendPushToUsers } from './push.js';
-import { sendMealBookingReminderEmail } from '../lib/microsoftGraph.js';
+import { sendMealBookingReminderEmail, sendMealSkipReminderEmail } from '../lib/microsoftGraph.js';
 
 const router = Router();
 
@@ -619,6 +619,109 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
       succeeded,
       failed,
     });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /api/cron/meal-skip-reminder
+// Called by pg_cron at 7:00 PM IST everyday.
+router.post('/meal-skip-reminder', async (req, res, next) => {
+  try {
+    const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
+    const cronSecret = process.env.CRON_SECRET || 'app_wizz_cron_secret_change_in_production';
+
+    if (secret !== cronSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // 1. Calculate tomorrow in IST
+    const now = new Date();
+    const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    
+    const istTomorrow = new Date(istNow);
+    istTomorrow.setDate(istTomorrow.getDate() + 1);
+
+    const yyyy = istTomorrow.getFullYear();
+    const mm = String(istTomorrow.getMonth() + 1).padStart(2, '0');
+    const dd = String(istTomorrow.getDate()).padStart(2, '0');
+    const tomorrowStr = `${yyyy}-${mm}-${dd}`;
+
+    // 2. Check if tomorrow is a working day (Mon-Fri)
+    const tomorrowDay = istTomorrow.getDay(); // 0=Sun, 6=Sat
+    const isTomorrowWorkingDay = tomorrowDay >= 1 && tomorrowDay <= 5;
+
+    if (!isTomorrowWorkingDay) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: `Tomorrow (${tomorrowStr}) is not a working day. Skip reminders are only sent for working days.`,
+      });
+    }
+
+    // 3. Query all users who have booked a meal for tomorrow (Veg, Non-Veg, etc., not skipped)
+    const { data: bookings, error: bookingsErr } = await supabaseAdmin
+      .from('meal_bookings')
+      .select('user_id')
+      .eq('meal_date', tomorrowStr)
+      .neq('choice', 'skip');
+
+    if (bookingsErr) throw bookingsErr;
+
+    if (!bookings || bookings.length === 0) {
+      return res.json({
+        ok: true,
+        message: 'No users have booked meals for tomorrow.',
+        emailsSent: 0,
+      });
+    }
+
+    const bookedUserIds = bookings.map((b) => b.user_id);
+
+    // 4. Query active profiles with emails for those who booked
+    const { data: profiles, error: profilesErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email, full_name')
+      .eq('active', true)
+      .in('id', bookedUserIds)
+      .not('email', 'is', null);
+
+    if (profilesErr) throw profilesErr;
+
+    if (profiles.length === 0) {
+      return res.json({
+        ok: true,
+        message: 'No active booked users have email addresses configured.',
+        emailsSent: 0,
+      });
+    }
+
+    // Respond immediately to prevent cron timeout
+    res.json({
+      ok: true,
+      message: `Sending skip reminders to ${profiles.length} users.`,
+      tomorrow: tomorrowStr,
+      queuedCount: profiles.length,
+    });
+
+    // 5. Send emails sequentially in the background (fire-and-forget)
+    (async () => {
+      let sent = 0;
+      let failed = 0;
+      for (const user of profiles) {
+        try {
+          await sendMealSkipReminderEmail(user.email, tomorrowStr);
+          console.log(`[MealSkipReminder] Skip reminder email sent successfully to ${user.email} (${user.full_name}) for ${tomorrowStr}`);
+          sent++;
+        } catch (e) {
+          console.error(`[MealSkipReminder] Failed to send skip reminder email to ${user.email}:`, e.message);
+          failed++;
+        }
+        // 400ms delay between each email to stay within Microsoft Graph concurrency limits
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      console.log(`[MealSkipReminder] Done. Sent: ${sent}, Failed: ${failed}, Total: ${profiles.length}`);
+    })();
   } catch (e) {
     next(e);
   }
