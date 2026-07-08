@@ -703,6 +703,117 @@ export function createAuthRouter(overrides = {}) {
     }
   });
 
+  router.post('/guest-login', async (req, res, next) => {
+    try {
+      const schema = z.object({
+        email: z.string().email(),
+        name: z.string().optional(),
+      });
+      const parsed = schema.parse(req.body);
+      const email = d.normalizeEmail(parsed.email);
+      const name = parsed.name || '';
+
+      // 1. Look up if guest profile already exists in public.profiles table by email
+      const { data: existingProfile, error: profileErr } = await d.supabaseAdmin
+        .from('profiles')
+        .select('id, full_name, preferred_name, role, active, email')
+        .eq('email', email)
+        .maybeSingle();
+
+      if (profileErr) throw profileErr;
+
+      let user = null;
+      let userId = null;
+
+      if (existingProfile) {
+        userId = existingProfile.id;
+        // Find auth user associated with this profile
+        const { data: usersList, error: uErr } = await d.supabaseAdmin.auth.admin.listUsers({
+          page: 1,
+          perPage: 500,
+        });
+        if (uErr) throw uErr;
+        user = usersList?.users?.find((u) => u.id === userId) || null;
+      }
+
+      if (!user) {
+        // Create a new guest user with a dummy email ending in @applywizz.ai to satisfy triggers
+        const dummyEmail = `guest_${Date.now()}_${Math.random().toString(36).substring(2, 7)}@applywizz.ai`;
+        const { data: created, error: createErr } = await d.supabaseAdmin.auth.admin.createUser({
+          email: dummyEmail,
+          email_confirm: true,
+        });
+        if (createErr) throw createErr;
+        user = created?.user;
+        if (!user) throw new Error('Failed to create guest user');
+        userId = user.id;
+      }
+
+      // Always update the profile with the guest's actual email and the newly entered name.
+      const displayName = name.trim() || `Guest (${email.split('@')[0]})`;
+      const guestPrefName = `Guest ${name.trim() || email.split('@')[0]}`;
+      const { error: updateErr } = await d.supabaseAdmin
+        .from('profiles')
+        .update({
+          full_name: displayName,
+          preferred_name: guestPrefName,
+          email: email,
+        })
+        .eq('id', userId);
+      if (updateErr) throw updateErr;
+
+      // Fetch the updated profile to ensure it is active and retrieve the fields
+      const { data: profile, error: fetchErr } = await d.supabaseAdmin
+        .from('profiles')
+        .select('id, full_name, preferred_name, role, active, email')
+        .eq('id', userId)
+        .single();
+      if (fetchErr) throw fetchErr;
+
+      if (!profile.active) {
+        return res.status(403).json({ error: 'Guest account is disabled.' });
+      }
+
+      // Generate AAL1 session token silently (obtaining both access and refresh tokens)
+      const { data: linkData, error: linkErr } = await d.supabaseAdmin.auth.admin.generateLink({
+        type: 'magiclink',
+        email: user.email,
+      });
+      if (linkErr) throw linkErr;
+
+      const emailOtp = linkData?.properties?.email_otp;
+      if (!emailOtp) throw new Error('Failed to generate login link');
+
+      const { data: sessionData, error: sessionErr } = await d.supabaseAnon.auth.verifyOtp({
+        email: user.email,
+        token: emailOtp,
+        type: 'magiclink',
+      });
+      if (sessionErr) throw sessionErr;
+
+      const access_token = sessionData?.session?.access_token;
+      const refresh_token = sessionData?.session?.refresh_token;
+
+      res.json({
+        access_token,
+        refresh_token,
+        user: {
+          id: userId,
+          email: profile.email,
+          full_name: profile.full_name,
+          preferred_name: profile.preferred_name,
+          role: profile.role,
+          active: profile.active,
+        },
+      });
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Invalid email address.' });
+      }
+      next(e);
+    }
+  });
+
   return router;
 }
 

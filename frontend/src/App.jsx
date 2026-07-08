@@ -16,6 +16,7 @@ import DashboardPage from './pages/Dashboard.jsx';
 import FinancePage from './pages/Finance.jsx';
 import LiveTrackingPage from './pages/LiveTracking.jsx';
 import LoginPage from './pages/Login.jsx';
+import GuestPage from './pages/Guest.jsx';
 import ManualPurchasesPage from './pages/ManualPurchases.jsx';
 import MealBookingPage from './pages/MealBooking.jsx';
 import MealHistoryPage from './pages/MealHistory.jsx';
@@ -124,6 +125,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/guest" element={<GuestPage />} />
+      <Route path="/guest/track/:id" element={<LiveTrackingPage />} />
       <Route
         element={
           <Protected>

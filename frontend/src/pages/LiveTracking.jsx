@@ -707,6 +707,8 @@ function OrderView({ req, onRate, onRefresh }) {
 export default function LiveTracking() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const isGuest = window.location.pathname.startsWith('/guest');
+  const backUrl = isGuest ? '/guest' : '/request';
   const [allOrders, setAllOrders] = useState([]); // all active orders
   const [req, setReq] = useState(null); // current viewed order
   const [err, setErr] = useState('');
@@ -868,7 +870,7 @@ export default function LiveTracking() {
     return (
       <div className="flex flex-col items-center justify-center py-24 gap-3 text-slate-500">
         <div className="text-sm text-center px-6">{err}</div>
-        <Link to="/request" className="btn-secondary text-sm mt-2">
+        <Link to={backUrl} className="btn-secondary text-sm mt-2">
           ← Back to Request
         </Link>
       </div>
@@ -900,7 +902,7 @@ export default function LiveTracking() {
       {/* Back + order nav */}
       <div className="flex items-center justify-between pt-2">
         <Link
-          to="/request"
+          to={backUrl}
           className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-brand"
         >
           <ChevronLeft size={16} /> Back to Request

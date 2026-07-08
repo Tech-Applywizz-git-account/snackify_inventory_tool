@@ -22,8 +22,20 @@ function isMorningShift(dateTimeStr) {
 
 function mapFulfillmentType(reqRow) {
   if (!reqRow) return null;
+  let userOrderNumber = reqRow.user_order_number;
+  if (userOrderNumber && userOrderNumber.toUpperCase().startsWith('GUEST')) {
+    const submitterName = reqRow.submitter_name || reqRow.parsed_employee_name || '';
+    const match = submitterName.match(/^Guest \((.+)\)$/i);
+    if (match) {
+      const guestName = match[1].trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (guestName) {
+        userOrderNumber = `${reqRow.user_order_number}(${guestName})`;
+      }
+    }
+  }
   return {
     ...reqRow,
+    user_order_number: userOrderNumber,
     fulfillmentType: reqRow.delivery_mode === 'self_pickup' ? 'pickup' : 'delivery',
   };
 }
@@ -514,6 +526,7 @@ router.post('/', async (req, res, next) => {
           live_status: 'confirming',
           status: 'confirming',
           delivery_mode: deliveryMode,
+          parsed_employee_name: req.user.full_name || req.user.email || null,
         })
         .select()
         .single();
@@ -532,6 +545,7 @@ router.post('/', async (req, res, next) => {
               live_status: 'confirming',
               status: 'confirming',
               delivery_mode: deliveryMode,
+              parsed_employee_name: req.user.full_name || req.user.email || null,
             })
             .select()
             .single();
@@ -600,6 +614,7 @@ router.post('/', async (req, res, next) => {
           live_status: 'confirming',
           status: 'confirming',
           delivery_mode: deliveryMode,
+          parsed_employee_name: req.user.full_name || req.user.email || null,
         })
         .select()
         .single();
@@ -618,6 +633,7 @@ router.post('/', async (req, res, next) => {
               live_status: 'confirming',
               status: 'confirming',
               delivery_mode: deliveryMode,
+              parsed_employee_name: req.user.full_name || req.user.email || null,
             })
             .select()
             .single();

@@ -411,6 +411,16 @@ export default function Login() {
                           </button>
                         </form>
 
+                        <div className="text-center mt-2">
+                          <button
+                            type="button"
+                            onClick={() => navigate('/guest')}
+                            className="text-xs text-[#29FE29] hover:underline"
+                          >
+                            Entering as a guest? Order here →
+                          </button>
+                        </div>
+
                         <p className="text-[11px] text-white/15 text-center">
                           Secured with Microsoft Authenticator (MFA)
                         </p>

@@ -144,14 +144,17 @@ export const api = {
   updateBillItemConversion: (id, body) =>
     request(`/api/bills/items/${id}/conversion`, { method: 'PATCH', body: JSON.stringify(body) }),
 
-  // Cafeteria
-  cafeteriaItems: () => request('/api/cafeteria/items'),
-  quickOrder: (body) => request('/api/requests', { method: 'POST', body: JSON.stringify(body) }),
-  addCafeteriaItem: (body) =>
-    request('/api/cafeteria/items', { method: 'POST', body: JSON.stringify(body) }),
-  updateCafeteriaItem: (id, body) =>
-    request(`/api/cafeteria/items/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  selfPickupStatus: () => request('/api/cafeteria/self-pickup-status'),
+    guestLogin: (email, name) =>
+      request('/api/auth/guest-login', { method: 'POST', body: JSON.stringify({ email, name }) }),
+
+   // Cafeteria
+   cafeteriaItems: () => request('/api/cafeteria/items'),
+   quickOrder: (body) => request('/api/requests', { method: 'POST', body: JSON.stringify(body) }),
+   addCafeteriaItem: (body) =>
+     request('/api/cafeteria/items', { method: 'POST', body: JSON.stringify(body) }),
+   updateCafeteriaItem: (id, body) =>
+     request(`/api/cafeteria/items/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+   selfPickupStatus: () => request('/api/cafeteria/self-pickup-status'),
   applyOBLeave: (body) =>
     request('/api/cafeteria/ob-leave', { method: 'POST', body: JSON.stringify(body) }),
   listOBLeave: () => request('/api/cafeteria/ob-leave'),
