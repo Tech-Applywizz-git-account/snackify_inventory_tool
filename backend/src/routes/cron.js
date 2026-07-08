@@ -343,7 +343,7 @@ async function sendWeeklyForecastDigest(items, botToken) {
 
   const { data: mappings } = await supabaseAdmin
     .from('telegram_user_map')
-    .select('telegram_chat_id, profiles!inner(role)')
+    .select('telegram_chat_id, profiles!user_id!inner(role)')
     .eq('profiles.role', 'leadership');
 
   const chatIds = mappings?.map((m) => m.telegram_chat_id).filter(Boolean) || [];
@@ -472,6 +472,153 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
       }
       console.log(`[MealReminder] Done. Sent: ${sent}, Failed: ${failed}, Total: ${nonBookedUsers.length}`);
     })();
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /api/cron/meal-booking-night-report
+// Called by pg_cron at 8:30 PM IST everyday (15:00 UTC).
+router.post('/meal-booking-night-report', async (req, res, next) => {
+  try {
+    const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
+    const cronSecret = process.env.CRON_SECRET || 'app_wizz_cron_secret_change_in_production';
+
+    if (secret !== cronSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // 1. Calculate tomorrow in IST
+    const now = new Date();
+    const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+
+    const istTomorrow = new Date(istNow);
+    istTomorrow.setDate(istTomorrow.getDate() + 1);
+
+    const yyyy = istTomorrow.getFullYear();
+    const mm = String(istTomorrow.getMonth() + 1).padStart(2, '0');
+    const dd = String(istTomorrow.getDate()).padStart(2, '0');
+    const tomorrowStr = `${yyyy}-${mm}-${dd}`;
+
+    // 2. Check if tomorrow is a working day (Mon-Fri)
+    const tomorrowDay = istTomorrow.getDay(); // 0=Sun, 6=Sat
+    const isTomorrowWorkingDay = tomorrowDay >= 1 && tomorrowDay <= 5;
+
+    if (!isTomorrowWorkingDay) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: `Tomorrow (${tomorrowStr}) is not a working day. Night reports are only sent for working days.`,
+      });
+    }
+
+    // 3. Query meal bookings for tomorrow
+    const { data: bookings, error: bookingsErr } = await supabaseAdmin
+      .from('meal_bookings')
+      .select('choice')
+      .eq('meal_date', tomorrowStr)
+      .neq('choice', 'skip');
+
+    if (bookingsErr) throw bookingsErr;
+
+    // Count categories
+    const counts = {
+      veg: 0,
+      non_veg: 0,
+      egg: 0,
+    };
+    const others = {};
+
+    for (const b of bookings || []) {
+      if (b.choice in counts) {
+        counts[b.choice]++;
+      } else {
+        others[b.choice] = (others[b.choice] || 0) + 1;
+      }
+    }
+
+    const total = (bookings || []).length;
+
+    // 4. Query mappings for office_boy, facility_manager, and leadership
+    const { data: mappings, error: mapErr } = await supabaseAdmin
+      .from('telegram_user_map')
+      .select('telegram_chat_id, profiles!user_id!inner(role)')
+      .in('profiles.role', ['office_boy', 'facility_manager', 'leadership']);
+
+    if (mapErr) throw mapErr;
+
+    const chatIds = [...new Set(mappings?.map((m) => m.telegram_chat_id).filter(Boolean) || [])];
+    
+    if (chatIds.length === 0) {
+      return res.json({
+        ok: true,
+        message: 'No registered Telegram chats found for office_boy, facility_manager, or leadership.',
+      });
+    }
+
+    // 5. Format message
+    const dateLabel = istTomorrow.toLocaleDateString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+
+    let msg = `📋 *Meal Bookings Report*\n`;
+    msg += `📅 Date: *${dateLabel}*\n\n`;
+    msg += `🟢 *Veg*: ${counts.veg}\n`;
+    msg += `🔴 *Non-Veg*: ${counts.non_veg}\n`;
+    msg += `🥚 *Egg*: ${counts.egg}\n`;
+
+    // Append any other choices if they exist
+    for (const [choice, count] of Object.entries(others)) {
+      msg += `🍱 *${choice}*: ${count}\n`;
+    }
+
+    msg += `\nTotal Bookings: *${total}*`;
+
+    // 6. Send to Telegram chats
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+      console.warn('[MealNightReport] TELEGRAM_BOT_TOKEN not set, skipping actual send');
+      return res.json({
+        ok: true,
+        message: 'Telegram bot token not set. Message that would have been sent: ' + msg.replace(/\n/g, ' '),
+        chatCount: chatIds.length,
+      });
+    }
+
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const results = await Promise.allSettled(
+      chatIds.map((cid) =>
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: cid, text: msg, parse_mode: 'Markdown' }),
+        }).then(async (r) => {
+          if (!r.ok) {
+            const body = await r.text();
+            throw new Error(`Telegram error ${r.status}: ${body}`);
+          }
+          return r.json();
+        })
+      )
+    );
+
+    const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+    const failed = results.filter((r) => r.status === 'rejected').length;
+
+    console.log(`[MealNightReport] Report sent to ${succeeded} chats, failed to ${failed} chats.`);
+
+    res.json({
+      ok: true,
+      tomorrow: tomorrowStr,
+      totalBookings: total,
+      counts: { ...counts, ...others },
+      succeeded,
+      failed,
+    });
   } catch (e) {
     next(e);
   }

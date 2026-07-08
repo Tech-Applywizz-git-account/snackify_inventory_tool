@@ -21,6 +21,7 @@ import manualPurchaseRouter from './routes/manualPurchase.js';
 import mealPrintRouter from './routes/mealPrint.js';
 import mealsRouter from './routes/meals.js';
 import productsRouter from './routes/products.js';
+import officeSuppliesRouter from './routes/officeSupplies.js';
 import pushRouter from './routes/push.js';
 import reportsRouter from './routes/reports.js';
 import requestsRouter from './routes/requests.js';
@@ -81,6 +82,7 @@ app.use('/api/cron', cronRouter);
 
 app.use('/api', authMiddleware);
 app.use('/api/products', productsRouter);
+app.use('/api/office-supplies', officeSuppliesRouter);
 app.use('/api/inventory', inventoryRouter);
 app.use('/api/transactions', transactionsRouter);
 app.use('/api/reports', reportsRouter);

@@ -77,6 +77,9 @@ export const api = {
   updateProduct: (id, body) =>
     request(`/api/products/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
+  listOfficeSupplies: () => request('/api/office-supplies'),
+  createOfficeSupply: (body) => request('/api/office-supplies', { method: 'POST', body: JSON.stringify(body) }),
+
   inventoryStatus: () => request('/api/inventory'),
   alerts: () => request('/api/inventory/alerts'),
   dailyUpdate: (updates) =>

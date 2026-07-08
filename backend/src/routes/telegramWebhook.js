@@ -34,6 +34,7 @@ const messageBuffer = new Map();
 // Tracks step-by-step confirmation state per chat (in-memory, lost on restart)
 // chatId → { purchaseId, step, waitingFor, replyTo }
 const confirmationState = new Map();
+const pendingUploads = new Map();
 
 function bufferMessage(chatId, { text, photoFileId, replyTo, messageId }) {
   if (!messageBuffer.has(chatId)) {
@@ -56,7 +57,7 @@ function bufferMessage(chatId, { text, photoFileId, replyTo, messageId }) {
   );
 }
 
-async function processBufferedPurchase(chatId, group) {
+async function processBufferedPurchase(chatId, group, uploadType = 'pantry') {
   const combinedText = group.texts.join('\n').trim();
   const replyTo = group.replyTo;
 
@@ -149,13 +150,13 @@ async function processBufferedPurchase(chatId, group) {
             );
             return;
           }
-          const { bill, itemCount, normalizedItems } = await saveBill({ parsed, fileUrl: photoUrls[0] });
+          const { bill, itemCount, normalizedItems } = await saveBill({ parsed, fileUrl: photoUrls[0], uploadType });
           const itemsList = (normalizedItems || [])
             .map((i) => `  ${i.emoji} ${i.item_name} — ${i.quantity} ${i.unit}`)
             .join('\n');
           await sendTelegramMessage(
             chatId,
-            `✅ Bill Auto-Approved & Inventory Updated!\n\n🏢 Vendor: ${bill.vendor_name || '-'}\n🧾 Invoice: #${bill.invoice_number || '-'}\n💰 Total: ₹${bill.grand_total || '-'}\n\n📦 ${itemCount} items added to stock:\n${itemsList}\n\n🟢 Status: Auto-Verified\n🔄 Cafeteria menu & inventory updated automatically!`,
+            `✅ Bill Auto-Approved & Inventory Updated!\n\n🏢 Vendor: ${bill.vendor_name || '-'}\n🧾 Invoice: #${bill.invoice_number || '-'}\n💰 Total: ₹${bill.grand_total || '-'}\n\n📦 ${itemCount} items added to ${uploadType === 'office' ? 'office supplies' : 'stock'}:\n${itemsList}\n\n🟢 Status: Auto-Verified\n🔄 ${uploadType === 'office' ? 'Office supplies inventory updated!' : 'Cafeteria menu & inventory updated automatically!'}`,
             replyTo
           );
           postBillToTeams({
@@ -230,6 +231,7 @@ async function processBufferedPurchase(chatId, group) {
     step: 1,
     waitingFor: null,
     replyTo,
+    uploadType,
   });
 
   await sendConfirmationStep(chatId, 1, savedPurchase.id, extracted.item_name, replyTo);
@@ -299,6 +301,35 @@ async function handleCallbackQuery(callbackQuery) {
   const replyTo = callbackQuery.message?.message_id;
 
   await answerCallbackQuery(queryId);
+
+  // ── File upload category selection ────────────────────────────────────────
+  if (data.startsWith('upl_pantry:') || data.startsWith('upl_office:')) {
+    const isPantry = data.startsWith('upl_pantry:');
+    const uploadId = data.split(':')[1];
+    const pending = pendingUploads.get(uploadId);
+
+    if (!pending) {
+      await sendTelegramMessage(chatId, '❌ Session expired. Please upload the file again.', replyTo);
+      return;
+    }
+
+    pendingUploads.delete(uploadId);
+
+    const label = isPantry ? '🥫 Cafeteria / Pantry' : '📎 Office Supplies';
+    await sendTelegramMessage(chatId, `Selected: ${label}. Processing upload...`, replyTo);
+
+    const uploadType = isPantry ? 'pantry' : 'office';
+    processMessage(
+      pending.chatId,
+      { ...pending.message, uploadType },
+      pending.replyTo,
+      pending.text,
+      pending.hasPhoto,
+      pending.hasDocument,
+      uploadType
+    ).catch((e) => console.error('[Telegram callback error]:', e.message));
+    return;
+  }
 
   // ── Photo stock-take: Confirm / Discard ──────────────────────────────────
   const stMatch = data.match(/^st_(confirm|discard):(.+)$/);
@@ -388,7 +419,55 @@ async function handleCallbackQuery(callbackQuery) {
   }
 }
 
+async function applyOfficePurchaseToInventory(purchase) {
+  const itemName = purchase.item_name || 'Unknown Item';
+  const qty = Number(purchase.quantity) || 1;
+  const amount = Number(purchase.amount) || 0;
+  const rate = qty > 0 ? Number((amount / qty).toFixed(2)) : amount;
+
+  const { data: existing } = await supabaseAdmin
+    .from('office_supplies')
+    .select('id, current_stock')
+    .ilike('name', itemName)
+    .maybeSingle();
+
+  if (existing) {
+    await supabaseAdmin
+      .from('office_supplies')
+      .update({
+        current_stock: Number(existing.current_stock || 0) + qty,
+        cost_per_unit: rate,
+        unit: purchase.unit || 'pieces',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', existing.id);
+  } else {
+    const lower = itemName.toLowerCase();
+    let category = 'stationery';
+    if (/sanitizer|soap|cleaner|toilet|washroom|tissue|handwash|phenyl|wipe/i.test(lower)) {
+      category = 'sanitary';
+    } else if (/mouse|keyboard|cable|adapter|charger|gadget|electronic|battery|laptop|monitor/i.test(lower)) {
+      category = 'electronic_gadgets';
+    }
+
+    await supabaseAdmin
+      .from('office_supplies')
+      .insert({
+        name: itemName,
+        category,
+        unit: purchase.unit || 'pieces',
+        current_stock: qty,
+        min_threshold: 0,
+        cost_per_unit: rate,
+        active: true,
+      });
+  }
+}
+
 async function finalisePurchase(chatId, purchaseId, replyTo) {
+  const state = confirmationState.get(String(chatId));
+  const uploadType = state?.uploadType || 'pantry';
+
   const { data: purchase } = await supabaseAdmin
     .from('manual_purchases')
     .select('*')
@@ -430,7 +509,11 @@ async function finalisePurchase(chatId, purchaseId, replyTo) {
   let syncedOk = false;
   if (isClear) {
     try {
-      await applyPurchaseToInventory(purchase, { writeFinance: true });
+      if (uploadType === 'office') {
+        await applyOfficePurchaseToInventory(purchase);
+      } else {
+        await applyPurchaseToInventory(purchase, { writeFinance: true });
+      }
       await supabaseAdmin
         .from('manual_purchases')
         .update({
@@ -939,7 +1022,7 @@ async function handleClarificationReply(message, chatId, replyTo, text) {
     chatId,
     `✅ Answer received${itemHint}!\n\nYour purchase has been sent to the finance team for review.`,
     replyTo
-  ).catch(() => {});
+  ).catch(() => { });
 
   return true;
 }
@@ -1210,7 +1293,110 @@ function normalizeDate(dateStr) {
   return null;
 }
 
-async function saveBill({ parsed, fileUrl }) {
+async function saveOfficeBill({ parsed, fileUrl }) {
+  // 1. Insert invoice metadata for expense records
+  const { data: bill, error: billErr } = await supabaseAdmin
+    .from('bill_uploads')
+    .insert({
+      vendor_name: parsed.vendor_name || null,
+      bill_date: normalizeDate(parsed.bill_date),
+      invoice_number: parsed.invoice_number || null,
+      uploaded_by_name: 'Telegram Bot (Office)',
+      file_url: fileUrl,
+      extraction_status: 'Extracted',
+      verification_status: 'Admin Verified',
+      approval_status: 'Auto-Approved',
+      grand_total: normalizeNumber(parsed.grand_total),
+      delivery_charges: normalizeNumber(parsed.delivery_charges) || 0,
+      discount: normalizeNumber(parsed.discount) || 0,
+      confidence_score: normalizeNumber(parsed.confidence_score),
+      needs_manual_review: Boolean(parsed.needs_manual_review),
+      manual_review_reason: parsed.manual_review_reason || null,
+      verified_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (billErr) throw billErr;
+
+  // 2. Insert items list
+  const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+  const items = rawItems.map((item) => ({
+    item_name: item.item_name || item.name || item.product_name || 'Unknown Item',
+    category: item.category || null,
+    quantity: normalizeNumber(item.quantity) || 0,
+    unit: item.unit || 'pieces',
+    unit_rate: normalizeNumber(item.unit_rate) || 0,
+    tax: normalizeNumber(item.tax) || 0,
+    total_amount: normalizeNumber(item.total_amount) || 0,
+  }));
+
+  if (items.length) {
+    const rows = items.map((item) => ({
+      bill_id: bill.id,
+      item_name: item.item_name,
+      category: item.category,
+      quantity: item.quantity,
+      unit: item.unit,
+      unit_rate: item.unit_rate,
+      tax: item.tax,
+      total_amount: item.total_amount,
+    }));
+    await supabaseAdmin.from('bill_items').insert(rows);
+  }
+
+  // 3. Sync stocks directly to the office_supplies table
+  for (const item of items) {
+    const { data: existing } = await supabaseAdmin
+      .from('office_supplies')
+      .select('id, current_stock')
+      .ilike('name', item.item_name)
+      .maybeSingle();
+
+    if (existing) {
+      // Item exists: add to current stock & update cost rate
+      await supabaseAdmin
+        .from('office_supplies')
+        .update({
+          current_stock: Number(existing.current_stock || 0) + item.quantity,
+          cost_per_unit: item.unit_rate,
+          unit: item.unit,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existing.id);
+      console.log(`[Telegram] Updated office supply item: ${item.item_name} +${item.quantity}`);
+    } else {
+      // Item does not exist: classify category & insert new record
+      const lower = item.item_name.toLowerCase();
+      let category = 'stationery'; // default
+      if (/sanitizer|soap|cleaner|toilet|washroom|tissue|handwash|phenyl|wipe/i.test(lower)) {
+        category = 'sanitary';
+      } else if (/mouse|keyboard|cable|adapter|charger|gadget|electronic|battery|laptop|monitor/i.test(lower)) {
+        category = 'electronic_gadgets';
+      }
+
+      await supabaseAdmin
+        .from('office_supplies')
+        .insert({
+          name: item.item_name,
+          category,
+          unit: item.unit,
+          current_stock: item.quantity,
+          min_threshold: 0,
+          cost_per_unit: item.unit_rate,
+          active: true,
+        });
+      console.log(`[Telegram] Created new office supply item: ${item.item_name} (Category: ${category}) stock=${item.quantity}`);
+    }
+  }
+
+  return { bill, itemCount: items.length, normalizedItems: items };
+}
+
+async function saveBill({ parsed, fileUrl, uploadType = 'pantry' }) {
+  if (uploadType === 'office') {
+    return saveOfficeBill({ parsed, fileUrl });
+  }
   // Auto-approve: bills from Telegram are auto-verified (only admins upload via Telegram)
   const { data: bill, error: billErr } = await supabaseAdmin
     .from('bill_uploads')
@@ -1365,8 +1551,49 @@ async function saveBill({ parsed, fileUrl }) {
             available: true,
           })
           .eq('id', existingCafe.id);
+        console.log(`[Telegram] Cafeteria updated (master): ${master.cafeteria_item_name} +${qty}`);
       }
-      // Never auto-create cafeteria items — admin must add them manually
+    } else if (!master) {
+      // Fallback: no master record — try direct name match on cafeteria_items
+      const { data: directCafe } = await supabaseAdmin
+        .from('cafeteria_items')
+        .select('id, item_name, stock_today')
+        .ilike('item_name', itemName)
+        .maybeSingle();
+
+      if (directCafe) {
+        await supabaseAdmin
+          .from('cafeteria_items')
+          .update({
+            stock_today: (directCafe.stock_today || 0) + qty,
+            available: true,
+          })
+          .eq('id', directCafe.id);
+        console.log(`[Telegram] Cafeteria updated (direct match): ${directCafe.item_name} +${qty}`);
+      } else {
+        // Auto-create the cafeteria item so stock is tracked.
+        // Set available=false, orderable=false so it won't show on employee menu
+        // until an admin reviews and enables it.
+        const { error: createErr } = await supabaseAdmin.from('cafeteria_items').insert({
+          item_name: itemName,
+          display_name: itemName,
+          frontend_name: itemName,
+          category: item.category || 'other',
+          emoji: item.emoji || '📦',
+          available: false,
+          orderable: false,
+          stock_today: qty,
+          stock_servings: 0,
+          sides_option: false,
+          dependencies: [],
+          tags: [],
+        });
+        if (createErr) {
+          console.error(`[Telegram] Failed to create cafeteria item for ${itemName}:`, createErr.message);
+        } else {
+          console.log(`[Telegram] Cafeteria item auto-created (needs admin review): ${itemName} stock=${qty}`);
+        }
+      }
     }
     // Unknown items are silently skipped; admin adds them to the master when ready
   }
@@ -1448,145 +1675,233 @@ router.post('/', (req, res) => {
     return;
   }
 
-  // Process in background after responding
-  (async () => {
-    try {
-      // If the user is replying to a bot clarification question, handle that first
-      if (message.reply_to_message && text && !hasDocument) {
-        const handled = await handleClarificationReply(message, chatId, replyTo, text);
-        if (handled) return;
-      }
-
-      // Handle correction text during step-by-step confirmation
-      if (text && !hasPhoto && !hasDocument) {
-        const handled = await handleConfirmationCorrection(String(chatId), text, replyTo);
-        if (handled) return;
-      }
-
-      // Classify the message before touching files
-      const msgType = await classifyTelegramMessage(text, hasPhoto, hasDocument);
-
-      if (msgType === 'manual_no_invoice_purchase') {
-        const bestPhoto = hasPhoto
-          ? [...message.photo].sort((a, b) => (b.file_size || 0) - (a.file_size || 0))[0]
-          : null;
-
-        if (hasPhoto) {
-          // Photo present — process immediately, no buffer needed
-          processBufferedPurchase(String(chatId), {
-            texts: text ? [text] : [],
-            photoFileIds: bestPhoto?.file_id ? [bestPhoto.file_id] : [],
-            replyTo,
-            firstMsgId: replyTo,
-          }).catch((e) => console.error('[ManualPurchase] process error:', e.message));
-        } else {
-          // Text only — buffer briefly in case photo follows
-          bufferMessage(String(chatId), {
-            text,
-            photoFileId: null,
-            replyTo,
-            messageId: replyTo,
-          });
-        }
-        return;
-      }
-
-      if (msgType === 'personal_or_irrelevant') return;
-
-      if (msgType === 'unclear' && !hasDocument) {
-        await sendTelegramMessage(
-          chatId,
-          '🤔 Not sure what this is. To submit a purchase, describe what you bought and the amount (e.g. "bought 2kg sugar ₹80"). To upload a bill, send the PDF or image.',
-          replyTo
-        ).catch(() => {});
-        return;
-      }
-
-      // invoice_bill or document → existing flow (unchanged below)
-      const file = getTelegramFile(message);
-      if (!file || !isSupportedFile(file.fileName, file.mimeType)) return;
-
-      const buffer = await downloadTelegramFile(file.fileId);
-      const fileUrl = await uploadFile({
-        buffer,
-        fileName: file.fileName,
-        mimeType: file.mimeType,
-      });
-      const { content } = await extractBill({ ...file, buffer, fileUrl });
-      console.log('[Telegram] Raw AI response (first 500 chars):', content.slice(0, 500));
-      let parsed;
-      try {
-        parsed = JSON.parse(cleanJson(content));
-      } catch {
-        await sendTelegramMessage(
-          chatId,
-          '📸 This doesn\'t look like a bill or invoice.\n\nIf this is a purchase without a receipt, send a message describing what you bought, the amount, and where — e.g. "bought bread ₹60 from local shop, cash".',
-          replyTo
-        ).catch(() => {});
-        return;
-      }
-      console.log(
-        '[Telegram] Parsed items count:',
-        parsed.items?.length,
-        'First item keys:',
-        parsed.items?.[0] ? Object.keys(parsed.items[0]) : 'none'
-      );
-
-      const duplicate = await findDuplicate(parsed);
-      if (duplicate) {
-        // If the bill was uploaded within the last 15 minutes, this is a Telegram
-        // webhook retry (e.g. after a server restart) — NOT a user intentionally
-        // re-uploading the same bill. Silently skip so no false roast is sent.
-        const ageMs = duplicate.created_at
-          ? Date.now() - new Date(duplicate.created_at).getTime()
-          : Infinity;
-        const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
-        if (ageMs < FIFTEEN_MINUTES_MS) {
-          console.log(
-            '[Telegram] Suppressing duplicate roast — likely Telegram retry within 15 min for invoice',
-            duplicate.invoice_number
-          );
-          return; // silent skip
-        }
-        // Bill is older — user is intentionally re-uploading. Show the roast.
-        const roast = DUPLICATE_MESSAGES[Math.floor(Math.random() * DUPLICATE_MESSAGES.length)];
-        await sendTelegramMessage(
-          chatId,
-          `Duplicate Bill Detected\n\nVendor: ${duplicate.vendor_name || '-'}\nInvoice: #${duplicate.invoice_number || '-'}\nTotal: ₹${duplicate.grand_total || '-'}\n\n${roast}`,
-          replyTo
-        );
-        return;
-      }
-
-      const { bill, itemCount, normalizedItems } = await saveBill({ parsed, fileUrl });
-
-      // Build items summary from normalized data
-      const itemsList = (normalizedItems || [])
-        .map((i) => `  ${i.emoji} ${i.item_name} — ${i.quantity} ${i.unit}`)
-        .join('\n');
-
-      await sendTelegramMessage(
-        chatId,
-        `✅ Bill Auto-Approved & Inventory Updated!\n\n🏢 Vendor: ${bill.vendor_name || '-'}\n🧾 Invoice: #${bill.invoice_number || '-'}\n💰 Total: ₹${bill.grand_total || '-'}\n\n📦 ${itemCount} items added to stock:\n${itemsList}\n\n🟢 Status: Auto-Verified\n🔄 Cafeteria menu & inventory updated automatically!`,
-        replyTo
-      );
-
-      // Teams notification for bill upload
-      postBillToTeams({
-        vendor_name: bill.vendor_name,
-        invoice_number: bill.invoice_number,
-        grand_total: bill.grand_total,
-        items_count: itemCount,
-        uploaded_by: 'Telegram Bot',
-      }).catch((e) => console.error('[Teams bill]', e.message));
-    } catch (e) {
-      await sendTelegramMessage(
-        chatId,
-        `Bill processing failed\n\n${e.message || 'Unknown error'}\n\nPlease upload a clear PDF, JPG, JPEG, or PNG bill.`,
-        replyTo
-      ).catch(() => {});
+async function processMessage(chatId, message, replyTo, text, hasPhoto, hasDocument, uploadType) {
+  try {
+    // If the user is replying to a bot clarification question, handle that first
+    if (message.reply_to_message && text && !hasDocument) {
+      const handled = await handleClarificationReply(message, chatId, replyTo, text);
+      if (handled) return;
     }
-  })();
+
+    // Handle correction text during step-by-step confirmation
+    if (text && !hasPhoto && !hasDocument) {
+      const handled = await handleConfirmationCorrection(String(chatId), text, replyTo);
+      if (handled) return;
+    }
+
+    // Classify the message before touching files
+    const msgType = await classifyTelegramMessage(text, hasPhoto, hasDocument);
+
+    if (msgType === 'manual_no_invoice_purchase') {
+      const bestPhoto = hasPhoto
+        ? [...message.photo].sort((a, b) => (b.file_size || 0) - (a.file_size || 0))[0]
+        : null;
+
+      if (hasPhoto) {
+        // Photo present — process immediately, no buffer needed
+        processBufferedPurchase(String(chatId), {
+          texts: text ? [text] : [],
+          photoFileIds: bestPhoto?.file_id ? [bestPhoto.file_id] : [],
+          replyTo,
+          firstMsgId: replyTo,
+        }, uploadType).catch((e) => console.error('[ManualPurchase] process error:', e.message));
+      } else {
+        // Text only — buffer briefly in case photo follows
+        bufferMessage(String(chatId), {
+          text,
+          photoFileId: null,
+          replyTo,
+          messageId: replyTo,
+        });
+      }
+      return;
+    }
+
+    if (msgType === 'personal_or_irrelevant') return;
+
+    if (msgType === 'unclear' && !hasDocument) {
+      await sendTelegramMessage(
+        chatId,
+        '🤔 Not sure what this is. To submit a purchase, describe what you bought and the amount (e.g. "bought 2kg sugar ₹80"). To upload a bill, send the PDF or image.',
+        replyTo
+      ).catch(() => { });
+      return;
+    }
+
+    // invoice_bill or document → existing flow (unchanged below)
+    const file = getTelegramFile(message);
+    if (!file || !isSupportedFile(file.fileName, file.mimeType)) return;
+
+    const buffer = await downloadTelegramFile(file.fileId);
+    const fileUrl = await uploadFile({
+      buffer,
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+    });
+    const { content } = await extractBill({ ...file, buffer, fileUrl });
+    console.log('[Telegram] Raw AI response (first 500 chars):', content.slice(0, 500));
+    let parsed;
+    try {
+      parsed = JSON.parse(cleanJson(content));
+    } catch {
+      await sendTelegramMessage(
+        chatId,
+        '📸 This doesn\'t look like a bill or invoice.\n\nIf this is a purchase without a receipt, send a message describing what you bought, the amount, and where — e.g. "bought bread ₹60 from local shop, cash".',
+        replyTo
+      ).catch(() => { });
+      return;
+    }
+    console.log(
+      '[Telegram] Parsed items count:',
+      parsed.items?.length,
+      'First item keys:',
+      parsed.items?.[0] ? Object.keys(parsed.items[0]) : 'none'
+    );
+
+    const duplicate = await findDuplicate(parsed);
+    if (duplicate) {
+      // If the bill was uploaded within the last 15 minutes, this is a Telegram
+      // webhook retry (e.g. after a server restart) — NOT a user intentionally
+      // re-uploading the same bill. Silently skip so no false roast is sent.
+      const ageMs = duplicate.created_at
+        ? Date.now() - new Date(duplicate.created_at).getTime()
+        : Infinity;
+      const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+      if (ageMs < FIFTEEN_MINUTES_MS) {
+        console.log(
+          '[Telegram] Suppressing duplicate roast — likely Telegram retry within 15 min for invoice',
+          duplicate.invoice_number
+        );
+        return; // silent skip
+      }
+      // Bill is older — user is intentionally re-uploading. Show the roast.
+      const roast = DUPLICATE_MESSAGES[Math.floor(Math.random() * DUPLICATE_MESSAGES.length)];
+      await sendTelegramMessage(
+        chatId,
+        `Duplicate Bill Detected\n\nVendor: ${duplicate.vendor_name || '-'}\nInvoice: #${duplicate.invoice_number || '-'}\nTotal: ₹${duplicate.grand_total || '-'}\n\n${roast}`,
+        replyTo
+      );
+      return;
+    }
+
+    const { bill, itemCount, normalizedItems } = await saveBill({ parsed, fileUrl, uploadType });
+
+    // Build items summary from normalized data
+    const itemsList = (normalizedItems || [])
+      .map((i) => `  ${i.emoji} ${i.item_name} — ${i.quantity} ${i.unit}`)
+      .join('\n');
+
+    await sendTelegramMessage(
+      chatId,
+      `✅ Bill Auto-Approved & Inventory Updated!\n\n🏢 Vendor: ${bill.vendor_name || '-'}\n🧾 Invoice: #${bill.invoice_number || '-'}\n💰 Total: ₹${bill.grand_total || '-'}\n\n📦 ${itemCount} items added to ${uploadType === 'office' ? 'office supplies' : 'stock'}:\n${itemsList}\n\n🟢 Status: Auto-Verified\n🔄 ${uploadType === 'office' ? 'Office supplies inventory updated!' : 'Cafeteria menu & inventory updated automatically!'}`,
+      replyTo
+    );
+
+    // Teams notification for bill upload
+    postBillToTeams({
+      vendor_name: bill.vendor_name,
+      invoice_number: bill.invoice_number,
+      grand_total: bill.grand_total,
+      items_count: itemCount,
+      uploaded_by: `Telegram Bot (${uploadType === 'office' ? 'Office' : 'Pantry'})`,
+    }).catch((e) => console.error('[Teams bill]', e.message));
+  } catch (e) {
+    await sendTelegramMessage(
+      chatId,
+      `Bill processing failed\n\n${e.message || 'Unknown error'}\n\nPlease upload a clear PDF, JPG, JPEG, or PNG bill.`,
+      replyTo
+    ).catch(() => { });
+  }
+}
+
+router.post('/', (req, res) => {
+  const expectedKey = process.env.TELEGRAM_WEBHOOK_KEY || 'app_wizz_telegram_secret';
+  if (req.query.key !== expectedKey) {
+    return res.status(401).json({ ok: false, error: 'Invalid telegram webhook key' });
+  }
+
+  // Respond immediately so Telegram stops retrying
+  res.json({ ok: true });
+
+  // Skip if this update was already processed
+  if (isDuplicate(req.body?.update_id)) return;
+
+  // Handle inline keyboard button press
+  if (req.body.callback_query) {
+    handleCallbackQuery(req.body.callback_query).catch((e) =>
+      console.error('[Telegram] callback_query error:', e.message)
+    );
+    return;
+  }
+
+  const message = req.body?.message || req.body?.channel_post;
+  const chatId = message?.chat?.id;
+  const replyTo = message?.message_id;
+
+  if (!message || !chatId) return;
+
+  const text = message.text || message.caption || '';
+  const hasPhoto = Boolean(message.photo?.length);
+  const hasDocument = Boolean(message.document);
+
+  // /register must be handled synchronously (before the async IIFE) so the
+  // early return prevents falling into the invoice flow below.
+  if (text.toLowerCase().startsWith('/register')) {
+    handleRegisterCommand(message, chatId, replyTo).catch((e) =>
+      console.error('[ManualPurchase] register error:', e.message)
+    );
+    return;
+  }
+
+  if (text.toLowerCase().startsWith('/restock')) {
+    handleRestockCommand(message, chatId, replyTo).catch((e) =>
+      console.error('[ManualPurchase] restock error:', e.message)
+    );
+    return;
+  }
+
+  if (text.toLowerCase().startsWith('/stocktake')) {
+    handleStockTakeCommand(message, chatId, replyTo).catch((e) =>
+      console.error('[StockTake] command error:', e.message)
+    );
+    return;
+  }
+
+  // If the user uploaded a photo or document, ask which inventory category it is for first
+  if ((hasPhoto || hasDocument) && !message.uploadType) {
+    const uploadId = 'upl_' + Math.random().toString(36).substring(2, 9);
+    pendingUploads.set(uploadId, {
+      message,
+      chatId,
+      replyTo,
+      text,
+      hasPhoto,
+      hasDocument,
+      timestamp: Date.now(),
+    });
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '🥫 Cafeteria / Pantry', callback_data: `upl_pantry:${uploadId}` },
+          { text: '📎 Office Supplies', callback_data: `upl_office:${uploadId}` },
+        ],
+      ],
+    };
+
+    sendTelegramMessage(
+      chatId,
+      '❓ What inventory category is this upload for?',
+      replyTo,
+      keyboard
+    ).catch((e) => console.error('[Telegram] Failed to send upload prompt:', e.message));
+    return;
+  }
+
+  // Process in background after responding
+  processMessage(chatId, message, replyTo, text, hasPhoto, hasDocument, message.uploadType || 'pantry').catch((e) =>
+    console.error('[Telegram] processMessage error:', e.message)
+  );
 });
 
 export default router;

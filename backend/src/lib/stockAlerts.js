@@ -78,7 +78,7 @@ export async function checkAndNotifyLowStock(supabaseAdmin, botToken) {
   // 3. Fetch Leadership Chat IDs
   const { data: mappings } = await supabaseAdmin
     .from('telegram_user_map')
-    .select('telegram_chat_id, profiles!inner(role)')
+    .select('telegram_chat_id, profiles!user_id!inner(role)')
     .eq('profiles.role', 'leadership');
 
   const chatIds = mappings?.map((m) => m.telegram_chat_id).filter(Boolean) || [];
@@ -208,7 +208,7 @@ export async function sendDailyStockDigest(supabaseAdmin, botToken) {
   // 2. Leadership chat ids.
   const { data: mappings } = await supabaseAdmin
     .from('telegram_user_map')
-    .select('telegram_chat_id, profiles!inner(role)')
+    .select('telegram_chat_id, profiles!user_id!inner(role)')
     .eq('profiles.role', 'leadership');
 
   const chatIds = mappings?.map((m) => m.telegram_chat_id).filter(Boolean) || [];
