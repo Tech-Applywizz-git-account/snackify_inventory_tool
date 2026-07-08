@@ -10,6 +10,7 @@ const officeSupplySchema = z.object({
   category: z.string().min(1),
   unit: z.enum(['pieces', 'packs', 'kg', 'liters', 'boxes']),
   cost_per_unit: z.number().nonnegative().optional(),
+  current_stock: z.number().nonnegative().optional(),
 });
 
 // GET /api/office-supplies
@@ -39,13 +40,48 @@ router.post('/', requireRole('facility_manager', 'leadership'), async (req, res,
         category: payload.category,
         unit: payload.unit,
         cost_per_unit: payload.cost_per_unit || 0,
-        current_stock: 0,
+        current_stock: payload.current_stock || 0,
         min_threshold: 0,
       })
       .select()
       .single();
     if (error) throw error;
     res.status(201).json(data);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// PATCH /api/office-supplies/:id
+router.patch('/:id', requireRole('facility_manager', 'leadership'), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { current_stock } = req.body;
+    const { data, error } = await supabaseAdmin
+      .from('office_supplies')
+      .update({ current_stock: Number(current_stock) })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// DELETE /api/office-supplies/:id
+router.delete('/:id', requireRole('facility_manager', 'leadership'), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabaseAdmin
+      .from('office_supplies')
+      .delete()
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ ok: true, data });
   } catch (e) {
     next(e);
   }

@@ -250,6 +250,8 @@ export default function StaffView() {
   const [newItemName, setNewItemName] = useState('');
   const [newItemUnit, setNewItemUnit] = useState('pieces');
   const [newItemCost, setNewItemCost] = useState('');
+  const [newItemCount, setNewItemCount] = useState('');
+  const [editingItem, setEditingItem] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -332,20 +334,58 @@ export default function StaffView() {
           category: modalCategory,
           unit: newItemUnit,
           cost_per_unit: Number(newItemCost) || 0,
+          current_stock: newItemCount !== '' ? Number(newItemCount) : 0,
         };
-        await api.createOfficeSupply(payload);
+        if (editingItem) {
+          await api.updateOfficeSupply(editingItem.id, payload);
+        } else {
+          await api.createOfficeSupply(payload);
+        }
         const updatedSupplies = await api.listOfficeSupplies();
         setOfficeSupplies(updatedSupplies);
       }
       setNewItemName('');
       setNewItemUnit('pieces');
       setNewItemCost('');
+      setNewItemCount('');
+      setEditingItem(null);
       setShowAddModal(false);
     } catch (err) {
       alert(`Failed to add item: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  async function handleDeleteOfficeSupply(id) {
+    if (!window.confirm('Are you sure you want to delete this item?')) return;
+    try {
+      await api.deleteOfficeSupply(id);
+      setOfficeSupplies((prev) => prev.filter((item) => item.id !== id));
+    } catch (e) {
+      alert(`Failed to delete item: ${e.message}`);
+    }
+  }
+
+  async function handleUpdateOfficeSupplyStock(id, newStock) {
+    if (newStock < 0) return;
+    try {
+      const updated = await api.updateOfficeSupply(id, { current_stock: newStock });
+      setOfficeSupplies((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, current_stock: updated.current_stock } : item))
+      );
+    } catch (e) {
+      alert(`Failed to update stock: ${e.message}`);
+    }
+  }
+
+  function closeModal() {
+    setNewItemName('');
+    setNewItemUnit('pieces');
+    setNewItemCost('');
+    setNewItemCount('');
+    setEditingItem(null);
+    setShowAddModal(false);
   }
 
   if (err) return <div className="text-rose-600">{err}</div>;
@@ -646,7 +686,20 @@ export default function StaffView() {
                           return (
                             <li
                               key={r.id}
-                              className={`p-3 rounded-lg border flex items-center justify-between ${
+                              onClick={() => {
+                                if (!canAdd) return;
+                                setEditingItem(r);
+                                setNewItemName(r.name);
+                                setNewItemUnit(r.unit);
+                                setNewItemCost(r.cost_per_unit || '');
+                                setNewItemCount(r.current_stock || '0');
+                                setModalCategory(r.category);
+                                setModalSection('office_supplies');
+                                setShowAddModal(true);
+                              }}
+                              className={`p-3 rounded-lg border flex items-center justify-between transition-all ${
+                                canAdd ? 'cursor-pointer hover:shadow-sm hover:border-slate-300' : ''
+                              } ${
                                 isOut
                                   ? 'border-rose-200 bg-rose-50 text-rose-900'
                                   : isLow
@@ -655,9 +708,66 @@ export default function StaffView() {
                               }`}
                             >
                               <span className="font-medium text-sm">{r.name}</span>
-                              <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
-                                {isOut ? 'out' : `${r.current_stock} ${r.unit}`}
-                              </span>
+                              <div className="flex items-center gap-2">
+                                {canAdd && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleUpdateOfficeSupplyStock(r.id, Math.max(0, Number(r.current_stock) - 1));
+                                    }}
+                                    className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-sm transition-all"
+                                    title="Decrease Stock"
+                                  >
+                                    -
+                                  </button>
+                                )}
+                                <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600 min-w-[65px] text-center">
+                                  {isOut ? 'out' : `${Math.round(r.current_stock)} ${r.unit}`}
+                                </span>
+                                {canAdd && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleUpdateOfficeSupplyStock(r.id, Number(r.current_stock) + 1);
+                                    }}
+                                    className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-sm transition-all"
+                                    title="Increase Stock"
+                                  >
+                                    +
+                                  </button>
+                                )}
+                                {canAdd && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeleteOfficeSupply(r.id);
+                                    }}
+                                    className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded transition-all flex items-center justify-center ml-1"
+                                    title="Delete Item"
+                                  >
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2.5"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    >
+                                      <path d="M3 6h18" />
+                                      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                                      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                                      <line x1="10" x2="10" y1="11" y2="17" />
+                                      <line x1="14" x2="14" y1="11" y2="17" />
+                                    </svg>
+                                  </button>
+                                )}
+                              </div>
                             </li>
                           );
                         })}
@@ -677,10 +787,10 @@ export default function StaffView() {
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl border border-slate-100">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-bold text-lg text-slate-800">
-                ➕ Add {modalSection === 'pantry' ? 'Pantry' : 'Office'} Item
+                {editingItem ? '✏️ Edit Office Item' : `➕ Add ${modalSection === 'pantry' ? 'Pantry' : 'Office'} Item`}
               </h3>
               <button
-                onClick={() => setShowAddModal(false)}
+                onClick={closeModal}
                 className="text-slate-400 hover:text-slate-600 font-bold"
               >
                 ✕
@@ -748,10 +858,27 @@ export default function StaffView() {
                 </div>
               </div>
 
+              {modalSection === 'office_supplies' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                    Current Count
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={newItemCount}
+                    onChange={(e) => setNewItemCount(e.target.value)}
+                    placeholder="0"
+                    className="w-full border-2 border-slate-100 rounded-xl px-3 py-2 text-sm focus:border-brand focus:outline-none"
+                  />
+                </div>
+              )}
+
               <div className="flex gap-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={closeModal}
                   className="flex-1 h-10 border border-slate-200 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-50"
                 >
                   Cancel
@@ -761,7 +888,7 @@ export default function StaffView() {
                   disabled={isSubmitting}
                   className="flex-1 h-10 bg-brand text-white rounded-xl font-bold text-sm disabled:opacity-50"
                 >
-                  {isSubmitting ? 'Adding...' : 'Add Item'}
+                  {isSubmitting ? (editingItem ? 'Saving...' : 'Adding...') : (editingItem ? 'Save Changes' : 'Add Item')}
                 </button>
               </div>
             </form>

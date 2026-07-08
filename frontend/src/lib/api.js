@@ -79,6 +79,8 @@ export const api = {
 
   listOfficeSupplies: () => request('/api/office-supplies'),
   createOfficeSupply: (body) => request('/api/office-supplies', { method: 'POST', body: JSON.stringify(body) }),
+  deleteOfficeSupply: (id) => request(`/api/office-supplies/${id}`, { method: 'DELETE' }),
+  updateOfficeSupply: (id, body) => request(`/api/office-supplies/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
   inventoryStatus: () => request('/api/inventory'),
   alerts: () => request('/api/inventory/alerts'),
