@@ -56,10 +56,16 @@ router.post('/', requireRole('facility_manager', 'leadership'), async (req, res,
 router.patch('/:id', requireRole('facility_manager', 'leadership'), async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { current_stock } = req.body;
+    const updates = {};
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.category !== undefined) updates.category = req.body.category;
+    if (req.body.unit !== undefined) updates.unit = req.body.unit;
+    if (req.body.cost_per_unit !== undefined) updates.cost_per_unit = Number(req.body.cost_per_unit);
+    if (req.body.current_stock !== undefined) updates.current_stock = Number(req.body.current_stock);
+
     const { data, error } = await supabaseAdmin
       .from('office_supplies')
-      .update({ current_stock: Number(current_stock) })
+      .update(updates)
       .eq('id', id)
       .select()
       .single();
