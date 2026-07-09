@@ -168,6 +168,8 @@ export const api = {
   mealSettings: () => request('/api/meals/settings'),
   rateMeal: (date, body) =>
     request(`/api/meals/${date}/rate`, { method: 'POST', body: JSON.stringify(body) }),
+  bookGuestMeal: (body) =>
+    request('/api/guest-meal/book', { method: 'POST', body: JSON.stringify(body) }),
 
   // Meal Box System
   myMealToken: (date) => request(`/api/meal-print/my-token?date=${date}`),

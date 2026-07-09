@@ -709,3 +709,108 @@ export async function sendMealBookingConfirmationEmail(email, name, choice, meal
   }
 }
 
+/**
+ * Send a guest meal booking notification to leadership + finance users.
+ * Includes an Accept button that triggers token + cabin generation.
+ * @param {object} params
+ * @param {string} params.bookingId   - UUID of the meal_bookings row
+ * @param {string} params.guestName   - name of the guest
+ * @param {string} params.mealType    - 'veg' or 'non_veg'
+ * @param {string} params.bookedBy    - full name of the staff member who booked
+ * @param {string} params.mealDate    - YYYY-MM-DD date string
+ * @param {string} params.acceptUrl   - full URL for the Accept button
+ * @param {Array}  params.recipients  - array of { email } objects
+ */
+export async function sendGuestMealNotificationEmail({ bookingId, guestName, mealType, bookedBy, mealDate, acceptUrl, recipients }) {
+  if (!isGraphConfigured()) {
+    console.warn('[GuestMeal] Microsoft Graph not configured — skipping guest meal notification email.');
+    return;
+  }
+
+  if (!recipients || recipients.length === 0) {
+    console.warn('[GuestMeal] No recipients found — skipping guest meal notification email.');
+    return;
+  }
+
+  const token = await getGraphToken();
+  const mealLabel = mealType === 'veg' ? '🥦 Veg' : '🍗 Non-Veg';
+  const subject = `🍽️ Guest Meal Booked — Action Required (${guestName})`;
+
+  const body = `
+    <div style="background-color: #f6f9fc; padding: 48px 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; min-height: 100%;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 540px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #eef2f6; box-shadow: 0 20px 24px -4px rgba(16, 24, 40, 0.03); overflow: hidden;">
+        <!-- Top accent -->
+        <tr><td height="6" style="background: linear-gradient(90deg, #6366f1, #8b5cf6);"></td></tr>
+        <!-- Body -->
+        <tr>
+          <td style="padding: 40px 40px 32px 40px;">
+            <div style="text-align: center; margin-bottom: 24px;">
+              <div style="font-size: 48px; margin-bottom: 8px;">🍽️</div>
+              <h1 style="margin: 0; font-size: 22px; font-weight: 700; color: #0f172a;">Guest Meal Booked</h1>
+              <p style="margin: 6px 0 0 0; font-size: 14px; color: #64748b;">A meal has been booked for a guest and requires your acceptance.</p>
+            </div>
+
+            <!-- Details card -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 24px 0; padding: 20px;">
+              <tr><td style="padding: 6px 0;">
+                <span style="font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Guest Name</span><br>
+                <span style="font-size: 16px; font-weight: 700; color: #0f172a;">${guestName}</span>
+              </td></tr>
+              <tr><td style="padding: 6px 0; border-top: 1px solid #e2e8f0;">
+                <span style="font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Meal Type</span><br>
+                <span style="font-size: 16px; font-weight: 700; color: #0f172a;">${mealLabel}</span>
+              </td></tr>
+              <tr><td style="padding: 6px 0; border-top: 1px solid #e2e8f0;">
+                <span style="font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Meal Date</span><br>
+                <span style="font-size: 16px; font-weight: 700; color: #0f172a;">📅 ${mealDate}</span>
+              </td></tr>
+              <tr><td style="padding: 6px 0; border-top: 1px solid #e2e8f0;">
+                <span style="font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Booked By</span><br>
+                <span style="font-size: 16px; font-weight: 700; color: #0f172a;">${bookedBy}</span>
+              </td></tr>
+            </table>
+
+            <!-- Accept CTA -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 32px 0 8px 0;">
+              <tr>
+                <td align="center">
+                  <a href="${acceptUrl}" target="_blank" style="background-color: #6366f1; color: #ffffff; padding: 16px 40px; border-radius: 10px; font-size: 16px; font-weight: 700; text-decoration: none; display: inline-block; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);">
+                    ✅ Accept &amp; Generate Token
+                  </a>
+                </td>
+              </tr>
+            </table>
+            <p style="text-align: center; font-size: 12px; color: #94a3b8; margin: 12px 0 0 0;">Clicking Accept will generate a token number and cabin assignment, and open a print page.</p>
+          </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+          <td style="background-color: #f8fafc; border-top: 1px solid #f1f5f9; padding: 20px 40px; text-align: center;">
+            <p style="margin: 0; font-size: 12px; color: #94a3b8;">ApplyWizz Snackify • Automated Notification System<br>Booking ID: ${bookingId}</p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+
+  const toRecipients = recipients.filter((r) => r.email).map((r) => ({ emailAddress: { address: r.email } }));
+  if (toRecipients.length === 0) return;
+
+  const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'Html', content: body },
+        toRecipients,
+      },
+      saveToSentItems: false,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Graph sendMail failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+}

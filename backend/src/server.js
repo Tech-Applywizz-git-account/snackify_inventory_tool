@@ -28,6 +28,7 @@ import requestsRouter from './routes/requests.js';
 import telegramWebhookRouter from './routes/telegramWebhook.js';
 import transactionsRouter from './routes/transactions.js';
 import syncCabinRouter from './routes/syncCabinCron.js';
+import guestMealRouter from './routes/guestMeal.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -81,6 +82,8 @@ app.use('/api/telegram/webhook', telegramWebhookRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/cron', cronRouter);
 app.use('/api/cron', syncCabinRouter);
+// Guest meal accept is public (secured by secret param in the URL, used from email links)
+app.use('/api/guest-meal', guestMealRouter);
 
 app.use('/api', authMiddleware);
 app.use('/api/products', productsRouter);
