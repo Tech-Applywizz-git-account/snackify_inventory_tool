@@ -27,6 +27,7 @@ import reportsRouter from './routes/reports.js';
 import requestsRouter from './routes/requests.js';
 import telegramWebhookRouter from './routes/telegramWebhook.js';
 import transactionsRouter from './routes/transactions.js';
+import syncCabinRouter from './routes/syncCabinCron.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -79,6 +80,7 @@ app.use('/api/bills/webhook', billWebhookRouter);
 app.use('/api/telegram/webhook', telegramWebhookRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/cron', cronRouter);
+app.use('/api/cron', syncCabinRouter);
 
 app.use('/api', authMiddleware);
 app.use('/api/products', productsRouter);
