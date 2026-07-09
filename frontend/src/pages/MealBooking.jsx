@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../lib/api.js';
 import { supabase } from '../lib/supabase.js';
+import GuestMealDialog from '../components/GuestMealDialog.jsx';
 
 function getISTParts(dateObj = new Date()) {
   try {
@@ -470,6 +471,8 @@ export default function MealBooking() {
   const { profile } = useAuth();
   const navigate = useNavigate();
   const isManager = ['facility_manager', 'finance', 'leadership'].includes(profile?.role);
+  const canBookGuest = ['leadership', 'office_boy', 'facility_manager', 'finance'].includes(profile?.role);
+  const [guestDialogOpen, setGuestDialogOpen] = useState(false);
 
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
   const [year, setYear] = useState(now.getFullYear());
@@ -622,6 +625,15 @@ export default function MealBooking() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
+      {/* Guest Meal Dialog */}
+      <GuestMealDialog
+        open={guestDialogOpen}
+        onClose={() => setGuestDialogOpen(false)}
+        onSuccess={() =>
+          setToast({ message: '✅ Guest meal booked! Notification sent to leadership & finance.', type: 'success' })
+        }
+      />
+
       {/* Toast */}
       <AnimatePresence>
         {toast && (
@@ -651,13 +663,23 @@ export default function MealBooking() {
           <h1 className="text-2xl font-extrabold text-slate-900">🍱 Meal Booking</h1>
           <p className="text-sm text-slate-500">Book your lunch for upcoming days</p>
         </div>
-        <button
-          onClick={() => navigate('/meal-history')}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition-all"
-        >
-          <History size={14} />
-          History
-        </button>
+        <div className="flex items-center gap-2">
+          {canBookGuest && (
+            <button
+              onClick={() => setGuestDialogOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-50 text-indigo-700 text-xs font-bold hover:bg-indigo-100 transition-all border border-indigo-100"
+            >
+              🍽️ Book Guest Meal
+            </button>
+          )}
+          <button
+            onClick={() => navigate('/meal-history')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition-all"
+          >
+            <History size={14} />
+            History
+          </button>
+        </div>
       </div>
 
       {/* Legend */}
