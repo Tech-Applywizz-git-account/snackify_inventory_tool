@@ -295,15 +295,25 @@ export default function RequestQueue() {
                       </button>
                     )}
 
-                    {/* Preparing */}
+                    {/* Mark Done directly after Accept */}
                     {r.status === 'in_progress' && r.live_status === 'accepted' && (
-                      <button
-                        className="btn-primary text-xs px-3 py-1.5 bg-amber-600 hover:bg-amber-700"
-                        disabled={busy[r.id]}
-                        onClick={() => setStatus(r.id, 'in_progress', 'preparing')}
-                      >
-                        Preparing
-                      </button>
+                      isSelfPickup ? (
+                        <button
+                          className="btn-primary text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700"
+                          disabled={busy[r.id]}
+                          onClick={() => setStatus(r.id, 'done', 'done')}
+                        >
+                          ✓ Mark as Collected
+                        </button>
+                      ) : (
+                        <button
+                          className="btn-primary text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700"
+                          disabled={busy[r.id]}
+                          onClick={() => setStatus(r.id, 'done', 'done')}
+                        >
+                          Mark Done
+                        </button>
+                      )
                     )}
 
                     {/* On the way (only for delivery orders) OR Mark as Ready (for self-pickup) */}

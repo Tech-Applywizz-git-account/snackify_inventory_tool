@@ -245,12 +245,21 @@ function OrderCard({ order, onTap, onReorder, onCancel, onSetStatus }) {
           )}
 
           {order.status === 'in_progress' && order.live_status === 'accepted' && (
-            <button
-              onClick={() => onSetStatus(order.id, 'in_progress', 'preparing')}
-              className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
-            >
-              Preparing
-            </button>
+            order.delivery_mode === 'self_pickup' ? (
+              <button
+                onClick={() => onSetStatus(order.id, 'done', 'done')}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+              >
+                ✓ Mark as Collected
+              </button>
+            ) : (
+              <button
+                onClick={() => onSetStatus(order.id, 'done', 'done')}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+              >
+                Mark Done
+              </button>
+            )
           )}
 
           {order.status === 'in_progress' &&
