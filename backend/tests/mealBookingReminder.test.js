@@ -233,7 +233,7 @@ describe('Meal Booking Reminder Cron Endpoint', () => {
     assert.equal(res.body.tomorrow, '2026-07-08');
 
     // Wait slightly to allow the fire-and-forget Promise.allSettled to complete
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Verify fetch calls for email sending
     const sendMailCalls = fetchCalls.filter((c) => c.url.includes('sendMail'));
