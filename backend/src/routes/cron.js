@@ -172,10 +172,10 @@ router.post('/schedule-meal-print', async (req, res) => {
   console.log(`[Cron] schedule-meal-print for ${mealDate}`);
 
   try {
-    // Fetch all non-skip bookings for today
+    // Fetch all non-skip bookings for today, including cabin_name if already resolved
     const { data: bookings, error: bookErr } = await supabaseAdmin
       .from('meal_bookings')
-      .select('id, user_id, choice, meal_date')
+      .select('id, user_id, choice, meal_date, cabin_name')
       .eq('meal_date', mealDate)
       .neq('choice', 'skip');
 
@@ -197,10 +197,10 @@ router.post('/schedule-meal-print', async (req, res) => {
       cabinMap[p.user_id] = getCabinName(p.cabin, p.preferred_location);
     }
 
-    // Group bookings by cabin
+    // Group bookings by cabin (preferring already set cabin_name, falling back to preference mapping)
     const byCabin = {};
     for (const b of bookings) {
-      const cabin = cabinMap[b.user_id] || 'Unassigned';
+      const cabin = b.cabin_name || cabinMap[b.user_id] || 'Unassigned';
       if (!byCabin[cabin]) byCabin[cabin] = [];
       byCabin[cabin].push(b);
     }
@@ -211,8 +211,11 @@ router.post('/schedule-meal-print', async (req, res) => {
 
     const printJobs = [];
     const tokenUpdates = [];
+    const processedCabins = new Set();
 
+    // 1. Process standard cabins in print order
     for (const cabinConfig of CABIN_PRINT_ORDER) {
+      processedCabins.add(cabinConfig.name);
       const cabinBookings = byCabin[cabinConfig.name] || [];
       if (cabinBookings.length === 0) continue; // Skip cabins with no bookings
 
@@ -233,6 +236,43 @@ router.post('/schedule-meal-print', async (req, res) => {
       printJobs.push({
         meal_date: mealDate,
         cabin_name: cabinConfig.name,
+        print_type: 'cabin_batch',
+        scheduled_for: scheduledFor.toISOString(),
+        status: 'pending',
+        token_count: cabinBookings.length,
+      });
+    }
+
+    // 2. Process non-standard/unlisted cabins and locations (e.g. Pantry Counter, Unassigned, etc.)
+    for (const cabinName of Object.keys(byCabin)) {
+      if (processedCabins.has(cabinName)) continue;
+
+      const cabinBookings = byCabin[cabinName] || [];
+      if (cabinBookings.length === 0) continue;
+
+      // Generate custom configuration on-the-fly for custom/fallback locations
+      const fallbackAbbr = cabinName === 'Pantry Counter' ? 'PTRY' :
+                           cabinName === 'Unassigned' ? 'UNASG' :
+                           cabinName.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 6) || 'GEN';
+      
+      // Delay for custom/fallback locations (printed 12 minutes after the base time)
+      const delayMinutes = 12;
+      const scheduledFor = new Date(
+        basePrintTimeUTC.getTime() + delayMinutes * 60 * 1000
+      );
+
+      cabinBookings.forEach((booking, idx) => {
+        const tokenNumber = generateTokenNumber(mealDate, fallbackAbbr, idx + 1);
+        tokenUpdates.push({
+          id: booking.id,
+          token_number: tokenNumber,
+          cabin_name: cabinName,
+        });
+      });
+
+      printJobs.push({
+        meal_date: mealDate,
+        cabin_name: cabinName,
         print_type: 'cabin_batch',
         scheduled_for: scheduledFor.toISOString(),
         status: 'pending',
