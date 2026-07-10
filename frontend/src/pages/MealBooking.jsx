@@ -931,7 +931,7 @@ export default function MealBooking() {
                           Ticket
                         </button>
                       )}
-                      {canBook && (
+                      {(canBook || (canSkip && b?.choice !== 'skip')) && (
                         <button
                           type="button"
                           onClick={() => setChangingDate(selectedDate)}

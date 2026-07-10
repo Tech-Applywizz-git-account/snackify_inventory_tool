@@ -19,6 +19,15 @@ function getISTDateString() {
   return getISTNow().toISOString().slice(0, 10);
 }
 
+function getNextWorkingDay(nowDate = getISTNow()) {
+  const d = new Date(nowDate);
+  d.setDate(d.getDate() + 1); // start from tomorrow
+  while (d.getDay() === 0 || d.getDay() === 6) {
+    d.setDate(d.getDate() + 1);
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 function getCabinName(bookingCabin, preferredLocation) {
   if (bookingCabin) return bookingCabin;
   const locationToCabin = {
@@ -71,7 +80,14 @@ async function findMealBooking(userId, mealDate, columns = '*') {
 // Used by the "My Meal Box" page to show token + print button.
 router.get('/my-token', async (req, res, next) => {
   try {
-    const date = req.query.date || getISTDateString();
+    let date = req.query.date || getISTDateString();
+    const today = getISTDateString();
+
+    const hour = getISTHour();
+    // If the request targets today and it's after 1:00 PM (13:00), shift to the next working day
+    if (date === today && hour >= 13) {
+      date = getNextWorkingDay();
+    }
 
     const booking = await findMealBooking(
       req.user.id,
@@ -79,8 +95,7 @@ router.get('/my-token', async (req, res, next) => {
       'id, meal_date, choice, token_number, cabin_name, print_count, last_printed_at, booked_at'
     );
 
-    const hour = getISTHour();
-    const canReprint = hour >= 11 && hour <= 13.5;
+    const canReprint = hour >= 11 && hour <= 13.5 && date === today;
 
     res.json({
       booking: booking || null,

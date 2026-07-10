@@ -31,7 +31,28 @@ export default function MyMealBox() {
   const [params] = useSearchParams();
   const today = getISTDate();
   const dateParam = params.get('date');
-  const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '') ? dateParam : today;
+
+  // If the active date is today and it's after 1:00 PM IST, shift to the next working day
+  const getNextWorkingDay = () => {
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const nextWD = new Date(now);
+    nextWD.setDate(nextWD.getDate() + 1);
+    while (nextWD.getDay() === 0 || nextWD.getDay() === 6) {
+      nextWD.setDate(nextWD.getDate() + 1);
+    }
+    const yyyy = nextWD.getFullYear();
+    const mm = String(nextWD.getMonth() + 1).padStart(2, '0');
+    const dd = String(nextWD.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const isAfter1PM = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours() >= 13;
+  let activeDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '') ? dateParam : today;
+  if (activeDate === today && isAfter1PM) {
+    activeDate = getNextWorkingDay();
+  }
+
+  const selectedDate = activeDate;
   const isToday = selectedDate === today;
 
   const [data, setData] = useState(null); // { booking, canReprint, reprintWindowMessage }
