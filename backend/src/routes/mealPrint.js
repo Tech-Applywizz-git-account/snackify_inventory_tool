@@ -148,12 +148,18 @@ router.get(
         }
       }
 
-      // Merge cabin config with job status and counts
-      const cabinStatus = CABIN_PRINT_ORDER.map((cabin) => {
-        const job = (jobs || []).find((j) => j.cabin_name === cabin.name);
-        const counts = cabinCounts[cabin.name] || { total: 0, veg: 0, non_veg: 0, egg: 0 };
+      // Merge cabin config with job status and counts for both standard cabins and any custom locations
+      const allCabinNames = new Set([
+        ...CABIN_PRINT_ORDER.map((c) => c.name),
+        ...(jobs || []).map((j) => j.cabin_name),
+        ...Object.keys(cabinCounts),
+      ]);
+
+      const cabinStatus = Array.from(allCabinNames).map((cabinName) => {
+        const job = (jobs || []).find((j) => j.cabin_name === cabinName);
+        const counts = cabinCounts[cabinName] || { total: 0, veg: 0, non_veg: 0, egg: 0 };
         return {
-          cabin_name: cabin.name,
+          cabin_name: cabinName,
           scheduled_time: job?.scheduled_for || null,
           status: job?.status || 'not_scheduled',
           job_id: job?.id || null,
@@ -173,7 +179,7 @@ router.get(
         summary: {
           totalMeals,
           printedCabins,
-          totalCabins: CABIN_PRINT_ORDER.length,
+          totalCabins: cabinStatus.length,
         },
       });
     } catch (e) {
