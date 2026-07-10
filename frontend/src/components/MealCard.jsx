@@ -231,7 +231,7 @@ export default function MealCard() {
       )}
 
       {/* Booking options */}
-      {(canBook || (canSkip && !currentChoice)) && (
+      {(canBook || (canSkip && currentChoice !== 'skip')) && (
         <div className="flex gap-2">
           {options.map((opt) => {
             const ui = CHOICE_UI[opt];

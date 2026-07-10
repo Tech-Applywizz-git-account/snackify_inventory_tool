@@ -19,6 +19,15 @@ function getISTDateString() {
   return getISTNow().toISOString().slice(0, 10);
 }
 
+function getNextWorkingDay(nowDate = getISTNow()) {
+  const d = new Date(nowDate);
+  d.setDate(d.getDate() + 1); // start from tomorrow
+  while (d.getDay() === 0 || d.getDay() === 6) {
+    d.setDate(d.getDate() + 1);
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 function getCabinName(bookingCabin, preferredLocation) {
   if (bookingCabin) return bookingCabin;
   const locationToCabin = {
@@ -71,7 +80,14 @@ async function findMealBooking(userId, mealDate, columns = '*') {
 // Used by the "My Meal Box" page to show token + print button.
 router.get('/my-token', async (req, res, next) => {
   try {
-    const date = req.query.date || getISTDateString();
+    let date = req.query.date || getISTDateString();
+    const today = getISTDateString();
+
+    const hour = getISTHour();
+    // If the request targets today and it's after 1:00 PM (13:00), shift to the next working day
+    if (date === today && hour >= 13) {
+      date = getNextWorkingDay();
+    }
 
     const booking = await findMealBooking(
       req.user.id,
@@ -79,8 +95,7 @@ router.get('/my-token', async (req, res, next) => {
       'id, meal_date, choice, token_number, cabin_name, print_count, last_printed_at, booked_at'
     );
 
-    const hour = getISTHour();
-    const canReprint = hour >= 11 && hour <= 13.5;
+    const canReprint = hour >= 11 && hour <= 13.5 && date === today;
 
     res.json({
       booking: booking || null,
@@ -148,12 +163,18 @@ router.get(
         }
       }
 
-      // Merge cabin config with job status and counts
-      const cabinStatus = CABIN_PRINT_ORDER.map((cabin) => {
-        const job = (jobs || []).find((j) => j.cabin_name === cabin.name);
-        const counts = cabinCounts[cabin.name] || { total: 0, veg: 0, non_veg: 0, egg: 0 };
+      // Merge cabin config with job status and counts for both standard cabins and any custom locations
+      const allCabinNames = new Set([
+        ...CABIN_PRINT_ORDER.map((c) => c.name),
+        ...(jobs || []).map((j) => j.cabin_name),
+        ...Object.keys(cabinCounts),
+      ]);
+
+      const cabinStatus = Array.from(allCabinNames).map((cabinName) => {
+        const job = (jobs || []).find((j) => j.cabin_name === cabinName);
+        const counts = cabinCounts[cabinName] || { total: 0, veg: 0, non_veg: 0, egg: 0 };
         return {
-          cabin_name: cabin.name,
+          cabin_name: cabinName,
           scheduled_time: job?.scheduled_for || null,
           status: job?.status || 'not_scheduled',
           job_id: job?.id || null,
@@ -173,7 +194,7 @@ router.get(
         summary: {
           totalMeals,
           printedCabins,
-          totalCabins: CABIN_PRINT_ORDER.length,
+          totalCabins: cabinStatus.length,
         },
       });
     } catch (e) {
