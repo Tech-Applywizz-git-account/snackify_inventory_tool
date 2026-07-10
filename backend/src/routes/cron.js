@@ -528,12 +528,27 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // 1. Calculate tomorrow in IST
+    // 1. Calculate target report date in IST (tomorrow, or Monday if today is Friday)
     const now = new Date();
     const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
 
+    const todayDay = istNow.getDay();
+    const isTest = !!(req.query.testEmail || req.body?.testEmail);
+
+    // Skip Saturday (6) and Sunday (0) unless it's a manual test run
+    if ((todayDay === 0 || todayDay === 6) && !isTest) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: 'Today is a weekend. Night reports are only sent on working days (Monday-Friday).',
+      });
+    }
+
+    const isFriday = todayDay === 5;
+    const daysToAdd = isFriday ? 3 : 1;
+
     const istTomorrow = new Date(istNow);
-    istTomorrow.setDate(istTomorrow.getDate() + 1);
+    istTomorrow.setDate(istTomorrow.getDate() + daysToAdd);
 
     const yyyy = istTomorrow.getFullYear();
     const mm = String(istTomorrow.getMonth() + 1).padStart(2, '0');
@@ -544,7 +559,7 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
     const tomorrowDay = istTomorrow.getDay(); // 0=Sun, 6=Sat
     const isTomorrowWorkingDay = tomorrowDay >= 1 && tomorrowDay <= 5;
 
-    if (!isTomorrowWorkingDay) {
+    if (!isTomorrowWorkingDay && !isTest) {
       return res.json({
         ok: true,
         skipped: true,
@@ -597,7 +612,9 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
     const unbookedNames = unbookedUsers.map((u) => u.full_name);
 
     // 5. Send Email Summary Report to leadership, office_boy, and facility_manager
-    const dateLabel = istTomorrow.toLocaleDateString('en-IN', {
+    // Parse tomorrowStr at midnight IST to avoid timezone shift double-conversion bugs
+    const parsedTomorrow = new Date(`${tomorrowStr}T00:00:00+05:30`);
+    const dateLabel = parsedTomorrow.toLocaleDateString('en-IN', {
       timeZone: 'Asia/Kolkata',
       weekday: 'long',
       day: 'numeric',
@@ -605,11 +622,15 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
       year: 'numeric',
     });
 
-    const reportRecipients = activeProfiles
-      .filter((p) => p.email && ['leadership', 'office_boy', 'facility_manager'].includes(p.role))
-      .map((p) => p.email);
-
-    const uniqueReportRecipients = [...new Set(reportRecipients)];
+    let uniqueReportRecipients;
+    if (req.query.testEmail || req.body?.testEmail) {
+      uniqueReportRecipients = [req.query.testEmail || req.body.testEmail];
+    } else {
+      const reportRecipients = activeProfiles
+        .filter((p) => p.email && ['leadership', 'office_boy', 'facility_manager'].includes(p.role))
+        .map((p) => p.email);
+      uniqueReportRecipients = [...new Set(reportRecipients)];
+    }
 
     if (uniqueReportRecipients.length > 0) {
       sendMealNightReportEmail(uniqueReportRecipients, {
