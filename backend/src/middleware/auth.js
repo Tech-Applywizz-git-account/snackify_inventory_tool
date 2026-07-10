@@ -6,6 +6,15 @@ import { supabaseAdmin } from '../lib/supabase.js';
  */
 export async function authMiddleware(req, res, next) {
   try {
+    // Allow public guest meal acceptance to bypass token check
+    if (
+      req.path === '/guest-meal/accept' ||
+      req.path === '/api/guest-meal/accept' ||
+      req.originalUrl?.split('?')[0] === '/api/guest-meal/accept'
+    ) {
+      return next();
+    }
+
     const header = req.header('authorization') || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : null;
     if (!token) return res.status(401).json({ error: 'Missing bearer token' });
