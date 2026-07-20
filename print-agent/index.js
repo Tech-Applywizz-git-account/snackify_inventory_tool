@@ -513,7 +513,35 @@ function sendToPrinter(content, label, retries = 1) {
   });
 }
 
-// ── Supabase Realtime Subscription ───────────────────────────────────────────
+function getPrinterLabel() {
+  if (process.env.PRINTER_NAME) return `spooler:${process.env.PRINTER_NAME}`;
+  return `${PRINTER_IP}:${PRINTER_PORT}`;
+}
+
+async function printOrderReceipt(order, { night = false, source = 'realtime' } = {}) {
+  if (printedIds.has(order.id)) return;
+
+  const orderId = order.user_order_number || (order.id || '').slice(0, 8);
+  const label = night ? `night-#${orderId}` : `order-#${orderId}`;
+
+  console.log(`[print-agent] 🔔 ${night ? 'Night shift recorded' : 'Order confirmed'} (${source}): #${orderId} — ${order.parsed_item || order.raw_text || 'order'}`);
+
+  try {
+    if (night) {
+      const receipt = formatNightReceipt(order);
+      await sendToPrinter(receipt, label);
+    } else {
+      await printReceipt(order);
+    }
+
+    printedIds.add(order.id);
+    savePrinted();
+    console.log(`[print-agent] ✅ Printed ${label}`);
+  } catch (err) {
+    console.error(`[print-agent] Failed to print ${label}:`, err.message);
+  }
+}
+
 function startListening() {
   console.log('[print-agent] Subscribing to order confirmations + meal bookings...');
 
@@ -531,38 +559,25 @@ function startListening() {
         const oldStatus = payload.old?.status;
         const newStatus = payload.new?.status;
         const newLive   = payload.new?.live_status;
+        const order     = payload.new;
 
-        // ── Daytime: confirming → pending (office hours 8:30AM–5PM) ──────────
-        if (oldStatus === 'confirming' && newStatus === 'pending') {
-          const order = payload.new;
-          if (!printedIds.has(order.id)) {
-            printedIds.add(order.id);
-            savePrinted();
-            const orderId = order.user_order_number || (order.id || '').slice(0, 8);
-            console.log(`[print-agent] 🔔 Order confirmed: #${orderId} — ${order.parsed_item}`);
-            try {
-              await printReceipt(order);
-            } catch (err) {
-              console.error(`[print-agent] Failed to print after retries:`, err.message);
-            }
-          }
+        // Daytime: confirming -> pending. Do not rely on payload.old; Supabase may
+        // omit old row values unless REPLICA IDENTITY FULL is enabled.
+        const becamePending =
+          newStatus === 'pending' &&
+          (oldStatus === 'confirming' || oldStatus == null);
+
+        if (becamePending) {
+          await printOrderReceipt(order, { source: 'realtime' });
         }
 
-        // ── Night shift: confirming → done/Recorded (after 5PM) ──────────────
-        if (oldStatus === 'confirming' && newStatus === 'done' && newLive === 'Recorded') {
-          const order   = payload.new;
-          if (!printedIds.has(order.id)) {
-            printedIds.add(order.id);
-            savePrinted();
-            const orderId = order.user_order_number || (order.id || '').slice(0, 8);
-            console.log(`[print-agent] 🌙 Night shift recorded: #${orderId} — ${order.parsed_item}`);
-            try {
-              const receipt = formatNightReceipt(order);
-              await sendToPrinter(receipt, `night-#${orderId}`);
-            } catch (err) {
-              console.error(`[print-agent] Failed to print night receipt:`, err.message);
-            }
-          }
+        const becameRecorded =
+          newStatus === 'done' &&
+          newLive === 'Recorded' &&
+          (oldStatus === 'confirming' || oldStatus == null);
+
+        if (becameRecorded) {
+          await printOrderReceipt(order, { night: true, source: 'realtime' });
         }
       }
     )
@@ -730,7 +745,7 @@ async function autoConfirmStuck() {
 }
 
 // ── Auto-print any missed pending orders (startup & safety net) ──────────────
-async function printUnprintedPendingOrders(forceAll = false) {
+async function printUnprintedPendingOrders() {
   try {
     // Fetch all pending orders from the last 12 hours
     const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
@@ -743,26 +758,12 @@ async function printUnprintedPendingOrders(forceAll = false) {
 
     if (error) throw error;
 
-    if (pendingOrders && pendingOrders.length > 0) {
-      console.log(`[print-agent] Found ${pendingOrders.length} pending orders from last 12h, checking print status...`);
-      for (const order of pendingOrders) {
-        if (forceAll || !printedIds.has(order.id)) {
-          const isAlreadyInPrinted = printedIds.has(order.id);
-          printedIds.add(order.id);
-          savePrinted();
-          const orderId = order.user_order_number || (order.id || '').slice(0, 8);
-          if (forceAll && isAlreadyInPrinted) {
-            console.log(`[print-agent] 🖨 Re-printing pending order on startup: #${orderId} — ${order.parsed_item}`);
-          } else {
-            console.log(`[print-agent] 🖨 Printing missed/pending order: #${orderId} — ${order.parsed_item}`);
-          }
-          try {
-            await printReceipt(order);
-          } catch (err) {
-            console.error(`[print-agent] Print failed:`, err.message);
-          }
-        }
-      }
+    const unprinted = (pendingOrders || []).filter((order) => !printedIds.has(order.id));
+    if (unprinted.length === 0) return;
+
+    console.log(`[print-agent] Found ${unprinted.length} unprinted pending orders from last 12h...`);
+    for (const order of unprinted) {
+      await printOrderReceipt(order, { source: 'poll' });
     }
   } catch (err) {
     console.error('[print-agent] Failed to check missed pending orders:', err.message);
@@ -800,19 +801,19 @@ async function printUnprintedPendingMealJobs() {
 const channel = startListening();
 
 // Pull and print all pending orders and meal jobs on startup
-printUnprintedPendingOrders(true).catch((err) => console.error('[print-agent] Startup missed print check failed:', err.message));
+printUnprintedPendingOrders().catch((err) => console.error('[print-agent] Startup missed print check failed:', err.message));
 printUnprintedPendingMealJobs().catch((err) => console.error('[print-agent] Startup missed meal check failed:', err.message));
 
 // Heartbeat + stuck order check + missed pending check
 setInterval(() => {
   const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-  console.log(`[print-agent] ♥ Heartbeat — ${now} — printer: ${PRINTER_IP}:${PRINTER_PORT}`);
+  console.log(`[print-agent] ♥ Heartbeat — ${now} — printer: ${getPrinterLabel()}`);
   autoConfirmStuck();
-  printUnprintedPendingOrders(false).catch((err) => console.error('[print-agent] Interval missed print check failed:', err.message));
+  printUnprintedPendingOrders().catch((err) => console.error('[print-agent] Interval missed print check failed:', err.message));
   printUnprintedPendingMealJobs().catch((err) => console.error('[print-agent] Interval missed meal check failed:', err.message));
-}, 60_000);
+}, 30_000);
 
-console.log(`[print-agent] 🖨 Ready — Listening for orders, printing to ${PRINTER_IP}:${PRINTER_PORT}`);
+console.log(`[print-agent] 🖨 Ready — Listening for orders, printing to ${getPrinterLabel()}`);
 
 // Graceful shutdown
 function shutdown() {
