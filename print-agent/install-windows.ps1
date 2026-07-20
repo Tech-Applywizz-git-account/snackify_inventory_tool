@@ -61,10 +61,14 @@ if ($nssm) {
   Write-Host "NSSM not found. Using PM2 instead..." -ForegroundColor Yellow
 
   npm install -g pm2 pm2-windows-startup 2>$null
+  $ErrorActionPreference = "Continue"
   pm2 delete snackify-print-agent 2>$null
+  $ErrorActionPreference = "Stop"
   pm2 start index.js --name snackify-print-agent --cwd $ScriptDir
   pm2 save
+  $ErrorActionPreference = "Continue"
   pm2-startup install 2>$null
+  $ErrorActionPreference = "Stop"
 
   Write-Host ""
   Write-Host "=== Done (PM2) ===" -ForegroundColor Green
