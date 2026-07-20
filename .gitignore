@@ -18,6 +18,15 @@ frontend/tests/*.spec.js
 frontend/tests/test-credentials.json
 frontend/tests/screenshots/
 
+# Print agent — local secrets and runtime files (do not commit)
+print-agent/.env
+print-agent/printed.json
+print-agent/agent.log
+print-agent/agent-error.log
+print-agent/temp_test.bin
+print-agent/test_print.ps1
+print-agent/.env.example
+
 # leftover from initial rtk clone attempt
 rtk-template/
 .gemini/

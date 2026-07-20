@@ -5,7 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test-print": "node test-print.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
