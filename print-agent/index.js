@@ -198,6 +198,14 @@ function formatReceipt(order) {
     CMD.BOLD_OFF,
   ];
 
+  const charged = Number(order.tokens_charged) || 0;
+  if (charged > 0) {
+    lines.push(
+      DASH,
+      `${CMD.BOLD_ON}Tokens${CMD.BOLD_OFF}  ${charged} (1 token = Rs 1)`,
+    );
+  }
+
   if (note) {
     lines.push(`  Note: ${note}`);
   }
@@ -376,6 +384,7 @@ function formatMealToken(booking, profile, isDuplicate = false) {
     DASH,
     `Name     ${name}`,
     `Code     ${code}`,
+    booking.tokens_charged ? `Tokens   ${booking.tokens_charged}` : null,
     DASH,
     CMD.CENTER,
     `Booked at ${new Date(booking.booked_at || Date.now()).toLocaleTimeString('en-IN', {
@@ -536,9 +545,23 @@ async function printOrderReceipt(order, { night = false, source = 'realtime' } =
 
     printedIds.add(order.id);
     savePrinted();
+    if (order.token_usage_id) {
+      await supabase.from('token_usage').update({
+        print_status: 'printed',
+        printed_at: new Date().toISOString(),
+        print_error: null,
+      }).eq('id', order.token_usage_id);
+    }
     console.log(`[print-agent] ✅ Printed ${label}`);
   } catch (err) {
     console.error(`[print-agent] Failed to print ${label}:`, err.message);
+    if (order.token_usage_id) {
+      await supabase.from('token_usage').update({
+        print_status: 'failed',
+        print_retryable: true,
+        print_error: err.message,
+      }).eq('id', order.token_usage_id);
+    }
   }
 }
 
@@ -579,6 +602,16 @@ function startListening() {
         if (becameRecorded) {
           await printOrderReceipt(order, { night: true, source: 'realtime' });
         }
+      }
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'token_usage' },
+      async (payload) => {
+        const row = payload.new;
+        if (!row || row.print_status !== 'pending') return;
+        if (row.print_retryable === false) return;
+        await drainTokenUsagePrints();
       }
     )
     // ── Meal Box: listen to meal_print_jobs INSERT ──
@@ -628,7 +661,7 @@ async function executePrintJob(job) {
       // Single reprint for one employee
       const { data } = await supabase
         .from('meal_bookings')
-        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices')
+        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices, tokens_charged, booked_at')
         .eq('user_id', job.booking_user_id)
         .eq('meal_date', job.meal_date)
         .neq('choice', 'skip')
@@ -638,7 +671,7 @@ async function executePrintJob(job) {
       // Cabin batch (cabin_batch or manual_cabin)
       const { data } = await supabase
         .from('meal_bookings')
-        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices')
+        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices, tokens_charged, booked_at')
         .eq('meal_date', job.meal_date)
         .eq('cabin_name', job.cabin_name)
         .neq('choice', 'skip')
@@ -676,30 +709,39 @@ async function executePrintJob(job) {
       try {
         await sendToPrinter(receipt, label);
         printedCount++;
-
-        // Update print_count on the booking only for batch prints
-        // (reprint count is updated by the API route before inserting the job)
-        if (!isDuplicate) {
-          await supabase
-            .from('meal_bookings')
-            .update({
-              print_count:     (booking.print_count || 0) + 1,
-              last_printed_at: new Date().toISOString(),
-            })
-            .eq('id', booking.id);
-        }
+        await supabase
+          .from('meal_bookings')
+          .update({
+            print_count: (booking.print_count || 0) + 1,
+            last_printed_at: new Date().toISOString(),
+          })
+          .eq('id', booking.id);
       } catch (err) {
         console.error(`[print-agent] ❌ Failed to print ${label}:`, err.message);
       }
     }
 
-    // Mark job as completed
+    if (printedCount < bookings.length) {
+      await supabase
+        .from('meal_print_jobs')
+        .update({
+          status: 'failed',
+          retryable: true,
+          error_message: `Printed ${printedCount}/${bookings.length}`,
+          token_count: printedCount,
+        })
+        .eq('id', job.id);
+      console.log(`[print-agent] ⚠ Print job partial: ${job.cabin_name} — ${printedCount}/${bookings.length}`);
+      return;
+    }
+
     await supabase
       .from('meal_print_jobs')
       .update({
         status:       'completed',
         completed_at: new Date().toISOString(),
         token_count:  printedCount,
+        retryable: false,
       })
       .eq('id', job.id);
 
@@ -709,7 +751,7 @@ async function executePrintJob(job) {
     console.error(`[print-agent] ❌ Print job failed:`, err.message);
     await supabase
       .from('meal_print_jobs')
-      .update({ status: 'failed', error_message: err.message })
+      .update({ status: 'failed', retryable: true, error_message: err.message })
       .eq('id', job.id);
   }
 }
@@ -780,8 +822,9 @@ async function printUnprintedPendingMealJobs() {
     const { data: pendingJobs, error } = await supabase
       .from('meal_print_jobs')
       .select('*')
-      .eq('status', 'pending')
-      .eq('meal_date', today);
+      .in('status', ['pending', 'failed'])
+      .eq('meal_date', today)
+      .or('retryable.is.null,retryable.eq.true');
 
     if (error) throw error;
 
@@ -797,21 +840,123 @@ async function printUnprintedPendingMealJobs() {
   }
 }
 
+async function probePrinter() {
+  const isLanIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(PRINTER_IP) && !PRINTER_IP.endsWith('.0');
+  if (process.platform === 'win32' && (!isLanIp || process.env.PRINTER_NAME)) {
+    return true;
+  }
+  return new Promise((resolve) => {
+    const socket = net.createConnection(PRINTER_PORT, PRINTER_IP);
+    const done = (ok) => {
+      try { socket.destroy(); } catch {}
+      resolve(ok);
+    };
+    socket.setTimeout(3000);
+    socket.on('connect', () => done(true));
+    socket.on('timeout', () => done(false));
+    socket.on('error', () => done(false));
+  });
+}
+
+let printerHealthy = true;
+
+async function drainTokenUsagePrints() {
+  try {
+    const { data: rows, error } = await supabase
+      .from('token_usage')
+      .select('*')
+      .in('print_status', ['pending', 'failed'])
+      .eq('print_retryable', true)
+      .eq('reason', 'spend')
+      .order('created_at', { ascending: true })
+      .limit(25);
+    if (error) throw error;
+    if (!rows?.length) return;
+
+    for (const row of rows) {
+      const { data: claimed } = await supabase
+        .from('token_usage')
+        .update({
+          print_status: 'printing',
+          print_claimed_at: new Date().toISOString(),
+          print_attempts: (row.print_attempts || 0) + 1,
+        })
+        .eq('id', row.id)
+        .in('print_status', ['pending', 'failed'])
+        .select()
+        .maybeSingle();
+      if (!claimed) continue;
+
+      let order = null;
+      if (row.ref_type === 'request' && row.ref_id) {
+        const { data } = await supabase.from('requests').select('*').eq('id', row.ref_id).maybeSingle();
+        order = data;
+      }
+      if (!order) {
+        await supabase.from('token_usage').update({
+          print_status: 'failed',
+          print_retryable: false,
+          print_error: 'Missing source order',
+        }).eq('id', row.id);
+        continue;
+      }
+
+      try {
+        printedIds.delete(order.id);
+        await printOrderReceipt(
+          { ...order, tokens_charged: Math.abs(row.tokens_delta), token_usage_id: row.id },
+          { source: 'token_usage' },
+        );
+      } catch (err) {
+        await supabase.from('token_usage').update({
+          print_status: 'failed',
+          print_retryable: true,
+          print_error: err.message,
+        }).eq('id', row.id);
+      }
+    }
+  } catch (err) {
+    console.error('[print-agent] token_usage drain failed:', err.message);
+  }
+}
+
+async function checkPrinterAndDrain() {
+  const ok = await probePrinter();
+  if (ok && !printerHealthy) {
+    console.log('[print-agent] Printer recovered — draining pending / failed receipts');
+    await supabase
+      .from('token_usage')
+      .update({ print_status: 'pending', print_claimed_at: null })
+      .eq('print_status', 'failed')
+      .eq('print_retryable', true);
+    await supabase
+      .from('meal_print_jobs')
+      .update({ status: 'pending', claimed_at: null })
+      .eq('status', 'failed')
+      .eq('retryable', true);
+  }
+  printerHealthy = ok;
+  if (ok) {
+    await drainTokenUsagePrints();
+    await printUnprintedPendingMealJobs();
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 const channel = startListening();
 
 // Pull and print all pending orders and meal jobs on startup
 printUnprintedPendingOrders().catch((err) => console.error('[print-agent] Startup missed print check failed:', err.message));
 printUnprintedPendingMealJobs().catch((err) => console.error('[print-agent] Startup missed meal check failed:', err.message));
+drainTokenUsagePrints().catch((err) => console.error('[print-agent] Startup token print drain failed:', err.message));
 
-// Heartbeat + stuck order check + missed pending check
 setInterval(() => {
   const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-  console.log(`[print-agent] ♥ Heartbeat — ${now} — printer: ${getPrinterLabel()}`);
+  console.log(`[print-agent] ♥ Heartbeat — ${now} — printer: ${getPrinterLabel()} healthy=${printerHealthy}`);
   autoConfirmStuck();
   printUnprintedPendingOrders().catch((err) => console.error('[print-agent] Interval missed print check failed:', err.message));
-  printUnprintedPendingMealJobs().catch((err) => console.error('[print-agent] Interval missed meal check failed:', err.message));
-}, 30_000);
+  checkPrinterAndDrain().catch((err) => console.error('[print-agent] Interval printer drain failed:', err.message));
+}, 15_000);
 
 console.log(`[print-agent] 🖨 Ready — Listening for orders, printing to ${getPrinterLabel()}`);
 

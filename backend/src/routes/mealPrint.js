@@ -329,24 +329,13 @@ router.post('/reprint-token', async (req, res, next) => {
 
     if (jobErr) throw jobErr;
 
-    // Immediately update print_count and last_printed_by so the job tracks correctly
-    await supabaseAdmin
-      .from('meal_bookings')
-      .update({
-        print_count: (booking.print_count || 0) + 1,
-        last_printed_at: new Date().toISOString(),
-        last_printed_by: req.user.id,
-      })
-      .eq('id', booking.id);
-
-    console.log(`[MealPrint] Reprint for ${targetUserId} on ${mealDate} by ${req.user.full_name}`);
+    console.log(`[MealPrint] Reprint queued for ${targetUserId} on ${mealDate} by ${req.user.full_name}`);
     res.json({
       ok: true,
       job,
       booking: {
         ...booking,
-        print_count: (booking.print_count || 0) + 1,
-        is_duplicate: true,
+        is_duplicate: (booking.print_count || 0) > 0,
       },
     });
   } catch (e) {

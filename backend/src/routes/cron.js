@@ -6,6 +6,7 @@ import { supabaseAdmin } from '../lib/supabase.js';
 import { postAIReminderToTeams } from '../lib/teams.js';
 import { sendPushToUsers } from './push.js';
 import { sendMealBookingReminderEmail, sendMealSkipReminderEmail, sendMealNightReportEmail, sendMealBookingConfirmationEmail } from '../lib/microsoftGraph.js';
+import { ensureMonthGrant } from '../lib/tokens.js';
 
 const router = Router();
 
@@ -938,6 +939,26 @@ router.post('/meal-booking-confirmation', async (req, res, next) => {
       }
       console.log(`[MealBookingConfirmation] Done. Sent: ${sent}, Failed: ${failed}, Total: ${profiles.length}`);
     })();
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/monthly-token-grant', async (req, res, next) => {
+  try {
+    const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
+    const cronSecret = process.env.CRON_SECRET || 'app_wizz_cron_secret_change_in_production';
+    if (secret !== cronSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const { data: users, error } = await supabaseAdmin.from('profiles').select('id');
+    if (error) throw error;
+    let granted = 0;
+    for (const u of users || []) {
+      const r = await ensureMonthGrant(u.id);
+      if (r?.granted) granted += 1;
+    }
+    res.json({ ok: true, granted, total: (users || []).length });
   } catch (e) {
     next(e);
   }

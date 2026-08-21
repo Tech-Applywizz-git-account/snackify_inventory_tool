@@ -814,3 +814,77 @@ export async function sendGuestMealNotificationEmail({ bookingId, guestName, mea
     throw new Error(`Graph sendMail failed (${res.status}): ${text.slice(0, 200)}`);
   }
 }
+
+const DINESH_CC = 'dinesh@applywizz.ai';
+
+export async function sendSupportTicketEmail({
+  toEmails = [],
+  replyTo,
+  employeeName,
+  employeeEmail,
+  cardLast4,
+  kind,
+  message,
+}) {
+  if (!isGraphConfigured()) {
+    throw new Error('Mail is not configured');
+  }
+
+  const titles = {
+    coins: 'Request for Snackify coins',
+    card_missing: 'Digital cafeteria card is not showing',
+    other: 'Snackify support request',
+  };
+  const subject = `[Snackify] ${titles[kind] || titles.other} — ${employeeName}`;
+  const last4 = cardLast4 ? `xxxx xxxx ${cardLast4}` : 'not assigned yet';
+  const extra = message
+    ? `<p style="margin:16px 0 0;color:#334155"><b>Message:</b><br/>${String(message).replace(/</g, '&lt;')}</p>`
+    : '';
+
+  const html = `
+    <div style="font-family:Segoe UI,sans-serif;color:#0f172a;padding:8px">
+      <p>Hello Facility Manager,</p>
+      <p><b>${employeeName}</b> (${employeeEmail}) submitted a Snackify ticket.</p>
+      <ul>
+        <li>Request: <b>${titles[kind] || kind}</b></li>
+        <li>Employee: <b>${employeeName}</b></li>
+        <li>Card: <b>${last4}</b></li>
+      </ul>
+      ${extra}
+      <p style="color:#64748b;font-size:13px">Reply directly to this email to reach the employee.</p>
+      <p>— Applywizz Snackify</p>
+    </div>
+  `;
+
+  const uniqueTo = [...new Set((toEmails || []).map((e) => String(e || '').toLowerCase()).filter(Boolean))];
+  const toRecipients = (uniqueTo.length ? uniqueTo : [DINESH_CC]).map((address) => ({
+    emailAddress: { address },
+  }));
+  const ccRecipients = uniqueTo.includes(DINESH_CC.toLowerCase())
+    ? []
+    : [{ emailAddress: { address: DINESH_CC } }];
+
+  const token = await getGraphToken();
+  const resMail = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'Html', content: html },
+        toRecipients,
+        ccRecipients,
+        replyTo: replyTo ? [{ emailAddress: { address: replyTo } }] : [],
+      },
+      saveToSentItems: true,
+    }),
+  });
+
+  if (!resMail.ok) {
+    const text = await resMail.text().catch(() => '');
+    throw new Error(`Graph sendMail failed (${resMail.status}): ${text.slice(0, 200)}`);
+  }
+}

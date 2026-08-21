@@ -6,6 +6,7 @@ import { supabaseAdmin } from '../lib/supabase.js';
 import { postCancelToTeams, postOrderToTeams, postStockAlertToTeams } from '../lib/teams.js';
 import { sendLowStockEmail } from '../lib/microsoftGraph.js';
 import { sendPushToUsers } from './push.js';
+import { spendTokens, refundTokens, queuePrint } from '../lib/tokens.js';
 
 const router = Router();
 
@@ -38,6 +39,56 @@ function mapFulfillmentType(reqRow) {
     user_order_number: userOrderNumber,
     fulfillmentType: reqRow.delivery_mode === 'self_pickup' ? 'pickup' : 'delivery',
   };
+}
+
+async function findExistingClientOrder(userId, clientOrderId) {
+  if (!clientOrderId) return null;
+  const { data, error } = await supabaseAdmin
+    .from('requests')
+    .select('*')
+    .eq('submitted_by', userId)
+    .eq('client_order_id', clientOrderId)
+    .maybeSingle();
+  if (error) return null;
+  return data || null;
+}
+
+async function chargePlacedRequest(user, requestRow, items, clientOrderId) {
+  try {
+    if (clientOrderId) {
+      await supabaseAdmin
+        .from('requests')
+        .update({ client_order_id: clientOrderId })
+        .eq('id', requestRow.id);
+    }
+    const spend = await spendTokens({
+      userId: user.id,
+      idempotencyKey: clientOrderId || `request:${requestRow.id}`,
+      refType: 'request',
+      refId: requestRow.id,
+      lines: items,
+    });
+    return {
+      ...mapFulfillmentType(requestRow),
+      tokens_charged: spend.tokens_charged,
+      token_usage_id: spend.usage_id,
+      balance_after: spend.balance_after,
+      token_lines: spend.lines,
+    };
+  } catch (e) {
+    try {
+      await restoreStockForRequest(requestRow);
+    } catch (_) {}
+    await supabaseAdmin
+      .from('requests')
+      .update({
+        status: 'cancelled',
+        live_status: 'cancelled',
+        notes: e.message || 'Token payment failed',
+      })
+      .eq('id', requestRow.id);
+    throw e;
+  }
 }
 
 async function autoConfirmExpiredOrders() {
@@ -456,6 +507,18 @@ const createSchema = z.object({
 
 router.post('/', async (req, res, next) => {
   try {
+    const clientOrderId = req.body.client_order_id || req.body.idempotency_key || null;
+    if (clientOrderId) {
+      const existing = await findExistingClientOrder(req.user.id, clientOrderId);
+      if (existing && existing.status !== 'cancelled') {
+        return res.status(200).json({
+          needs_followup: false,
+          request: mapFulfillmentType(existing),
+          idempotent: true,
+        });
+      }
+    }
+
     // ── Multi-item Quick Order ───────────────────────────────────
     if (req.body.items && Array.isArray(req.body.items)) {
       const { items, location, note = '', delivery_mode } = req.body;
@@ -555,7 +618,13 @@ router.post('/', async (req, res, next) => {
       }
       if (qErr) throw qErr;
 
-      return res.status(201).json({ needs_followup: false, request: mapFulfillmentType(qData) });
+      const charged = await chargePlacedRequest(
+        req.user,
+        qData,
+        items.map((it) => ({ name: it.name, qty: parseInt(it.qty, 10) || 1 })),
+        clientOrderId
+      );
+      return res.status(201).json({ needs_followup: false, request: charged });
     }
 
     // ── Quick order (cafeteria tap — no AI needed) ───────────────
@@ -643,10 +712,13 @@ router.post('/', async (req, res, next) => {
       }
       if (qErr) throw qErr;
 
-      // NOTE: Teams + push notifications are NOT sent here.
-      // They fire only after the 30s cancel window via POST /:id/confirm.
-
-      return res.status(201).json({ needs_followup: false, request: mapFulfillmentType(qData) });
+      const charged = await chargePlacedRequest(
+        req.user,
+        qData,
+        [{ name: quick_item, qty }],
+        clientOrderId
+      );
+      return res.status(201).json({ needs_followup: false, request: charged });
     }
 
     // ── Standard AI-parsed request ────────────────────────────────
@@ -752,12 +824,16 @@ router.post('/', async (req, res, next) => {
     }
     if (error) throw error;
 
-    // NOTE: Teams + push notifications are NOT sent here.
-    // They fire only after the 30s cancel window via POST /:id/confirm.
-
+    const qty = parseInt(parsed.quantity, 10) || 1;
+    const charged = await chargePlacedRequest(
+      req.user,
+      data,
+      [{ name: parsed.item || parsed.request_details || raw_text, qty }],
+      clientOrderId
+    );
     res.status(201).json({
       needs_followup: false,
-      request: mapFulfillmentType(data),
+      request: charged,
       model,
     });
   } catch (e) {
@@ -823,6 +899,8 @@ router.post('/:id/confirm', async (req, res, next) => {
       .select()
       .single();
     if (error) throw error;
+
+    await queuePrint(order.token_usage_id || data.token_usage_id);
 
     // NOW fire notifications if morning shift (active delivery/pickup workflow)
     if (morning) {
@@ -923,7 +1001,16 @@ router.get('/:id', async (req, res, next) => {
     if (!isStaff && data.submitted_by !== req.user.id) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    res.json(mapFulfillmentType(data));
+    let printStatus = null;
+    if (data.token_usage_id) {
+      const { data: usage } = await supabaseAdmin
+        .from('token_usage')
+        .select('print_status, print_error')
+        .eq('id', data.token_usage_id)
+        .maybeSingle();
+      printStatus = usage?.print_status || null;
+    }
+    res.json({ ...mapFulfillmentType(data), print_status: printStatus });
   } catch (e) {
     next(e);
   }
@@ -1201,6 +1288,12 @@ router.post('/:id/cancel', async (req, res, next) => {
       .select()
       .single();
     if (error) throw error;
+
+    await refundTokens({
+      userId: req.user.id,
+      refType: 'request',
+      refId: order.id,
+    }).catch((e) => console.error('[tokens] refund on cancel', e.message));
 
     // ── Teams notification on self-cancel (only if order was already confirmed/sent to office boy)
     if (order.status !== 'confirming') {

@@ -6,6 +6,9 @@ import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../lib/api.js';
 import { supabase } from '../lib/supabase.js';
 import GuestMealDialog from '../components/GuestMealDialog.jsx';
+import SnackCoin from '../components/SnackCoin.jsx';
+import CafeteriaCard from '../components/CafeteriaCard.jsx';
+import CheckoutSuccess from '../components/CheckoutSuccess.jsx';
 
 function getISTParts(dateObj = new Date()) {
   try {
@@ -332,7 +335,7 @@ function Toast({ message, type, onDismiss }) {
 }
 
 // ── Confirmation bottom sheet ─────────────────────────────────────────────────
-function ConfirmSheet({ dateStr, choice, existingChoice, busy, onionSlices, setOnionSlices, onConfirm, onClose }) {
+function ConfirmSheet({ dateStr, choice, existingChoice, busy, onionSlices, setOnionSlices, onConfirm, onClose, coinPrice = 0 }) {
   const ui = CHOICE_UI[choice];
   const existingUi = existingChoice ? CHOICE_UI[existingChoice] : null;
   const isChange = existingChoice && existingChoice !== choice;
@@ -457,7 +460,13 @@ function ConfirmSheet({ dateStr, choice, existingChoice, busy, onionSlices, setO
             ) : (
               <>
                 <CheckCircle2 size={16} />
-                {isChange ? 'Change' : 'Confirm'}
+                {isChange ? 'Change' : 'Pay'}
+                {choice !== 'skip' && coinPrice ? (
+                  <span className="inline-flex items-center gap-1">
+                    <SnackCoin size={14} />
+                    {coinPrice}
+                  </span>
+                ) : ''}
               </>
             )}
           </button>
@@ -484,6 +493,11 @@ export default function MealBooking() {
   const [_loading, setLoading] = useState(true);
   const [userPrefs, setUserPrefs] = useState({ shift: 'morning', notification_tone: 'Friendly' });
   const [onionSlices, setOnionSlices] = useState('no onion');
+  const [cardData, setCardData] = useState(null);
+  const [mealTokenByDow, setMealTokenByDow] = useState({});
+  const [payPhase, setPayPhase] = useState('');
+  const [payAmount, setPayAmount] = useState(0);
+  const [payError, setPayError] = useState('');
 
   const selectedDateParts = selectedDate ? selectedDate.split('-').map(Number) : [];
   const selectedDay = selectedDate ? new Date(Date.UTC(selectedDateParts[0], selectedDateParts[1] - 1, selectedDateParts[2])).getUTCDay() : null;
@@ -508,6 +522,25 @@ export default function MealBooking() {
   const [toast, setToast] = useState(null); // { message, type }
 
   const monthStr = getMonthStr(year, month);
+
+  function mealCoins(dateStr) {
+    const [y, m, d] = String(dateStr).split('-').map(Number);
+    const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    return Number(mealTokenByDow[dow]) || 0;
+  }
+
+  useEffect(() => {
+    api.tokensMe().then((d) => setCardData(d)).catch(() => {});
+    api.tokensBootstrap().then((b) => {
+      const map = {};
+      (b?.catalog || [])
+        .filter((i) => i.kind === 'meal')
+        .forEach((i) => {
+          map[Number(i.weekday)] = Number(i.tokens) || 0;
+        });
+      setMealTokenByDow(map);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!profile?.id) return;
@@ -591,18 +624,18 @@ export default function MealBooking() {
   async function confirmBook() {
     if (!confirmData) return;
     const { dateStr, choice } = confirmData;
+    const coins = choice === 'skip' ? 0 : mealCoins(dateStr);
     setBooking(true);
+    setPayAmount(coins);
+    setPayError('');
+    setPayPhase('paying');
     try {
-      const result = await api.bookMeal({ date: dateStr, choice, onion_slices: onionSlices });
+      await api.bookMeal({ date: dateStr, choice, onion_slices: onionSlices });
       const updated = await api.myMealBookings(monthStr);
       setBookings(updated);
       setConfirmData(null);
-      setChangingDate(null); // return to "already booked" banner after successful change
-      setToast({
-        message:
-          result.message || `${CHOICE_UI[choice]?.emoji} ${CHOICE_UI[choice]?.label} booked!`,
-        type: 'success',
-      });
+      setChangingDate(null);
+      setPayPhase('paid');
       if (isManager && selectedDate === dateStr) {
         api
           .mealSummary(dateStr)
@@ -610,7 +643,8 @@ export default function MealBooking() {
           .catch(() => {});
       }
     } catch (e) {
-      setConfirmData(null);
+      setPayPhase('fail');
+      setPayError(e.message || 'Something went wrong');
       setToast({ message: e.message || 'Something went wrong', type: 'error' });
     } finally {
       setBooking(false);
@@ -653,9 +687,26 @@ export default function MealBooking() {
             setOnionSlices={setOnionSlices}
             onConfirm={confirmBook}
             onClose={() => !booking && setConfirmData(null)}
+            coinPrice={mealCoins(confirmData.dateStr)}
           />
         )}
       </AnimatePresence>
+
+      <CheckoutSuccess
+        open={!!payPhase}
+        status={payPhase === 'paying' ? 'running' : payPhase === 'paid' ? 'ok' : payPhase === 'fail' ? 'fail' : ''}
+        amount={payAmount}
+        variant="booking"
+        error={payError}
+        onDone={() => {
+          setPayPhase('');
+          navigate('/my-meal-box');
+        }}
+        onFailClose={() => {
+          setPayPhase('');
+          setConfirmData(null);
+        }}
+      />
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -681,6 +732,14 @@ export default function MealBooking() {
           </button>
         </div>
       </div>
+
+      <CafeteriaCard
+        cardNumber={cardData?.card?.cafeteria_card_number}
+        cardMasked={cardData?.card?.card_masked}
+        cardholder={cardData?.card?.cardholder || profile?.preferred_name || profile?.full_name}
+        balance={cardData?.wallet?.balance ?? 0}
+        color={cardData?.card?.color || 'neon'}
+      />
 
       {/* Legend */}
       <div className="flex flex-wrap gap-3 text-xs">

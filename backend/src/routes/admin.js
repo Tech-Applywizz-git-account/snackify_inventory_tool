@@ -58,10 +58,18 @@ export function createAdminRouter(overrides = {}) {
   // GET /api/admin/users  - all users + their roles, joined with auth.users for email
   router.get('/users', async (_req, res, next) => {
     try {
-      const { data: profiles, error: pErr } = await d.supabaseAdmin
+      let { data: profiles, error: pErr } = await d.supabaseAdmin
         .from('profiles')
-        .select('id, full_name, role, preferred_name, created_at')
+        .select('id, full_name, role, preferred_name, created_at, cafeteria_card_number')
         .order('created_at', { ascending: true });
+      if (pErr && /cafeteria_card_number/i.test(pErr.message || '')) {
+        const retry = await d.supabaseAdmin
+          .from('profiles')
+          .select('id, full_name, role, preferred_name, created_at')
+          .order('created_at', { ascending: true });
+        profiles = retry.data;
+        pErr = retry.error;
+      }
       if (pErr) throw pErr;
 
       const { data: usersList, error: uErr } = await d.supabaseAdmin.auth.admin.listUsers({
@@ -116,6 +124,35 @@ export function createAdminRouter(overrides = {}) {
         .select()
         .single();
       if (error) throw error;
+      res.json(data);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.patch('/users/:id/cafeteria-card', async (req, res, next) => {
+    try {
+      const schema = z.object({
+        cafeteria_card_number: z.union([z.string(), z.null()]).optional(),
+      });
+      const parsed = schema.parse(req.body);
+      const digits = String(parsed.cafeteria_card_number || '').replace(/\D/g, '');
+      if (digits && digits.length !== 12) {
+        return res.status(400).json({ error: 'Card number must be exactly 12 digits' });
+      }
+      const cafeteria_card_number = digits || null;
+      const { data, error } = await d.supabaseAdmin
+        .from('profiles')
+        .update({ cafeteria_card_number })
+        .eq('id', req.params.id)
+        .select('id, full_name, cafeteria_card_number')
+        .single();
+      if (error) {
+        if (error.code === '23505') {
+          return res.status(409).json({ error: 'That card number is already assigned.' });
+        }
+        throw error;
+      }
       res.json(data);
     } catch (e) {
       next(e);

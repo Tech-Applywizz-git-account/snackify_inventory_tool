@@ -108,6 +108,15 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ preferred_name: preferredName }),
     }),
+  setUserCafeteriaCard: (userId, cafeteriaCardNumber) =>
+    request(`/api/admin/users/${userId}/cafeteria-card`, {
+      method: 'PATCH',
+      body: JSON.stringify({ cafeteria_card_number: cafeteriaCardNumber }),
+    }),
+  updateCardStyle: (body) =>
+    request('/api/tokens/card-style', { method: 'PATCH', body: JSON.stringify(body) }),
+  supportTicket: (body) =>
+    request('/api/support/ticket', { method: 'POST', body: JSON.stringify(body) }),
   resetAuthenticator: (userId) =>
     request(`/api/admin/users/${userId}/reset-authenticator`, { method: 'POST' }),
   createUser: (body) =>
@@ -149,6 +158,8 @@ export const api = {
 
    // Cafeteria
    cafeteriaItems: () => request('/api/cafeteria/items'),
+  tokensMe: () => request('/api/tokens/me'),
+  tokensBootstrap: () => request('/api/tokens/bootstrap'),
    quickOrder: (body) => request('/api/requests', { method: 'POST', body: JSON.stringify(body) }),
    addCafeteriaItem: (body) =>
      request('/api/cafeteria/items', { method: 'POST', body: JSON.stringify(body) }),

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { postLeaveAlertToTeams } from '../lib/teams.js';
 import { requireRole } from '../middleware/auth.js';
+import { attachTokenPrice, loadCatalog } from '../lib/tokens.js';
 
 const router = Router();
 
@@ -17,7 +18,8 @@ router.get('/items', async (_req, res, next) => {
       .neq('visible_to_employees', false)
       .order('sort_order', { ascending: true });
     if (error) throw error;
-    res.json(data || []);
+    const catalog = await loadCatalog().catch(() => []);
+    res.json((data || []).map((row) => attachTokenPrice(row, catalog)));
   } catch (e) {
     next(e);
   }

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
+import { applyMealTokens, mealTokenPrice, walletForUser } from '../lib/tokens.js';
 
 const router = Router();
 
@@ -178,12 +179,7 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
 // Returns what options are available for a date + current booking + cutoff status
 router.get('/options', async (req, res, next) => {
   try {
-    const { date } = req.query;
-    if (!date) return res.status(400).json({ error: 'date query param required' });
-
-    if (!isWorkingDay(date)) {
-      return res.json({ working_day: false, options: [], booking: null });
-    }
+    let { date } = req.query;
 
     const { data: prefs } = await supabaseAdmin
       .from('employee_cafeteria_preferences')
@@ -192,11 +188,36 @@ router.get('/options', async (req, res, next) => {
       .maybeSingle();
     const userShift = prefs?.shift || 'morning';
 
+    if (!date) {
+      date = userShift === 'night'
+        ? (() => {
+            const p = getISTParts();
+            return `${p.year}-${String(p.month + 1).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+          })()
+        : getNextWorkingDay();
+    }
+
+    if (!isWorkingDay(date)) {
+      return res.json({
+        working_day: false,
+        meal_date: date,
+        options: [],
+        booking: null,
+        canBook: false,
+        canSkip: false,
+        reason: 'weekend',
+      });
+    }
+
     const options = getOptionsForDate(date);
     const actions = getAllowedActions(date, userShift);
 
-    // Get user's current booking
     const booking = await findMealBooking(req.user.id, date);
+    const tokenPrice = await mealTokenPrice(date);
+    let wallet = null;
+    try {
+      wallet = await walletForUser(req.user.id);
+    } catch (_) {}
 
     res.json({
       working_day: true,
@@ -204,6 +225,8 @@ router.get('/options', async (req, res, next) => {
       options, // ['veg'] or ['veg','egg'] or ['veg','non_veg']
       ...actions, // canBook, canSkip, reason
       booking: booking || null,
+      token_price: tokenPrice,
+      wallet,
     });
   } catch (e) {
     next(e);
@@ -214,7 +237,8 @@ router.get('/options', async (req, res, next) => {
 // Body: { date: "2026-05-21", choice: "veg" | "non_veg" | "egg" | "skip" }
 router.post('/book', async (req, res, next) => {
   try {
-    const { date, choice, onion_slices } = req.body;
+    const { date, choice: rawChoice, meal_type, onion_slices } = req.body;
+    const choice = rawChoice || meal_type;
     if (!date || !choice) return res.status(400).json({ error: 'date and choice required' });
 
     // Validate working day
@@ -250,7 +274,15 @@ router.post('/book', async (req, res, next) => {
             .status(400)
             .json({ error: 'After 6 PM you can only skip. Cannot change meal type.' });
         }
-        return res.status(400).json({ error: 'Booking is locked after 8 PM.' });
+        const lockedMsg = {
+          past: 'You can only book lunch for the next working day.',
+          not_open_yet: 'Booking opens at 9:00 AM IST.',
+          future_locked: 'This date is not open for booking yet.',
+          weekend: 'Not a working day.',
+        };
+        return res.status(400).json({
+          error: lockedMsg[actions.reason] || 'Booking is currently closed.',
+        });
       }
 
       // Validate choice is valid for this day
@@ -290,7 +322,7 @@ router.post('/book', async (req, res, next) => {
     }
 
     const bookedAt = new Date().toISOString();
-    const existing = await findMealBooking(req.user.id, date, 'id');
+    const existing = await findMealBooking(req.user.id, date);
     let data;
 
     if (existing?.id) {
@@ -336,9 +368,36 @@ router.post('/book', async (req, res, next) => {
 
 
     const emoji = { veg: '🥬', non_veg: '🍗', egg: '🥚', skip: '🚫' };
+    let spend = null;
+    try {
+      spend = await applyMealTokens({
+        userId: req.user.id,
+        bookingId: data.id,
+        mealDate: date,
+        choice,
+      });
+    } catch (e) {
+      const missing = /could not find|does not exist|schema cache|token_items|token_usage|PGRST/i.test(
+        String(e.message || e.code || ''),
+      );
+      if (!missing) {
+        if (existing?.id) {
+          await supabaseAdmin
+            .from('meal_bookings')
+            .update({ choice: existing.choice, onion_slices: existing.onion_slices || null })
+            .eq('id', existing.id);
+        } else {
+          await supabaseAdmin.from('meal_bookings').delete().eq('id', data.id);
+        }
+        throw e;
+      }
+    }
+
     res.json({
       ok: true,
-      booking: data,
+      booking: { ...data, tokens_charged: spend?.tokens_charged || 0 },
+      tokens_charged: spend?.tokens_charged || 0,
+      balance_after: spend?.balance_after,
       message:
         choice === 'skip'
           ? '🚫 Meal skipped for this day'

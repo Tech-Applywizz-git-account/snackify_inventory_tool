@@ -180,6 +180,28 @@ export default function Admin() {
     }
   }
 
+  async function onChangeCafeteriaCard(user, value) {
+    const digits = String(value || '').replace(/\D/g, '');
+    const current = String(user.cafeteria_card_number || '').replace(/\D/g, '');
+    if (digits === current) return;
+    if (digits && digits.length !== 12) {
+      setErr('Cafeteria card must be exactly 12 digits.');
+      return;
+    }
+    setBusy(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      await api.setUserCafeteriaCard(user.id, digits || null);
+      setOkMsg(`Digital cafeteria card updated for ${user.full_name || user.email || 'user'}.`);
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onChangePreferredName(user, value) {
     const preferredName = value.trim();
     if (preferredName === (user.preferred_name || '')) return;
@@ -255,7 +277,8 @@ export default function Admin() {
       <div>
         <h1 className="text-2xl font-semibold">Admin · Users</h1>
         <p className="text-sm text-slate-500">
-          Invite colleagues and assign their access. Leadership only.
+          Invite colleagues, assign access, and add each person&apos;s 12-digit Applywizz Digital Cafeteria Card.
+          Employees see it as <span className="font-mono">xxxx xxxx 0123</span>.
         </p>
       </div>
 
@@ -311,6 +334,7 @@ export default function Admin() {
               <tr className="text-left text-slate-500 border-b">
                 <th className="py-2 pr-3">Name</th>
                 <th className="py-2 pr-3">Preferred Name</th>
+                <th className="py-2 pr-3">Cafeteria card</th>
                 <th className="py-2 pr-3">Email</th>
                 <th className="py-2 pr-3">Role</th>
                 <th className="py-2 pr-3">Change to</th>
@@ -334,6 +358,26 @@ export default function Admin() {
                         defaultValue={u.preferred_name || ''}
                         disabled={busy}
                         onBlur={(e) => onChangePreferredName(u, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                        }}
+                      />
+                    </td>
+                    <td className="py-2 pr-3">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={14}
+                        placeholder="xxxx xxxx 0123"
+                        className="input py-1 px-2 text-xs w-32 font-mono tracking-wide"
+                        defaultValue={
+                          u.cafeteria_card_number
+                            ? String(u.cafeteria_card_number).replace(/(\d{4})(\d{4})(\d{4})/, '$1 $2 $3')
+                            : ''
+                        }
+                        key={`${u.id}-${u.cafeteria_card_number || 'none'}`}
+                        disabled={busy}
+                        onBlur={(e) => onChangeCafeteriaCard(u, e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') e.currentTarget.blur();
                         }}

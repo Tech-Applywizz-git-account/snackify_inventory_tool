@@ -10,15 +10,16 @@ import {
   Timer,
   Trash2,
   X,
-  Zap,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import MealCard from '../components/MealCard.jsx';
 import WakingUp from '../components/WakingUp.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../lib/api.js';
 import { supabase } from '../lib/supabase.js';
+import SnackCoin from '../components/SnackCoin.jsx';
+import CheckoutSuccess from '../components/CheckoutSuccess.jsx';
 
 const LOCATIONS = [
   'Balaji Cabin',
@@ -29,6 +30,22 @@ const LOCATIONS = [
   'Marketing Team',
   'Conference Room',
 ];
+
+function catalogTokens(catalog, name) {
+  const n = String(name || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+  if (!n || !Array.isArray(catalog)) return 0;
+  const hit =
+    catalog.find((i) => String(i.display_name || '').toLowerCase().trim().replace(/\s+/g, ' ') === n)
+    || catalog.find((i) => (i.aliases || []).some((a) => String(a).toLowerCase().trim() === n));
+  return hit ? Number(hit.tokens) || 0 : 0;
+}
+
+function itemTokens(item) {
+  return Number(item?.token_price ?? item?.coin_price) || 0;
+}
 
 function getISTGreeting() {
   const now = new Date().toLocaleString('en-US', {
@@ -616,6 +633,14 @@ function ItemChip({
             {item.calories_per_serving} kcal
           </div>
         )}
+          <div className="text-[10px] text-slate-800 font-bold mt-0.5 flex items-center justify-center gap-1">
+            {itemTokens(item) > 0 ? (
+              <>
+                <SnackCoin size={12} />
+                {itemTokens(item)} coins
+              </>
+            ) : null}
+          </div>
         {item.description && (
           <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{item.description}</div>
         )}
@@ -1167,6 +1192,7 @@ function OrderSheet({
   const totalCalories = cartItems.reduce((sum, { item, qty, customNote }) => {
     return sum + getCartItemCalories(item, qty, customNote);
   }, 0);
+  const totalTokens = cartItems.reduce((sum, { item, qty }) => sum + qty * itemTokens(item), 0);
   const totalCount = cartItems.reduce((sum, x) => sum + x.qty, 0);
 
   return (
@@ -1186,7 +1212,7 @@ function OrderSheet({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-5">
-          <h2 className="font-extrabold text-lg text-slate-900">Review Order 🛒</h2>
+          <h2 className="font-extrabold text-lg text-slate-900">Payment</h2>
           <button
             onClick={onClose}
             className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200"
@@ -1223,7 +1249,8 @@ function OrderSheet({
                     )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-col items-end gap-1 shrink-0">
+                  <div className="flex items-center gap-2">
                   <button
                     disabled={qty === 0}
                     onClick={() => onUpdateQty?.(item.id, -1)}
@@ -1244,6 +1271,12 @@ function OrderSheet({
                   >
                     <Trash2 size={10} />
                   </button>
+                  </div>
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-800">
+                    <SnackCoin size={12} />
+                    {qty * itemTokens(item)}
+                    <span className="font-medium text-slate-400">({itemTokens(item)} × {qty})</span>
+                  </span>
                 </div>
               </div>
             );
@@ -1416,15 +1449,27 @@ function OrderSheet({
         </div>
 
         {/* Total Calories & Servings Summary */}
-        <div className="mb-5 flex items-center justify-between text-xs text-slate-500 bg-slate-50 rounded-xl p-3 border border-slate-100 font-medium">
-          <div>
-            Total Servings: <span className="font-bold text-slate-700">{totalCount}</span>
+        <div className="mb-5 text-xs text-slate-500 bg-slate-50 rounded-xl p-3 border border-slate-100 font-medium space-y-2">
+          {cartItems.map(({ item, qty }) => (
+            <div key={item.id} className="flex items-center justify-between gap-2">
+              <span className="truncate">{getItemDisplayName(item)} × {qty}</span>
+              <span className="font-bold text-slate-800 inline-flex items-center gap-1 shrink-0">
+                <SnackCoin size={12} />{qty * itemTokens(item)}
+              </span>
+            </div>
+          ))}
+          <div className="flex items-center justify-between">
+            <span>Item total</span>
+            <span className="font-bold text-slate-800 inline-flex items-center gap-1"><SnackCoin size={14} />{totalTokens}</span>
+          </div>
+          <div className="flex items-center justify-between border-t border-slate-200 pt-2">
+            <span className="font-bold text-slate-900">To pay</span>
+            <span className="font-bold text-slate-900 inline-flex items-center gap-1">
+              <SnackCoin size={16} />{totalTokens}
+            </span>
           </div>
           {totalCalories > 0 && (
-            <div>
-              Total Energy:{' '}
-              <span className="font-bold text-slate-700">🔥 {totalCalories} kcal</span>
-            </div>
+            <div>Energy: <span className="font-bold text-slate-700">🔥 {totalCalories} kcal</span></div>
           )}
         </div>
 
@@ -1438,12 +1483,12 @@ function OrderSheet({
               delivery_mode: effectiveMode,
             })
           }
-          className="w-full h-12 bg-brand text-white rounded-2xl font-bold text-sm shadow-lg shadow-brand/20 hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-40 flex items-center justify-center gap-2"
+          className="w-full h-12 bg-[#1BA672] text-white rounded-2xl font-bold text-sm shadow-lg shadow-emerald-200 hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-40 flex items-center justify-center gap-2"
         >
           {busy ? (
             <>
               <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />{' '}
-              Placing...
+              Paying...
             </>
           ) : totalCount === 0 ? (
             <>
@@ -1451,7 +1496,7 @@ function OrderSheet({
             </>
           ) : (
             <>
-              <Zap size={16} /> Place Order 🚀
+              Place Order
             </>
           )}
         </button>
@@ -1482,6 +1527,11 @@ export default function Cafeteria() {
   const [orderBusy, setOrderBusy] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [payPhase, setPayPhase] = useState('');
+  const [payAmount, setPayAmount] = useState(0);
+  const [payOrderId, setPayOrderId] = useState(null);
+  const [payError, setPayError] = useState('');
+  const tokenCatalogRef = useRef([]);
   const [tone, setTone] = useState('Friendly'); // AI personality tone
   const [savedLocation, setSavedLocation] = useState(''); // From onboarding preferences
 
@@ -1607,6 +1657,7 @@ export default function Cafeteria() {
         _virtual: true,
         _backing: coffeeBeansRow.item_name,
         _machine: true,
+        token_price: catalogTokens(tokenCatalogRef.current, 'Espresso'),
       });
 
       // 1b. Americano — disabled when milk is out of stock
@@ -1624,6 +1675,7 @@ export default function Cafeteria() {
         _backing: coffeeBeansRow.item_name,
         _machine: true,
         _needs_milk: true,
+        token_price: catalogTokens(tokenCatalogRef.current, 'Americano'),
       });
 
 
@@ -1659,6 +1711,7 @@ export default function Cafeteria() {
           _backing: coffeeBeansRow.item_name,
           _machine: true,
           _needs_milk: true,
+          token_price: catalogTokens(tokenCatalogRef.current, name),
         });
       });
     }
@@ -1679,6 +1732,7 @@ export default function Cafeteria() {
         _virtual: true,
         _backing: lemonSachetsRow.item_name,
         _machine: false,
+        token_price: catalogTokens(tokenCatalogRef.current, 'Lemon Tea'),
       });
     }
 
@@ -1688,11 +1742,13 @@ export default function Cafeteria() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: enrichItemsWithVirtualDrinks is pure
   const load = useCallback(async () => {
     try {
-      const [itemsData, requestsData, pickupStatus] = await Promise.all([
+      const [itemsData, requestsData, pickupStatus, boot] = await Promise.all([
         api.cafeteriaItems(),
         api.listRequests(),
         api.selfPickupStatus().catch(() => ({ is_self_pickup_day: false })),
+        api.tokensBootstrap().catch(() => null),
       ]);
+      tokenCatalogRef.current = boot?.catalog || [];
       setItems(enrichItemsWithVirtualDrinks(itemsData || []));
       setSelfPickupDay(pickupStatus);
 
@@ -1923,6 +1979,11 @@ export default function Cafeteria() {
     setShowSheet(false);
     setOrderBusy(true);
     setErrorMsg('');
+    const total = cartItems.reduce((sum, { item, qty }) => sum + qty * itemTokens(item), 0);
+    setPayAmount(total);
+    setPayError('');
+    setPayOrderId(null);
+    setPayPhase('paying');
     try {
       const itemsPayload = cartItems.map(({ item, qty, customNote }) => {
         const breadType = customizations[`${item.id}__bread`] || '';
@@ -1945,8 +2006,8 @@ export default function Cafeteria() {
       setCart({});
       setCustomizations({});
       setShowSheet(false);
-      setSuccessMsg('Order placed! 🚀');
-      // Remember location for next time
+      setPayOrderId(lastReq?.id || null);
+      setPayPhase('paid');
       if (location && session) {
         setSavedLocation(location);
         supabase
@@ -1958,19 +2019,15 @@ export default function Cafeteria() {
           .then(() => {})
           .catch(() => {});
       }
-      setTimeout(() => {
-        setSuccessMsg('');
-        if (lastReq?.id) navigate(`/track/${lastReq.id}`);
-      }, 1500);
     } catch (e) {
+      setPayPhase('fail');
+      setPayError(e.message);
       setErrorMsg(e.message);
-      setShowSheet(false); // Close order sheet so error toast is visible on top
-      // Refresh items to get updated stock counts
+      setShowSheet(false);
       api
         .cafeteriaItems()
         .then((d) => d && setItems(enrichItemsWithVirtualDrinks(d)))
         .catch(() => {});
-      // Auto-dismiss error after 6 seconds
       setTimeout(() => setErrorMsg(''), 6000);
     } finally {
       setOrderBusy(false);
@@ -2538,6 +2595,19 @@ export default function Cafeteria() {
           </motion.div>
         )}
       </AnimatePresence>
+      <CheckoutSuccess
+        open={!!payPhase}
+        status={payPhase === 'paying' ? 'running' : payPhase === 'paid' ? 'ok' : payPhase === 'fail' ? 'fail' : ''}
+        amount={payAmount}
+        variant="order"
+        error={payError}
+        onDone={() => {
+          const id = payOrderId;
+          setPayPhase('');
+          if (id) navigate(`/track/${id}`);
+        }}
+        onFailClose={() => setPayPhase('')}
+      />
     </div>
   );
 }

@@ -29,6 +29,8 @@ import telegramWebhookRouter from './routes/telegramWebhook.js';
 import transactionsRouter from './routes/transactions.js';
 import syncCabinRouter from './routes/syncCabinCron.js';
 import guestMealRouter from './routes/guestMeal.js';
+import tokensRouter from './routes/tokens.js';
+import supportRouter from './routes/support.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -99,6 +101,8 @@ app.use('/api/cafeteria', cafeteriaRouter);
 app.use('/api/meals', mealsRouter);
 app.use('/api/push', pushRouter);
 app.use('/api/meal-print', mealPrintRouter);
+app.use('/api/tokens', tokensRouter);
+app.use('/api/support', supportRouter);
 app.use('/api/manual-purchases', manualPurchaseRouter);
 app.use('/api/forecasts', forecastsRouter);
 

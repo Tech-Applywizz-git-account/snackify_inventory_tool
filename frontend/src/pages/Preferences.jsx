@@ -17,6 +17,8 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
 import { getPushStatus, subscribeToPush, unsubscribeFromPush } from '../lib/push.js';
 import { supabase } from '../lib/supabase.js';
+import { api } from '../lib/api.js';
+import CafeteriaCard, { CARD_THEME_LIST } from '../components/CafeteriaCard.jsx';
 
 const TONES = [
   { value: 'Professional', label: 'Professional' },
@@ -48,6 +50,10 @@ export default function Preferences() {
   const [shiftSaving, setShiftSaving] = useState(false);
   const [employeeCode, setEmployeeCode] = useState('');
   const [codeSaving, setCodeSaving] = useState(false);
+  const [cardData, setCardData] = useState(null);
+  const [cardColor, setCardColor] = useState('neon');
+  const [cardName, setCardName] = useState('');
+  const [cardSaving, setCardSaving] = useState(false);
 
   useEffect(() => {
     if (!profile?.id) return;
@@ -94,6 +100,12 @@ export default function Preferences() {
     getPushStatus()
       .then(setPushStatus)
       .catch(() => setPushStatus('unsupported'));
+
+    api.tokensMe().then((d) => {
+      setCardData(d);
+      setCardColor(d?.card?.color || 'neon');
+      setCardName(d?.card?.display_name || d?.card?.cardholder || profile?.preferred_name || profile?.full_name || '');
+    }).catch(() => {});
   }, [profile?.id]);
 
   async function saveEmployeeCode() {
@@ -223,6 +235,61 @@ export default function Preferences() {
           </div>
           {codeSaving && <Loader2 size={16} className="animate-spin text-brand mt-5" />}
         </div>
+      </div>
+
+      <div className="card space-y-4">
+        <h2 className="text-base font-semibold">Digital Cafeteria Card</h2>
+        <CafeteriaCard
+          cardNumber={cardData?.card?.cafeteria_card_number}
+          cardMasked={cardData?.card?.card_masked}
+          cardholder={cardName || cardData?.card?.cardholder}
+          balance={cardData?.wallet?.balance ?? 0}
+          color={cardColor}
+        />
+        <div>
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Color</div>
+          <div className="flex gap-2">
+            {CARD_THEME_LIST.map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setCardColor(id)}
+                className={`h-8 w-8 rounded-full border-2 ${cardColor === id ? 'border-slate-900' : 'border-white shadow'} ${
+                  id === 'neon' ? 'bg-violet-700' :
+                  id === 'gold' ? 'bg-amber-500' :
+                  id === 'emerald' ? 'bg-emerald-600' :
+                  id === 'ruby' ? 'bg-rose-600' :
+                  id === 'ocean' ? 'bg-sky-600' : 'bg-slate-700'
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Name on card</div>
+          <input
+            className="input mt-1 w-full"
+            maxLength={22}
+            value={cardName}
+            onChange={(e) => setCardName(e.target.value)}
+          />
+          <div className="text-xs text-slate-400 mt-1">Expiry is always NO EXPIRY.</div>
+        </div>
+        <button
+          type="button"
+          className="btn-primary"
+          disabled={cardSaving}
+          onClick={async () => {
+            setCardSaving(true);
+            try {
+              const d = await api.updateCardStyle({ color: cardColor, display_name: cardName });
+              setCardData((prev) => ({ ...prev, card: d.card }));
+            } catch (_) {}
+            setCardSaving(false);
+          }}
+        >
+          {cardSaving ? 'Saving…' : 'Save card look'}
+        </button>
       </div>
 
       {/* Shift Selection */}

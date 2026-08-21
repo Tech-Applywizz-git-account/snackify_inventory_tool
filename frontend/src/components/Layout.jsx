@@ -1,6 +1,10 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
 import { supabase } from '../lib/supabase.js';
+import { api } from '../lib/api.js';
+import SnackCoin from './SnackCoin.jsx';
+import SupportTicketModal from './SupportTicketModal.jsx';
 
 const navByRole = {
   facility_manager: [
@@ -97,6 +101,18 @@ const roleDisplay = {
 export default function Layout() {
   const { profile } = useAuth();
   const links = profile ? navByRole[profile.role] || ['/request'] : [];
+  const [wallet, setWallet] = useState(null);
+  const [card, setCard] = useState(null);
+  const [ticketOpen, setTicketOpen] = useState(false);
+  const hasCard = Boolean(card?.cafeteria_card_number || (card?.card_masked && !String(card.card_masked).includes('----')));
+
+  useEffect(() => {
+    if (!profile?.id) return;
+    api.tokensMe().then((d) => {
+      setWallet(d?.wallet || d);
+      setCard(d?.card || null);
+    }).catch(() => {});
+  }, [profile?.id]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -124,6 +140,32 @@ export default function Layout() {
             ))}
           </nav>
           <div className="flex items-center gap-2">
+            {!hasCard && profile?.id ? (
+              <button
+                type="button"
+                onClick={() => setTicketOpen(true)}
+                className="h-8 w-8 rounded-full bg-slate-100 text-slate-700 grid place-items-center"
+                title="Support"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M4 13a8 8 0 0 1 16 0" />
+                  <rect x="2" y="13" width="4" height="7" rx="2" />
+                  <rect x="18" y="13" width="4" height="7" rx="2" />
+                </svg>
+                <span className="sr-only">Support</span>
+              </button>
+            ) : null}
+            {card?.card_masked ? (
+              <div className="hidden md:block text-[11px] font-mono font-semibold text-cyan-700 bg-slate-950 border border-cyan-400/40 rounded-full px-3 py-1 tracking-wider">
+                {card.card_masked}
+              </div>
+            ) : null}
+            {wallet?.balance != null ? (
+              <div className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-slate-800 bg-amber-50 border border-amber-200 rounded-full px-3 py-1">
+                <SnackCoin size={14} />
+                {wallet.balance}
+              </div>
+            ) : null}
             {/* Avatar with initials — always visible */}
             <div className="h-8 w-8 rounded-full bg-brand/10 border border-brand/20 text-brand grid place-items-center font-bold text-sm shrink-0">
               {(profile?.preferred_name || profile?.full_name || '?').charAt(0).toUpperCase()}
@@ -163,6 +205,7 @@ export default function Layout() {
         <Outlet />
       </main>
       <footer className="text-center text-xs text-slate-400 py-4">Applywizz Office Pantry</footer>
+      <SupportTicketModal open={ticketOpen} onClose={() => setTicketOpen(false)} />
     </div>
   );
 }
