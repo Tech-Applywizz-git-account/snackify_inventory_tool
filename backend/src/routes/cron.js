@@ -944,12 +944,28 @@ router.post('/meal-booking-confirmation', async (req, res, next) => {
   }
 });
 
-router.post('/monthly-token-grant', async (req, res, next) => {
+async function monthlyTokenGrant(req, res, next) {
   try {
     const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
     const cronSecret = process.env.CRON_SECRET || 'app_wizz_cron_secret_change_in_production';
-    if (secret !== cronSecret) {
+    const fromVercelCron = String(req.headers['x-vercel-cron'] || '') === '1';
+    if (!fromVercelCron && secret !== cronSecret) {
       return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const force = req.query.force === '1' || req.body?.force;
+    const ist = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      hour: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date());
+    const clock = Object.fromEntries(ist.map((p) => [p.type, p.value]));
+    if (!force && !(Number(clock.day) === 1 && Number(clock.hour) >= 8)) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: 'Runs on the 1st of the month at/after 8:00 AM IST',
+      });
     }
     const { data: users, error } = await supabaseAdmin.from('profiles').select('id');
     if (error) throw error;
@@ -958,10 +974,13 @@ router.post('/monthly-token-grant', async (req, res, next) => {
       const r = await ensureMonthGrant(u.id);
       if (r?.granted) granted += 1;
     }
-    res.json({ ok: true, granted, total: (users || []).length });
+    res.json({ ok: true, granted, total: (users || []).length, monthly_grant: 4000 });
   } catch (e) {
     next(e);
   }
-});
+}
+
+router.post('/monthly-token-grant', monthlyTokenGrant);
+router.get('/monthly-token-grant', monthlyTokenGrant);
 
 export default router;

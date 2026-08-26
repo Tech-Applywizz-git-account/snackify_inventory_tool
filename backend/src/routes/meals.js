@@ -219,12 +219,17 @@ router.get('/options', async (req, res, next) => {
       wallet = await walletForUser(req.user.id);
     } catch (_) {}
 
+    const alreadyBooked = Boolean(booking?.choice && booking.choice !== 'skip');
     res.json({
       working_day: true,
       meal_date: date,
       options, // ['veg'] or ['veg','egg'] or ['veg','non_veg']
       ...actions, // canBook, canSkip, reason
       booking: booking || null,
+      already_booked: alreadyBooked,
+      canBook: alreadyBooked ? false : actions.canBook,
+      canSkip: alreadyBooked ? actions.canSkip : actions.canSkip,
+      reason: alreadyBooked ? 'already_booked' : actions.reason,
       token_price: tokenPrice,
       wallet,
     });
@@ -323,9 +328,31 @@ router.post('/book', async (req, res, next) => {
 
     const bookedAt = new Date().toISOString();
     const existing = await findMealBooking(req.user.id, date);
+    const isRealMeal = (c) => c && c !== 'skip';
     let data;
 
     if (existing?.id) {
+      if (existing.choice === choice) {
+        return res.json({
+          ok: true,
+          booking: existing,
+          tokens_charged: existing.tokens_charged || 0,
+          idempotent: true,
+          message: isRealMeal(choice)
+            ? 'Already booked for this day.'
+            : 'Meal already skipped for this day.',
+        });
+      }
+
+      // One real meal per day — do not replace veg/egg/non_veg with another meal.
+      if (isRealMeal(existing.choice) && isRealMeal(choice)) {
+        return res.status(409).json({
+          error: 'You have already booked lunch for this day. Only one meal booking is allowed.',
+          code: 'ALREADY_BOOKED',
+          booking: existing,
+        });
+      }
+
       const { data: updated, error } = await supabaseAdmin
         .from('meal_bookings')
         .update({ choice, booked_at: bookedAt, onion_slices: savedOnionSlices })
@@ -350,20 +377,17 @@ router.post('/book', async (req, res, next) => {
       if (error) {
         if (error.code !== '23505') throw error;
 
-        const retryExisting = await findMealBooking(req.user.id, date, 'id');
-        if (!retryExisting?.id) throw error;
-
-        const { data: retryUpdated, error: retryErr } = await supabaseAdmin
-          .from('meal_bookings')
-          .update({ choice, booked_at: bookedAt, onion_slices: savedOnionSlices })
-          .eq('id', retryExisting.id)
-          .select()
-          .single();
-        if (retryErr) throw retryErr;
-        data = retryUpdated;
-      } else {
-        data = inserted;
+        const retryExisting = await findMealBooking(req.user.id, date);
+        if (retryExisting?.id) {
+          return res.status(409).json({
+            error: 'You have already booked lunch for this day. Only one meal booking is allowed.',
+            code: 'ALREADY_BOOKED',
+            booking: retryExisting,
+          });
+        }
+        throw error;
       }
+      data = inserted;
     }
 
 

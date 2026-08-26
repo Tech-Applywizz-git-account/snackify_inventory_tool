@@ -299,6 +299,22 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
+  router.post('/wallets/monthly-reset', async (_req, res, next) => {
+    try {
+      const { ensureMonthGrant } = await import('../lib/tokens.js');
+      const { data: users, error } = await d.supabaseAdmin.from('profiles').select('id');
+      if (error) throw error;
+      let granted = 0;
+      for (const u of users || []) {
+        const r = await ensureMonthGrant(u.id);
+        if (r?.granted) granted += 1;
+      }
+      res.json({ ok: true, granted, total: (users || []).length, monthly_grant: 4000 });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   return router;
 }
 

@@ -942,65 +942,35 @@ export default function MealBooking() {
               );
             }
 
-            // Next working day — Option A:
-            // If already booked → show clear "Already booked" banner, hide buttons.
-            // User must explicitly tap "Change" to reveal the choice buttons.
-            // If not booked → show buttons directly.
-            const isChanging = changingDate === selectedDate;
+            // Next working day: one booking only. If already booked, hide choice buttons.
+            const isChanging = changingDate === selectedDate && b?.choice === 'skip';
 
-            if (b && !isChanging) {
-              // ── Already booked — show confirmation state ──
-              const ui = CHOICE_UI[b.choice];
+            if (b && b.choice !== 'skip' && !isChanging) {
+              const ui = CHOICE_UI[b.choice] || CHOICE_UI.veg;
               return (
-                <div className="space-y-3">
-                  <div
-                    className={`p-4 rounded-xl border-2 ${ui.bg} ${ui.border} flex items-center justify-between gap-3`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="text-3xl">{ui.emoji}</span>
-                      <div>
-                        <div className={`font-bold text-sm ${ui.text}`}>
-                          ✅ {b.choice === 'skip' ? 'Skipped' : `${ui.label} booked`}
-                          {b.choice !== 'skip' && b.onion_slices && b.onion_slices !== 'no onion' && (
-                            <span className="ml-2 inline-flex items-center gap-0.5 px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-bold">
-                              🧅 {b.onion_slices}
-                            </span>
-                          )}
-                        </div>
-                        {b.booked_at && (
-                          <div className="text-[10px] text-slate-400 mt-0.5">
-                            Booked at{' '}
-                            {new Date(b.booked_at).toLocaleTimeString('en-IN', {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                              timeZone: 'Asia/Kolkata',
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {b.choice !== 'skip' && (
-                        <button
-                          type="button"
-                          onClick={() => openMealTicket(selectedDate)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/70 border border-slate-200 text-xs font-bold text-brand hover:bg-white"
-                        >
-                          <Ticket size={13} />
-                          Ticket
-                        </button>
-                      )}
-                      {(canBook || (canSkip && b?.choice !== 'skip')) && (
-                        <button
-                          type="button"
-                          onClick={() => setChangingDate(selectedDate)}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/70 border border-slate-200 text-xs font-bold text-slate-500 hover:bg-white"
-                        >
-                          ✏️ Change
-                        </button>
-                      )}
-                    </div>
+                <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50 p-5 text-center space-y-3">
+                  <div className="text-4xl">✅</div>
+                  <div>
+                    <div className="text-lg font-bold text-slate-800">Hey, you already booked your meal</div>
+                    <p className="mt-1 text-sm text-slate-600 leading-relaxed">
+                      Come back tomorrow to book again. Only one lunch booking is allowed per day.
+                    </p>
                   </div>
+                  <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl ${ui.bg}`}>
+                    <span className="text-2xl">{ui.emoji}</span>
+                    <span className={`font-bold text-sm ${ui.text}`}>
+                      {ui.label} lunch
+                      {b.onion_slices && b.onion_slices !== 'no onion' ? ` · 🧅 ${b.onion_slices}` : ''}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openMealTicket(selectedDate)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-emerald-200 text-sm font-bold text-brand hover:bg-white"
+                  >
+                    <Ticket size={14} />
+                    View meal ticket
+                  </button>
                 </div>
               );
             }

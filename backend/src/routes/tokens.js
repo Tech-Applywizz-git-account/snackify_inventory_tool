@@ -196,6 +196,16 @@ router.get('/print-queue', requireRole('office_boy', 'facility_manager', 'leader
   }
 });
 
+router.post('/ensure-monthly', async (req, res, next) => {
+  try {
+    const grant = await ensureMonthGrant(req.user.id);
+    const wallet = await walletForUser(req.user.id);
+    res.json({ ok: true, grant, wallet });
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.post('/grant-all', requireRole('leadership'), async (_req, res, next) => {
   try {
     const { data: users, error } = await supabaseAdmin

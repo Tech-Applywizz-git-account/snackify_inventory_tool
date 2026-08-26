@@ -1,5 +1,11 @@
 ﻿{
   "version": 2,
   "builds": [{ "src": "src/server.js", "use": "@vercel/node" }],
-  "routes": [{ "src": "/(.*)", "dest": "src/server.js" }]
+  "routes": [{ "src": "/(.*)", "dest": "src/server.js" }],
+  "crons": [
+    {
+      "path": "/api/cron/monthly-token-grant",
+      "schedule": "30 2 1 * *"
+    }
+  ]
 }

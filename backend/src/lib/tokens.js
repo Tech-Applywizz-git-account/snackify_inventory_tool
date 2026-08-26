@@ -1,15 +1,28 @@
 import { supabaseAdmin } from './supabase.js';
 
-export const MONTHLY_GRANT = 3500;
+export const MONTHLY_GRANT = 4000;
 
+// Month key rolls over at 08:00 IST on the 1st (not midnight).
 export function istMonthKey(d = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
   }).formatToParts(d);
   const m = Object.fromEntries(parts.map((p) => [p.type, p.value]));
-  return `${m.year}${m.month}`;
+  let year = Number(m.year);
+  let month = Number(m.month);
+  if (Number(m.day) === 1 && Number(m.hour) < 8) {
+    month -= 1;
+    if (month === 0) {
+      month = 12;
+      year -= 1;
+    }
+  }
+  return `${year}${String(month).padStart(2, '0')}`;
 }
 
 export function weekdayIst(dateStr) {
@@ -24,17 +37,45 @@ function norm(name) {
     .replace(/\s+/g, ' ');
 }
 
-export function matchTokenItem(catalog, name) {
+function nameKeys(name) {
   const n = norm(name);
-  if (!n || !Array.isArray(catalog)) return null;
+  const key = n
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\b\d+\s*(ml|l|ltr|litre|liter)s?\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return Array.from(new Set([n, key].filter(Boolean)));
+}
+
+const WATER_FALLBACK = {
+  sku_code: 'WATER_BOTTLE',
+  display_name: 'Water Bottle',
+  kind: 'beverage',
+  tokens: 10,
+  aliases: [
+    'water',
+    'water bottle',
+    'mineral water',
+    'mineral water (1l)',
+    'mineral water 1l',
+    'packaged water',
+    'bisleri',
+    'kinley',
+  ],
+  active: true,
+};
+
+export function matchTokenItem(catalog, name) {
+  const names = nameKeys(name);
+  if (!names.length || !Array.isArray(catalog)) return null;
   const hit =
-    catalog.find((i) => norm(i.display_name) === n)
-    || catalog.find((i) => norm(i.sku_code) === n)
-    || catalog.find((i) => (i.aliases || []).some((a) => norm(a) === n))
+    catalog.find((i) => names.includes(norm(i.display_name)))
+    || catalog.find((i) => names.includes(norm(i.sku_code)))
+    || catalog.find((i) => (i.aliases || []).some((a) => names.includes(norm(a))))
     || catalog.find((i) =>
       (i.aliases || []).some((a) => {
         const an = norm(a);
-        return an.length >= 4 && n.includes(an);
+        return an.length >= 4 && names.some((nm) => nm.includes(an) || an.includes(nm));
       })
     );
   return hit || null;
@@ -52,15 +93,60 @@ export async function loadCatalog() {
     .eq('active', true)
     .order('kind', { ascending: true });
   if (error) throw error;
-  return data || [];
+  const rows = data || [];
+  const hasWater = rows.some((i) => {
+    const sku = String(i.sku_code || '').toUpperCase();
+    const n = norm(i.display_name);
+    return sku === 'WATER_BOTTLE' || /mineral water|water bottle/.test(n);
+  });
+  let inserted = null;
+  if (!hasWater) {
+    const { data: waterRow } = await supabaseAdmin
+    .from('token_items')
+    .upsert({
+      sku_code: WATER_FALLBACK.sku_code,
+      display_name: WATER_FALLBACK.display_name,
+      kind: WATER_FALLBACK.kind,
+      tokens: WATER_FALLBACK.tokens,
+      aliases: WATER_FALLBACK.aliases,
+      active: true,
+    }, { onConflict: 'sku_code' })
+    .select()
+    .maybeSingle();
+    inserted = waterRow;
+  }
+  const merged = hasWater ? rows : (inserted ? [...rows, inserted] : [...rows, WATER_FALLBACK]);
+  const PRICE_OVERRIDES = {
+    COFFEE_REGULAR: 10,
+    CAPPUCCINO: 20,
+    LATTE: 20,
+    MILK: 10,
+    GINGER_TEA: 10,
+    ASSAM_TEA: 10,
+    LEMON_TEA: 10,
+    BADAM_MILK: 20,
+    HOT_CHOCOLATE: 25,
+    BREAD_PB: 15,
+    BREAD_JAM: 15,
+    MEAL_MON: 110,
+    MEAL_TUE: 120,
+    MEAL_WED: 140,
+    MEAL_THU: 120,
+    MEAL_FRI: 140,
+    WATER_BOTTLE: 10,
+  };
+  return merged.map((row) => {
+    const sku = String(row.sku_code || '').toUpperCase();
+    if (PRICE_OVERRIDES[sku] == null) return row;
+    return { ...row, tokens: PRICE_OVERRIDES[sku] };
+  });
 }
 
 export function attachTokenPrice(item, catalog) {
   const name = item?.frontend_name || item?.display_name || item?.item_name || item?.name || '';
-  const existing = item?.token_price ?? item?.coin_price;
-  const unit = existing != null && existing !== ''
-    ? Number(existing) || 0
-    : unitTokensForName(catalog, name);
+  const fromCatalog = unitTokensForName(catalog, name);
+  const existing = Number(item?.token_price ?? item?.coin_price);
+  const unit = fromCatalog > 0 ? fromCatalog : (existing > 0 ? existing : 0);
   return { ...item, token_price: unit, coin_price: unit };
 }
 
@@ -84,6 +170,33 @@ function tokenError(error) {
   return err;
 }
 
+async function topUpGrantIfNeeded(userId, month, bal) {
+  const { data: rows } = await supabaseAdmin
+    .from('token_usage')
+    .select('tokens_delta')
+    .eq('user_id', userId)
+    .eq('reason', 'monthly_grant')
+    .like('idempotency_key', `grant:${userId}:${month}%`);
+  const grantedAmt = (rows || []).reduce((s, r) => s + Number(r.tokens_delta || 0), 0);
+  if (grantedAmt >= MONTHLY_GRANT) {
+    return { balance: bal, granted: false };
+  }
+  const add = MONTHLY_GRANT - grantedAmt;
+  await supabaseAdmin.from('token_usage').insert({
+    user_id: userId,
+    qty: 1,
+    tokens_delta: add,
+    balance_after: bal + add,
+    reason: 'monthly_grant',
+    ref_type: 'grant',
+    idempotency_key: `grant:${userId}:${month}:to4000`,
+    print_status: 'none',
+  }).then(() => {}).catch(() => {});
+  const next = bal + add;
+  await supabaseAdmin.from('profiles').update({ token_balance: next }).eq('id', userId);
+  return { balance: next, granted: true };
+}
+
 async function jsEnsureGrant(userId) {
   const month = istMonthKey();
   const { data: profile, error } = await supabaseAdmin
@@ -94,7 +207,8 @@ async function jsEnsureGrant(userId) {
   if (error) throw error;
   let bal = Number(profile.token_balance) || 0;
   if (profile.token_month === month) {
-    return { balance: bal, month, granted: false, monthly_grant: MONTHLY_GRANT };
+    const topped = await topUpGrantIfNeeded(userId, month, bal);
+    return { balance: topped.balance, month, granted: topped.granted, monthly_grant: MONTHLY_GRANT };
   }
   if (bal > 0) {
     await supabaseAdmin.from('token_usage').insert({
@@ -325,7 +439,7 @@ export async function queuePrint(usageId) {
 export async function walletForUser(userId) {
   const grant = await ensureMonthGrant(userId);
   const month = grant.month || istMonthKey();
-  const start = `${month.slice(0, 4)}-${month.slice(4)}-01T00:00:00+05:30`;
+  const start = `${month.slice(0, 4)}-${month.slice(4)}-01T08:00:00+05:30`;
   const { data: spentRows } = await supabaseAdmin
     .from('token_usage')
     .select('tokens_delta, reason')
