@@ -352,7 +352,45 @@ function hasBreadDependency(dependencies) {
 
 function isBreadName(name) {
   const n = String(name || '').toLowerCase();
-  return n === 'bread' || n.includes('bread') || n.includes('brd');
+  if (/peanut|jam|sandwich/.test(n)) return false;
+  return n === 'bread' || n.includes('bread') || /\bbrd[\d_-]/i.test(n) || /^brd[\d_-]/i.test(n);
+}
+
+function breadServingCount(row) {
+  if (!row) return null;
+  if (row.stock_servings != null && row.stock_servings !== '') {
+    const n = Number(row.stock_servings);
+    return Number.isNaN(n) ? null : n;
+  }
+  if (row.stock_today != null && row.stock_today !== '') {
+    const n = Number(row.stock_today);
+    return Number.isNaN(n) ? null : n;
+  }
+  return null;
+}
+
+async function findInStockBreadItem(columns, neededServings = 1) {
+  const { data } = await supabaseAdmin
+    .from('cafeteria_items')
+    .select(columns);
+  const breads = (data || []).filter(
+    (row) =>
+      isBreadName(row.item_name) || isBreadName(row.display_name) || isBreadName(row.frontend_name)
+  );
+  return (
+    breads.find((row) => {
+      const servings = breadServingCount(row);
+      return servings == null || servings >= neededServings;
+    }) || null
+  );
+}
+
+async function resolveBreadItem(breadType, columns, neededServings = 1) {
+  if (breadType) {
+    const preferred = await findCafeteriaItemForOrder(breadType, columns);
+    if (preferred) return preferred;
+  }
+  return findInStockBreadItem(columns, neededServings);
 }
 
 async function findCafeteriaItemForOrder(itemName, columns) {
@@ -1548,7 +1586,7 @@ async function checkStockOnly(user, itemName, qty, breadType) {
 
   const itemRow = await findCafeteriaItemForOrder(
     itemName,
-    'stock_today, stock_servings'
+    'item_name, display_name, frontend_name, stock_today, stock_servings, dependencies'
   );
 
   if (!itemRow) {
@@ -1563,6 +1601,27 @@ async function checkStockOnly(user, itemName, qty, breadType) {
   if (effectiveStock !== null && effectiveStock !== undefined && effectiveStock < qty) {
     const userTone = await getUserTone(user.id);
     throw new Error(getOOSMessage(userTone, displayOrderItemName(itemName, itemRow)));
+  }
+
+  const isSandwich = isSandwichSpread(itemName) || isSandwichSpread(itemRow);
+  const requiresBread = isSandwich || hasBreadDependency(itemRow.dependencies);
+  if (requiresBread) {
+    const neededBread = qty * 2;
+    const breadRow = await resolveBreadItem(
+      breadType,
+      'item_name, display_name, frontend_name, stock_today, stock_servings',
+      neededBread
+    );
+    if (!breadRow) {
+      const userTone = await getUserTone(user.id);
+      throw new Error(getDependencyMessage(userTone, displayOrderItemName(itemName, itemRow), 'Bread'));
+    }
+    const breadStock = breadServingCount(breadRow);
+    if (breadStock != null && breadStock < neededBread) {
+      const userTone = await getUserTone(user.id);
+      const displayDep = breadRow.display_name || breadRow.item_name || 'Bread';
+      throw new Error(getDependencyMessage(userTone, displayOrderItemName(itemName, itemRow), displayDep));
+    }
   }
 
   if (isBeverageUsingStirrer(itemName)) {
@@ -1738,23 +1797,18 @@ async function deductStockForRequest(user, itemName, qty, instruction, breadType
   // 4. Check dependencies (like bread)
   const baseDeps = Array.isArray(itemRow.dependencies) ? itemRow.dependencies : [];
   const requiresBread = isSandwich || hasBreadDependency(baseDeps);
-  if (requiresBread && !breadType) {
-    const userTone = await getUserTone(user.id);
-    throw new Error(getDependencyMessage(userTone, displayItemName, 'Bread'));
-  }
   const deps = requiresBread && !hasBreadDependency(baseDeps) ? [...baseDeps, 'Bread'] : baseDeps;
   const depUpdates = [];
   if (Array.isArray(deps) && deps.length > 0) {
     for (const depName of deps) {
-      const lookupName =
-        String(depName).toLowerCase() === 'bread' && breadType ? breadType : depName;
-      const depItem = await findCafeteriaItemForOrder(
-        lookupName,
-        'id, item_name, display_name, frontend_name, stock_today, stock_servings'
-      );
+      const breadCols = 'id, item_name, display_name, frontend_name, stock_today, stock_servings';
+      const isBreadDep = String(depName).toLowerCase() === 'bread';
+      const depItem = isBreadDep
+        ? await resolveBreadItem(breadType, breadCols, qty * 2)
+        : await findCafeteriaItemForOrder(depName, breadCols);
 
       if (!depItem) {
-        if (String(depName).toLowerCase() === 'bread') {
+        if (isBreadDep) {
           const userTone = await getUserTone(user.id);
           throw new Error(getDependencyMessage(userTone, displayItemName, 'Bread'));
         }
@@ -1909,12 +1963,11 @@ async function restoreSingleItemStock(itemName, rawQty, isBoth, breadType) {
 
   if (Array.isArray(deps) && deps.length > 0) {
     for (const depName of deps) {
-      const lookupName =
-        String(depName).toLowerCase() === 'bread' && breadType ? breadType : depName;
-      const depItem = await findCafeteriaItemForOrder(
-        lookupName,
-        'id, item_name, display_name, frontend_name, stock_today, stock_servings'
-      );
+      const breadCols = 'id, item_name, display_name, frontend_name, stock_today, stock_servings';
+      const isBreadDep = String(depName).toLowerCase() === 'bread';
+      const depItem = isBreadDep
+        ? await resolveBreadItem(breadType, breadCols, 1)
+        : await findCafeteriaItemForOrder(depName, breadCols);
 
       if (!depItem) continue;
 
