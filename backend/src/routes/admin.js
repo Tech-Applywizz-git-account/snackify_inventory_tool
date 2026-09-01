@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
+import { lookupEmployeeIdByEmail } from '../lib/hrms.js';
 
 const roleEnum = z.enum(['facility_manager', 'finance', 'leadership', 'staff', 'office_boy']);
 
@@ -133,14 +134,40 @@ export function createAdminRouter(overrides = {}) {
   router.patch('/users/:id/cafeteria-card', async (req, res, next) => {
     try {
       const schema = z.object({
+        source: z.enum(['manual', 'hrms']).optional(),
+        last4: z.union([z.string(), z.null()]).optional(),
         cafeteria_card_number: z.union([z.string(), z.null()]).optional(),
       });
       const parsed = schema.parse(req.body);
-      const digits = String(parsed.cafeteria_card_number || '').replace(/\D/g, '');
-      if (digits && digits.length !== 12) {
-        return res.status(400).json({ error: 'Card number must be exactly 12 digits' });
+      const source = parsed.source || 'manual';
+      const normalize = (v) => String(v || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 24);
+
+      let cafeteria_card_number = normalize(parsed.cafeteria_card_number || parsed.last4);
+
+      if (source === 'hrms' && !cafeteria_card_number) {
+        const { data: usersList } = await d.supabaseAdmin.auth.admin.listUsers({
+          page: 1,
+          perPage: 500,
+        });
+        const email = usersList?.users?.find((u) => u.id === req.params.id)?.email || '';
+        const hit = await lookupEmployeeIdByEmail(email);
+        cafeteria_card_number = normalize(hit.employee_id || hit.last4);
       }
-      const cafeteria_card_number = digits || null;
+
+      if (!cafeteria_card_number) {
+        const { data, error } = await d.supabaseAdmin
+          .from('profiles')
+          .update({ cafeteria_card_number: null })
+          .eq('id', req.params.id)
+          .select('id, full_name, cafeteria_card_number')
+          .single();
+        if (error) throw error;
+        return res.json(data);
+      }
+      if (cafeteria_card_number.length < 1) {
+        return res.status(400).json({ error: 'Enter a card number (letters and digits).' });
+      }
+
       const { data, error } = await d.supabaseAdmin
         .from('profiles')
         .update({ cafeteria_card_number })
@@ -153,7 +180,7 @@ export function createAdminRouter(overrides = {}) {
         }
         throw error;
       }
-      res.json(data);
+      res.json({ ...data, source });
     } catch (e) {
       next(e);
     }

@@ -108,10 +108,14 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ preferred_name: preferredName }),
     }),
-  setUserCafeteriaCard: (userId, cafeteriaCardNumber) =>
+  setUserCafeteriaCard: (userId, cafeteriaCardNumber, extra = {}) =>
     request(`/api/admin/users/${userId}/cafeteria-card`, {
       method: 'PATCH',
-      body: JSON.stringify({ cafeteria_card_number: cafeteriaCardNumber }),
+      body: JSON.stringify({
+        cafeteria_card_number: cafeteriaCardNumber,
+        source: extra.source,
+        last4: extra.last4,
+      }),
     }),
   updateCardStyle: (body) =>
     request('/api/tokens/card-style', { method: 'PATCH', body: JSON.stringify(body) }),

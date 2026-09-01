@@ -12,6 +12,10 @@ export function errorHandler(err, _req, res, _next) {
 
   // eslint-disable-next-line no-console
   console.error('[error]', err);
+  const raw = String(err.message || err.details || '');
+  if (/invalid input syntax for type uuid/i.test(raw)) {
+    return res.status(400).json({ error: 'Order not found' });
+  }
   const status = err.status || 500;
   res.status(status).json({
     error: err.message || 'Internal server error',

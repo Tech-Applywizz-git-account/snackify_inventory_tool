@@ -36,10 +36,10 @@ async function cardForUser(userId) {
           .select('cafeteria_card_number, preferred_name, full_name')
           .eq('id', userId)
           .maybeSingle();
-        const digits = String(retry.data?.cafeteria_card_number || '').replace(/\D/g, '');
+        const code = String(retry.data?.cafeteria_card_number || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
         return {
-          cafeteria_card_number: digits.length === 12 ? digits : null,
-          card_masked: digits.length === 12 ? `xxxx xxxx ${digits.slice(-4)}` : null,
+          cafeteria_card_number: code || null,
+          card_masked: code ? code.replace(/(.{4})/g, '$1 ').trim() : null,
           cardholder: retry.data?.preferred_name || retry.data?.full_name || '',
           color: 'neon',
           display_name: retry.data?.preferred_name || retry.data?.full_name || '',
@@ -47,10 +47,10 @@ async function cardForUser(userId) {
       }
       return empty;
     }
-    const digits = String(data?.cafeteria_card_number || '').replace(/\D/g, '');
+    const code = String(data?.cafeteria_card_number || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
     return {
-      cafeteria_card_number: digits.length === 12 ? digits : null,
-      card_masked: digits.length === 12 ? `xxxx xxxx ${digits.slice(-4)}` : null,
+      cafeteria_card_number: code || null,
+      card_masked: code ? code.replace(/(.{4})/g, '$1 ').trim() : null,
       cardholder: data?.cafeteria_card_display_name || data?.preferred_name || data?.full_name || '',
       color: data?.cafeteria_card_color || 'neon',
       display_name: data?.cafeteria_card_display_name || data?.preferred_name || data?.full_name || '',
@@ -133,9 +133,33 @@ router.get('/bootstrap', async (req, res, next) => {
       .eq('meal_date', mealDate)
       .maybeSingle();
 
+    let profileRow = null;
+    {
+      const first = await supabaseAdmin
+        .from('profiles')
+        .select('preferred_name, employee_code, full_name')
+        .eq('id', req.user.id)
+        .maybeSingle();
+      if (first.error && /employee_code/i.test(first.error.message || '')) {
+        const retry = await supabaseAdmin
+          .from('profiles')
+          .select('preferred_name, full_name')
+          .eq('id', req.user.id)
+          .maybeSingle();
+        profileRow = retry.data;
+      } else {
+        profileRow = first.data;
+      }
+    }
+
     res.json({
       wallet,
       card,
+      profile: {
+        preferred_name: profileRow?.preferred_name || '',
+        employee_code: profileRow?.employee_code || '',
+        full_name: profileRow?.full_name || '',
+      },
       catalog,
       menu,
       open_orders: openOrders || [],
@@ -147,6 +171,43 @@ router.get('/bootstrap', async (req, res, next) => {
         booking: mealBooking || null,
       },
       fetched_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.patch('/profile', async (req, res, next) => {
+  try {
+    const preferredName = String(req.body?.preferred_name || '').trim().slice(0, 50);
+    const employeeCode = String(req.body?.employee_code || '').trim().slice(0, 32);
+    if (!preferredName) {
+      return res.status(400).json({ error: 'Enter a username.' });
+    }
+    let { data, error } = await supabaseAdmin
+      .from('profiles')
+      .update({
+        preferred_name: preferredName,
+        ...(employeeCode ? { employee_code: employeeCode } : {}),
+      })
+      .eq('id', req.user.id)
+      .select('id, preferred_name, full_name, employee_code')
+      .single();
+    if (error && /employee_code/i.test(error.message || '')) {
+      const retry = await supabaseAdmin
+        .from('profiles')
+        .update({ preferred_name: preferredName })
+        .eq('id', req.user.id)
+        .select('id, preferred_name, full_name')
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
+    if (error) throw error;
+    res.json({
+      ok: true,
+      preferred_name: data?.preferred_name || preferredName,
+      employee_code: data?.employee_code || employeeCode || null,
     });
   } catch (e) {
     next(e);

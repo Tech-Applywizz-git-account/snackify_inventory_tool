@@ -65,6 +65,12 @@ const WATER_FALLBACK = {
   active: true,
 };
 
+const EXTRA_CATALOG_FALLBACKS = [
+  { sku_code: 'ESPRESSO', display_name: 'Espresso', kind: 'beverage', tokens: 10, aliases: ['espresso'], active: true },
+  { sku_code: 'GREEN_TEA', display_name: 'Green Tea', kind: 'beverage', tokens: 25, aliases: ['green tea', 'green tea sachet'], active: true },
+  { sku_code: 'ELAICHI_TEA', display_name: 'Elaichi Tea', kind: 'beverage', tokens: 10, aliases: ['elaichi tea', 'elaichi'], active: true },
+];
+
 export function matchTokenItem(catalog, name) {
   const names = nameKeys(name);
   if (!names.length || !Array.isArray(catalog)) return null;
@@ -115,18 +121,28 @@ export async function loadCatalog() {
     .maybeSingle();
     inserted = waterRow;
   }
-  const merged = hasWater ? rows : (inserted ? [...rows, inserted] : [...rows, WATER_FALLBACK]);
+  const merged = [...(hasWater ? rows : (inserted ? [...rows, inserted] : [...rows, WATER_FALLBACK]))];
+  for (const fb of EXTRA_CATALOG_FALLBACKS) {
+    const exists = merged.some((i) => {
+      const sku = String(i.sku_code || '').toUpperCase();
+      return sku === fb.sku_code || norm(i.display_name) === norm(fb.display_name);
+    });
+    if (!exists) merged.push(fb);
+  }
   const PRICE_OVERRIDES = {
     COFFEE_REGULAR: 10,
+    ESPRESSO: 10,
     CAPPUCCINO: 20,
     LATTE: 20,
+    GREEN_TEA: 25,
+    ELAICHI_TEA: 10,
     MILK: 10,
     GINGER_TEA: 10,
     ASSAM_TEA: 10,
     LEMON_TEA: 10,
     BADAM_MILK: 20,
     HOT_CHOCOLATE: 25,
-    BREAD_PB: 15,
+    BREAD_PB: 30,
     BREAD_JAM: 15,
     MEAL_MON: 110,
     MEAL_TUE: 120,
@@ -264,8 +280,9 @@ export async function spendTokens({ userId, idempotencyKey, refType, refId, line
   const priced = (lines || []).map((l) => {
     const qty = Math.max(1, parseInt(l.qty, 10) || 1);
     const hit = matchTokenItem(catalog, l.name);
-    const unit = hit ? Number(hit.tokens) || 0 : 0;
-    if (!hit || unit <= 0) {
+    const fromLine = Number(l.tokens || l.unit_tokens || l.coinPrice) || 0;
+    const unit = (hit ? Number(hit.tokens) || 0 : 0) || fromLine;
+    if (unit <= 0) {
       const err = new Error(`No coin price in catalog for ${l.name}.`);
       err.status = 400;
       throw err;
@@ -363,7 +380,7 @@ export async function refundTokens({ userId, refType, refId }) {
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!spend) return { tokens_refunded: 0, skipped: true };
+  if (!spend) return { tokens_refunded: 0, skipped: true, lines: [] };
   const credit = Math.abs(spend.tokens_delta);
   const { data: profile } = await supabaseAdmin
     .from('profiles')
@@ -390,7 +407,17 @@ export async function refundTokens({ userId, refType, refId }) {
     .select()
     .single();
   if (uErr?.code === '23505') {
-    return { tokens_refunded: credit, idempotent: true };
+    const { data: existing } = await supabaseAdmin
+      .from('token_usage')
+      .select('tokens_delta, balance_after, lines')
+      .eq('idempotency_key', key)
+      .maybeSingle();
+    return {
+      tokens_refunded: Math.abs(existing?.tokens_delta || credit),
+      balance_after: Number(existing?.balance_after ?? balanceAfter) || 0,
+      lines: existing?.lines || spend.lines || [],
+      idempotent: true,
+    };
   }
   if (uErr) throw uErr;
   await supabaseAdmin.from('profiles').update({ token_balance: balanceAfter }).eq('id', userId);
@@ -398,7 +425,7 @@ export async function refundTokens({ userId, refType, refId }) {
     .from('token_usage')
     .update({ print_status: 'cancelled', print_retryable: false })
     .eq('id', spend.id);
-  return { usage_id: usage.id, tokens_refunded: credit, balance_after: balanceAfter };
+  return { usage_id: usage.id, tokens_refunded: credit, balance_after: balanceAfter, lines: spend.lines };
 }
 
 export async function applyMealTokens({ userId, bookingId, mealDate, choice }) {

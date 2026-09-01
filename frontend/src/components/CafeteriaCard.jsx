@@ -1,76 +1,64 @@
-const THEMES = {
-  neon: { wrap: 'from-cyan-400 via-fuchsia-500 to-pink-400', bg: 'bg-[#0B041C]', accent: 'text-cyan-300', glow: 'bg-cyan-400/20' },
-  gold: { wrap: 'from-amber-300 via-yellow-500 to-orange-400', bg: 'bg-[#1C1408]', accent: 'text-amber-300', glow: 'bg-amber-400/20' },
-  emerald: { wrap: 'from-emerald-300 via-teal-500 to-green-400', bg: 'bg-[#04201A]', accent: 'text-emerald-300', glow: 'bg-emerald-400/20' },
-  ruby: { wrap: 'from-rose-400 via-pink-500 to-red-400', bg: 'bg-[#1C0510]', accent: 'text-rose-300', glow: 'bg-rose-400/20' },
-  ocean: { wrap: 'from-sky-400 via-blue-500 to-cyan-400', bg: 'bg-[#041525]', accent: 'text-sky-300', glow: 'bg-sky-400/20' },
-  midnight: { wrap: 'from-slate-300 via-slate-500 to-zinc-400', bg: 'bg-[#020617]', accent: 'text-slate-200', glow: 'bg-slate-400/20' },
-};
+import awIcon from '../assets/aw-icon.png';
 
-export const CARD_THEME_LIST = Object.keys(THEMES);
+export function formatCardNumber(raw) {
+  const s = String(raw || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  if (!s) return '';
+  return s.replace(/(.{4})/g, '$1 ').trim();
+}
 
 export function maskCafeteriaCard(num) {
-  const d = String(num || '').replace(/\D/g, '');
-  if (d.length !== 12) return 'xxxx xxxx ----';
-  return `xxxx xxxx ${d.slice(-4)}`;
+  return formatCardNumber(num) || 'XXXX XXXX XXXX XXXX';
 }
 
 export default function CafeteriaCard({
   cardNumber,
   cardMasked,
   cardholder = '',
-  balance = 0,
-  color = 'neon',
   onClick,
 }) {
-  const theme = THEMES[color] || THEMES.neon;
-  const digits = String(cardNumber || '').replace(/\D/g, '');
-  const pan = cardMasked || maskCafeteriaCard(digits);
-  const assigned = digits.length === 12 || (cardMasked && !String(cardMasked).includes('----'));
+  const raw = String(cardNumber || cardMasked || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const pan = formatCardNumber(raw) || 'XXXX XXXX XXXX XXXX';
+  const assigned = raw.length > 0;
+  const holder = String(cardholder || 'Applywizzian').slice(0, 24);
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`relative w-full text-left overflow-hidden rounded-[22px] p-[1.5px] bg-gradient-to-br ${theme.wrap} shadow-[0_12px_40px_rgba(34,211,238,0.28)] ${onClick ? 'cursor-pointer' : 'cursor-default'}`}
+      className={`relative w-full text-left ${onClick ? 'cursor-pointer' : 'cursor-default'}`}
     >
-      <div className={`relative rounded-[20.5px] px-5 py-4 min-h-[196px] text-white ${theme.bg}`}>
-        <div className={`absolute -right-8 -top-10 h-36 w-36 rounded-full ${theme.glow} blur-2xl`} />
-        <div className="relative flex items-start justify-between">
-          <div>
-            <div className="text-[10px] tracking-[0.22em] font-bold text-violet-200">APPLYWIZZ</div>
-            <div className={`text-[11px] tracking-[0.16em] font-bold mt-1 ${theme.accent}`}>
-              DIGITAL CAFETERIA CARD
-            </div>
+      <div
+        className="relative w-full max-w-[380px] rounded-[28px] p-[25px] overflow-hidden"
+        style={{
+          background:
+  'radial-gradient(circle at 0% 0%, rgba(47,123,255,0.7), transparent 55%), radial-gradient(circle at 100% 100%, rgba(182,240,0,0.7), transparent 55%), linear-gradient(135deg, #0B1B3A 0%, #0B1220 50%, #14240F 100%)',
+
+          boxShadow: '0 5px 10px rgba(0,0,0,0.1)',
+        }}
+      >
+        <header className="flex items-center justify-between gap-3">
+          <span className="flex items-center min-w-0">
+            <img src={awIcon} alt="" className="h-12 w-12 rounded-[10px] object-cover mr-2.5 shrink-0" />
+            <h5 className="text-[13px] leading-4 font-normal text-white">
+              Enougher Applywizz PVT LTD
+            </h5>
+          </span>
+        </header>
+        <div className="mt-10 flex justify-between items-end gap-3">
+          <div className="min-w-0">
+            <h6 className="text-[10px] font-normal text-white">Card Number</h6>
+            <h5 className="mt-1 text-lg font-normal tracking-wide text-white">{pan}</h5>
+            <h5 className="mt-5 text-base font-normal text-white truncate">{holder}</h5>
           </div>
-          <div className="h-8 w-8 rounded-full border-2 border-white/50" />
-        </div>
-        <div className="relative mt-5 h-7 w-10 rounded-md bg-gradient-to-br from-amber-200 to-amber-500" />
-        <div className="relative mt-6 font-mono text-[22px] tracking-[0.28em] font-semibold">
-          {pan}
-        </div>
-        <div className="relative mt-5 flex items-end justify-between gap-3">
-          <div>
-            <div className="text-[9px] tracking-[0.16em] text-slate-400">CARDHOLDER</div>
-            <div className="text-sm font-bold uppercase mt-0.5">
-              {(cardholder || 'Applywizzian').slice(0, 22)}
-            </div>
-          </div>
-          <div>
-            <div className="text-[9px] tracking-[0.16em] text-slate-400">EXPIRY</div>
-            <div className="text-sm font-bold mt-0.5">NO EXPIRY</div>
-          </div>
-          <div className="text-right">
-            <div className="text-[9px] tracking-[0.16em] text-slate-400">COINS</div>
-            <div className={`text-lg font-bold ${theme.accent}`}>{Number(balance) || 0}</div>
+          <div className="text-right shrink-0">
+            <h6 className="text-[10px] font-normal text-white">Valid Thru</h6>
+            <h5 className="mt-1 text-base font-normal text-white">NO EXPIRY</h5>
           </div>
         </div>
-        {!assigned ? (
-          <div className="relative mt-3 text-[11px] text-slate-400">
-            Admin will assign your 12-digit card number.
-          </div>
-        ) : null}
       </div>
+      {!assigned ? (
+        <div className="mt-3 text-[11px] text-slate-400">Admin will assign your card number.</div>
+      ) : null}
     </button>
   );
 }

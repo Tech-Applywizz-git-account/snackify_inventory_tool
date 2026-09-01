@@ -21,7 +21,7 @@ INSERT INTO public.token_items (sku_code, display_name, kind, tokens, aliases, w
     ARRAY['badam milk','badam','badam sachet'], NULL),
   ('HOT_CHOCOLATE', 'Hot Chocolate', 'beverage', 25,
     ARRAY['hot chocolate'], NULL),
-  ('BREAD_PB', 'Bread + Peanut Butter', 'snack', 15,
+  ('BREAD_PB', 'Bread + Peanut Butter', 'snack', 30,
     ARRAY['peanut butter sandwich','bread + peanut butter','bread + peanut','peanut butter'], NULL),
   ('BREAD_JAM', 'Bread + Jam', 'snack', 15,
     ARRAY['mix fruit jam sandwich','pineapple jam sandwich','jam sandwich','bread + jam','jam'], NULL),

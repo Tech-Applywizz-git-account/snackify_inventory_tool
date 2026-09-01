@@ -181,19 +181,30 @@ export default function Admin() {
   }
 
   async function onChangeCafeteriaCard(user, value) {
-    const digits = String(value || '').replace(/\D/g, '');
-    const current = String(user.cafeteria_card_number || '').replace(/\D/g, '');
-    if (digits === current) return;
-    if (digits && digits.length !== 12) {
-      setErr('Cafeteria card must be exactly 12 digits.');
-      return;
-    }
+    const next = String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 24);
+    const current = String(user.cafeteria_card_number || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    if (next === current) return;
     setBusy(true);
     setErr('');
     setOkMsg('');
     try {
-      await api.setUserCafeteriaCard(user.id, digits || null);
+      await api.setUserCafeteriaCard(user.id, next || null, { source: 'manual' });
       setOkMsg(`Digital cafeteria card updated for ${user.full_name || user.email || 'user'}.`);
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onFillCardFromHrms(user) {
+    setBusy(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      await api.setUserCafeteriaCard(user.id, null, { source: 'hrms' });
+      setOkMsg(`Card number filled from HRMS for ${user.full_name || user.email || 'user'}.`);
       await load();
     } catch (e) {
       setErr(e.message);
@@ -277,8 +288,8 @@ export default function Admin() {
       <div>
         <h1 className="text-2xl font-semibold">Admin · Users</h1>
         <p className="text-sm text-slate-500">
-          Invite colleagues, assign access, and add each person&apos;s 12-digit Applywizz Digital Cafeteria Card.
-          Employees see it as <span className="font-mono">xxxx xxxx 0123</span>.
+          Invite colleagues, assign access, and set each person&apos;s cafeteria card number
+          (letters and digits, or fill from HRMS by email).
         </p>
       </div>
 
@@ -364,24 +375,29 @@ export default function Admin() {
                       />
                     </td>
                     <td className="py-2 pr-3">
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={14}
-                        placeholder="xxxx xxxx 0123"
-                        className="input py-1 px-2 text-xs w-32 font-mono tracking-wide"
-                        defaultValue={
-                          u.cafeteria_card_number
-                            ? String(u.cafeteria_card_number).replace(/(\d{4})(\d{4})(\d{4})/, '$1 $2 $3')
-                            : ''
-                        }
-                        key={`${u.id}-${u.cafeteria_card_number || 'none'}`}
-                        disabled={busy}
-                        onBlur={(e) => onChangeCafeteriaCard(u, e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') e.currentTarget.blur();
-                        }}
-                      />
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          maxLength={24}
+                          placeholder="letters + digits"
+                          className="input py-1 px-2 text-xs w-40 font-mono tracking-wide"
+                          defaultValue={u.cafeteria_card_number || ''}
+                          key={`${u.id}-${u.cafeteria_card_number || 'none'}`}
+                          disabled={busy}
+                          onBlur={(e) => onChangeCafeteriaCard(u, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') e.currentTarget.blur();
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn-secondary text-[10px] px-2 py-1 disabled:opacity-50"
+                          disabled={busy}
+                          onClick={() => onFillCardFromHrms(u)}
+                        >
+                          HRMS
+                        </button>
+                      </div>
                     </td>
                     <td className="py-2 pr-3 text-slate-700">{u.email || '-'}</td>
                     <td className="py-2 pr-3">

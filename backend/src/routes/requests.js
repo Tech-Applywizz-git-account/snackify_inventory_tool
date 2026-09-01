@@ -6,7 +6,7 @@ import { supabaseAdmin } from '../lib/supabase.js';
 import { postCancelToTeams, postOrderToTeams, postStockAlertToTeams } from '../lib/teams.js';
 import { sendLowStockEmail } from '../lib/microsoftGraph.js';
 import { sendPushToUsers } from './push.js';
-import { spendTokens, refundTokens, queuePrint } from '../lib/tokens.js';
+import { spendTokens, refundTokens, queuePrint, walletForUser } from '../lib/tokens.js';
 
 const router = Router();
 
@@ -41,8 +41,29 @@ function mapFulfillmentType(reqRow) {
   };
 }
 
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || "").trim(),
+  );
+}
+
+function clientOrderFields(clientOrderId) {
+  return isUuid(clientOrderId) ? { client_order_id: clientOrderId } : {};
+}
+
+async function fetchRequestById(id) {
+  if (!isUuid(id)) return { data: null, error: { message: 'Order not found', status: 404 } };
+  const { data, error } = await supabaseAdmin
+    .from('requests')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) return { data: null, error };
+  return { data: data || null, error: data ? null : { message: 'Order not found', status: 404 } };
+}
+
 async function findExistingClientOrder(userId, clientOrderId) {
-  if (!clientOrderId) return null;
+  if (!clientOrderId || !isUuid(clientOrderId)) return null;
   const { data, error } = await supabaseAdmin
     .from('requests')
     .select('*')
@@ -53,21 +74,90 @@ async function findExistingClientOrder(userId, clientOrderId) {
   return data || null;
 }
 
+function itemLabelFromLines(lines, fallback) {
+  const parts = (lines || [])
+    .map((l) => {
+      const name = String(l?.name || l?.display_name || l?.item_name || '').trim();
+      if (!name) return '';
+      const qty = Number(l.qty) || 1;
+      return qty > 1 ? `${name} ×${qty}` : name;
+    })
+    .filter(Boolean);
+  return parts.join(', ') || fallback || 'your order';
+}
+
+function notifyCoinsDeducted(userId, { item, charged, remaining, requestId }) {
+  return sendPushToUsers([userId], {
+    title: 'Coins deducted',
+    body: `Your coins ${charged} for ${item} deducted. Now available are ${remaining}.`,
+    url: requestId ? `/track/${requestId}` : '/',
+    tag: `coins-deduct-${requestId || Date.now()}`,
+  });
+}
+
+function notifyCoinsRefunded(userId, { item, refunded, remaining, requestId }) {
+  return sendPushToUsers([userId], {
+    title: 'Order cancelled',
+    body: `Your order was cancelled successfully and re-added coins for ${item} are ${refunded}. Now available coins are ${remaining}.`,
+    url: requestId ? `/track/${requestId}` : '/',
+    tag: `coins-refund-${requestId || Date.now()}`,
+  });
+}
+
+async function refundRequestCoins(order) {
+  if (!order?.id || !order.submitted_by) {
+    return { tokens_refunded: 0, balance_after: null, skipped: true };
+  }
+  try {
+    const refund = await refundTokens({
+      userId: order.submitted_by,
+      refType: 'request',
+      refId: order.id,
+    });
+    let remaining = refund?.balance_after ?? null;
+    if (remaining == null && !refund?.skipped) {
+      try {
+        remaining = (await walletForUser(order.submitted_by)).balance;
+      } catch (_) {}
+    }
+    return {
+      tokens_refunded: Number(refund?.tokens_refunded) || 0,
+      balance_after: remaining,
+      skipped: Boolean(refund?.skipped),
+      lines: refund?.lines || null,
+    };
+  } catch (e) {
+    console.error('[tokens] refund', e.message);
+    return { tokens_refunded: 0, balance_after: null, skipped: true };
+  }
+}
+
 async function chargePlacedRequest(user, requestRow, items, clientOrderId) {
   try {
-    if (clientOrderId) {
-      await supabaseAdmin
+    if (clientOrderId && isUuid(clientOrderId)) {
+      const { error } = await supabaseAdmin
         .from('requests')
         .update({ client_order_id: clientOrderId })
         .eq('id', requestRow.id);
+      if (error) console.error('[tokens] client_order_id', error.message);
     }
     const spend = await spendTokens({
       userId: user.id,
-      idempotencyKey: clientOrderId || `request:${requestRow.id}`,
+      idempotencyKey: isUuid(clientOrderId) ? clientOrderId : `request:${requestRow.id}`,
       refType: 'request',
       refId: requestRow.id,
       lines: items,
     });
+    const item = itemLabelFromLines(
+      spend.lines,
+      requestRow.parsed_item || requestRow.raw_text || 'your order',
+    );
+    notifyCoinsDeducted(user.id, {
+      item,
+      charged: spend.tokens_charged,
+      remaining: spend.balance_after,
+      requestId: requestRow.id,
+    }).catch(() => {});
     return {
       ...mapFulfillmentType(requestRow),
       tokens_charged: spend.tokens_charged,
@@ -590,6 +680,7 @@ router.post('/', async (req, res, next) => {
           status: 'confirming',
           delivery_mode: deliveryMode,
           parsed_employee_name: req.user.full_name || req.user.email || null,
+          ...clientOrderFields(clientOrderId),
         })
         .select()
         .single();
@@ -609,6 +700,7 @@ router.post('/', async (req, res, next) => {
               status: 'confirming',
               delivery_mode: deliveryMode,
               parsed_employee_name: req.user.full_name || req.user.email || null,
+              ...clientOrderFields(clientOrderId),
             })
             .select()
             .single();
@@ -621,7 +713,11 @@ router.post('/', async (req, res, next) => {
       const charged = await chargePlacedRequest(
         req.user,
         qData,
-        items.map((it) => ({ name: it.name, qty: parseInt(it.qty, 10) || 1 })),
+        items.map((it) => ({
+          name: it.name,
+          qty: parseInt(it.qty, 10) || 1,
+          tokens: Number(it.tokens || it.coinPrice || it.token_price) || 0,
+        })),
         clientOrderId
       );
       return res.status(201).json({ needs_followup: false, request: charged });
@@ -868,12 +964,7 @@ router.get('/queue-count', async (_req, res, next) => {
 // Moves order from confirming → pending/placed and fires notifications
 router.post('/:id/confirm', async (req, res, next) => {
   try {
-    // Fetch the order
-    const { data: order, error: fetchErr } = await supabaseAdmin
-      .from('requests')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
+    const { data: order, error: fetchErr } = await fetchRequestById(req.params.id);
     if (fetchErr || !order) return res.status(404).json({ error: 'Order not found' });
 
     // Only the submitter can confirm their own order
@@ -987,6 +1078,10 @@ router.get('/', async (req, res, next) => {
 // GET /api/requests/:id — for live tracking
 router.get('/:id', async (req, res, next) => {
   try {
+    if (!isUuid(req.params.id)) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
     await autoConfirmExpiredOrders().catch((err) => console.error('[AutoConfirm GET /:id]', err));
 
     const { data, error } = await supabaseAdmin
@@ -1019,11 +1114,7 @@ router.get('/:id', async (req, res, next) => {
 router.patch('/:id/status', async (req, res, next) => {
   try {
     // 1. Fetch the request to check ownership and status
-    const { data: order, error: fetchErr } = await supabaseAdmin
-      .from('requests')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
+    const { data: order, error: fetchErr } = await fetchRequestById(req.params.id);
     if (fetchErr || !order) return res.status(404).json({ error: 'Order not found' });
 
     // 2. Perform role/ownership check
@@ -1082,9 +1173,22 @@ router.patch('/:id/status', async (req, res, next) => {
       postCancelToTeams(data, 'staff').catch((e) => console.error('[Teams cancel]', e.message));
     }
 
-    // ── Restore stock on staff cancel ─────────────────────────────────────
+    let staffRefund = null;
     if (status === 'cancelled' && data) {
       await restoreStockForRequest(data);
+      staffRefund = await refundRequestCoins(data);
+      if (staffRefund.tokens_refunded > 0) {
+        const item = itemLabelFromLines(
+          staffRefund.lines,
+          data.parsed_item || data.raw_text || 'your order',
+        );
+        notifyCoinsRefunded(data.submitted_by, {
+          item,
+          refunded: staffRefund.tokens_refunded,
+          remaining: staffRefund.balance_after,
+          requestId: data.id,
+        }).catch(() => {});
+      }
     }
 
     // ── Push notification to the employee who placed the order ──────────────
@@ -1225,7 +1329,8 @@ router.patch('/:id/status', async (req, res, next) => {
         },
       };
 
-      const msg = PUSH_MESSAGES[effectiveStatus];
+      const skipGenericCancel = effectiveStatus === 'cancelled' && staffRefund?.tokens_refunded > 0;
+      const msg = skipGenericCancel ? null : PUSH_MESSAGES[effectiveStatus];
       if (msg) {
         sendPushToUsers([data.submitted_by], {
           ...msg,
@@ -1245,13 +1350,8 @@ router.patch('/:id/status', async (req, res, next) => {
 router.post('/:id/cancel', async (req, res, next) => {
   try {
     // Fetch the order
-    const { data: order, error: fetchErr } = await supabaseAdmin
-      .from('requests')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
-    if (fetchErr) throw fetchErr;
-    if (!order) return res.status(404).json({ error: 'Order not found' });
+    const { data: order, error: fetchErr } = await fetchRequestById(req.params.id);
+    if (fetchErr || !order) return res.status(404).json({ error: 'Order not found' });
 
     // Must be the owner
     if (order.submitted_by !== req.user.id) {
@@ -1289,11 +1389,19 @@ router.post('/:id/cancel', async (req, res, next) => {
       .single();
     if (error) throw error;
 
-    await refundTokens({
-      userId: req.user.id,
-      refType: 'request',
-      refId: order.id,
-    }).catch((e) => console.error('[tokens] refund on cancel', e.message));
+    const refund = await refundRequestCoins(order);
+    const item = itemLabelFromLines(
+      refund.lines,
+      order.parsed_item || order.raw_text || 'your order',
+    );
+    if (refund.tokens_refunded > 0) {
+      notifyCoinsRefunded(req.user.id, {
+        item,
+        refunded: refund.tokens_refunded,
+        remaining: refund.balance_after,
+        requestId: order.id,
+      }).catch(() => {});
+    }
 
     // ── Teams notification on self-cancel (only if order was already confirmed/sent to office boy)
     if (order.status !== 'confirming') {
@@ -1303,7 +1411,11 @@ router.post('/:id/cancel', async (req, res, next) => {
     // ── Restore stock on cancel ──────────────────────────────────────
     await restoreStockForRequest(order);
 
-    res.json(data);
+    res.json({
+      ...mapFulfillmentType(data),
+      tokens_refunded: refund.tokens_refunded,
+      balance_after: refund.balance_after,
+    });
   } catch (e) {
     next(e);
   }
