@@ -90,24 +90,40 @@ function isBlockedMealDate(dateStr) {
   return BLOCKED_MEAL_DATES.has(String(dateStr || ''));
 }
 
-// Get the next working day (Mon-Fri) from today in IST
-function getNextWorkingDay(nowDate = new Date()) {
-  const p = getISTParts(nowDate);
-  const d = new Date(Date.UTC(p.year, p.month, p.day));
-  d.setUTCDate(d.getUTCDate() + 1); // start from tomorrow
-  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
-    d.setUTCDate(d.getUTCDate() + 1); // skip weekends
-  }
+function formatUTCDateStr(d) {
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// Get the next working day (Mon-Fri) from today in IST, skipping blocked dates
+function getNextWorkingDay(nowDate = new Date()) {
+  const p = getISTParts(nowDate);
+  const d = new Date(Date.UTC(p.year, p.month, p.day));
+  d.setUTCDate(d.getUTCDate() + 1); // start from tomorrow
+  // Skip weekends and blocked meal dates (e.g. 5–7 Sep 2026 → unlocks 8 Sep)
+  while (true) {
+    const dow = d.getUTCDay();
+    const dateStr = formatUTCDateStr(d);
+    if (dow !== 0 && dow !== 6 && !isBlockedMealDate(dateStr)) break;
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return formatUTCDateStr(d);
+}
+
 /**
  * Booking window rules (IST):
- * Morning (lunch): any upcoming working day (not today/past); blocked dates closed
- * Night (dinner): today, tomorrow, or further upcoming working days
+ * Morning (lunch):
+ *   - Only next working day is bookable (blocked dates are skipped when computing next WD)
+ *   - Open 9:00 AM – 6:00 PM → can book + skip
+ *   - 6:00 PM – 8:00 PM → skip only (no new bookings)
+ *   - After 8:00 PM → locked
+ *   - Special: Fri/Sat/Sun morning → Monday meal open all day (no 6pm cut-off)
+ * Night (dinner):
+ *   - Can book today OR tomorrow
+ *   - Today: open till 2:00 PM
+ *   - Tomorrow: open 2:00 PM – 8:00 PM
  */
 function getAllowedActions(mealDate, shift = 'morning', mockDate) {
   const parts = getISTParts(mockDate || new Date());
@@ -131,9 +147,13 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
   }
 
   if (shift === 'morning') {
-    // Lunch is for upcoming days only (not same calendar day)
-    if (diffDays < 1) {
-      return { canBook: false, canSkip: false, reason: 'past' };
+    const nextWD = getNextWorkingDay(mockDate || new Date());
+    if (mealDate !== nextWD) {
+      return {
+        canBook: false,
+        canSkip: false,
+        reason: mealDate < nextWD ? 'past' : 'future_locked',
+      };
     }
 
     const targetDateObj = new Date(Date.UTC(tYear, tMonth - 1, tDay));
@@ -162,24 +182,30 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
       return { canBook: false, canSkip: true, reason: 'skip_only' };
     }
     return { canBook: true, canSkip: true, reason: 'open' };
-  }
+  } else {
+    // Night Shift (Dinner) - books for same day's dinner
+    if (diffDays === 1) {
+      if (isBlockedMealDate(mealDate)) {
+        return { canBook: false, canSkip: false, reason: 'blocked' };
+      }
+      if (currentHour >= 20) {
+        return { canBook: true, canSkip: true, reason: 'open' };
+      }
+      return { canBook: false, canSkip: false, reason: 'not_open_yet' };
+    }
 
-  // Night Shift (Dinner) — today, or any upcoming working day
-  if (diffDays >= 1) {
-    if (currentHour >= 20) {
+    if (diffDays === 0) {
+      if (currentHour >= 17) {
+        return { canBook: false, canSkip: false, reason: 'locked' };
+      }
+      if (currentHour >= 14) {
+        return { canBook: false, canSkip: true, reason: 'skip_only' };
+      }
       return { canBook: true, canSkip: true, reason: 'open' };
     }
-    return { canBook: false, canSkip: false, reason: 'not_open_yet' };
-  }
 
-  // diffDays === 0
-  if (currentHour >= 17) {
-    return { canBook: false, canSkip: false, reason: 'locked' };
+    return { canBook: false, canSkip: false, reason: 'future_locked' };
   }
-  if (currentHour >= 14) {
-    return { canBook: false, canSkip: true, reason: 'skip_only' };
-  }
-  return { canBook: true, canSkip: true, reason: 'open' };
 }
 
 // ── GET /api/meals/options?date=2026-05-21 ────────────────────────────────────
@@ -293,7 +319,7 @@ router.post('/book', async (req, res, next) => {
             .json({ error: 'After 6 PM you can only skip. Cannot change meal type.' });
         }
         const lockedMsg = {
-          past: 'You can only book lunch for upcoming working days.',
+          past: 'You can only book lunch for the next working day.',
           not_open_yet: 'Booking opens at 9:00 AM IST.',
           future_locked: 'This date is not open for booking yet.',
           blocked: 'Meal booking is not available on this date (office closed).',

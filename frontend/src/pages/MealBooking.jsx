@@ -147,10 +147,26 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
     return { canBook: false, canSkip: false, reason: 'blocked' };
   }
 
+  function getNextWorkingDay(y, m, d) {
+    const temp = new Date(Date.UTC(y, m, d));
+    temp.setUTCDate(temp.getUTCDate() + 1);
+    while (true) {
+      const dow = temp.getUTCDay();
+      const ds = `${temp.getUTCFullYear()}-${String(temp.getUTCMonth() + 1).padStart(2, '0')}-${String(temp.getUTCDate()).padStart(2, '0')}`;
+      if (dow !== 0 && dow !== 6 && !BLOCKED_MEAL_DATES.has(ds)) break;
+      temp.setUTCDate(temp.getUTCDate() + 1);
+    }
+    return `${temp.getUTCFullYear()}-${String(temp.getUTCMonth() + 1).padStart(2, '0')}-${String(temp.getUTCDate()).padStart(2, '0')}`;
+  }
+
   if (shift === 'morning') {
-    // Lunch is for upcoming days only (not same calendar day)
-    if (diffDays < 1) {
-      return { canBook: false, canSkip: false, reason: 'past' };
+    const nextWD = getNextWorkingDay(parts.year, parts.month, parts.day);
+    if (dateStr !== nextWD) {
+      return {
+        canBook: false,
+        canSkip: false,
+        reason: dateStr < nextWD ? 'past' : 'future_locked',
+      };
     }
 
     const targetDateObj = new Date(Date.UTC(tYear, tMonth - 1, tDay));
@@ -179,24 +195,27 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
       return { canBook: false, canSkip: true, reason: 'skip_only' };
     }
     return { canBook: true, canSkip: true, reason: 'open' };
-  }
+  } else {
+    // Night Shift
+    if (diffDays === 1) {
+      if (currentHour >= 20) {
+        return { canBook: true, canSkip: true, reason: 'open' };
+      }
+      return { canBook: false, canSkip: false, reason: 'not_open_yet' };
+    }
 
-  // Night Shift — today, or any upcoming working day
-  if (diffDays >= 1) {
-    if (currentHour >= 20) {
+    if (diffDays === 0) {
+      if (currentHour >= 17) {
+        return { canBook: false, canSkip: false, reason: 'locked' };
+      }
+      if (currentHour >= 14) {
+        return { canBook: false, canSkip: true, reason: 'skip_only' };
+      }
       return { canBook: true, canSkip: true, reason: 'open' };
     }
-    return { canBook: false, canSkip: false, reason: 'not_open_yet' };
-  }
 
-  // diffDays === 0
-  if (currentHour >= 17) {
-    return { canBook: false, canSkip: false, reason: 'locked' };
+    return { canBook: false, canSkip: false, reason: 'future_locked' };
   }
-  if (currentHour >= 14) {
-    return { canBook: false, canSkip: true, reason: 'skip_only' };
-  }
-  return { canBook: true, canSkip: true, reason: 'open' };
 }
 
 const CHOICE_UI = {

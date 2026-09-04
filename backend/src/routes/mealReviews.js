@@ -19,10 +19,10 @@ export const MEAL_TYPES = [
 ];
 
 export const VIBES = [
-  { key: 'slaps', label: 'Absolute slaps' },
-  { key: 'mid', label: 'Kinda mid, still good' },
-  { key: 'nah', label: 'Lowkey mid / nah' },
-  { key: 'tragic', label: 'Straight tragic' },
+  { key: 'excellent', label: 'Excellent' },
+  { key: 'good', label: 'Good' },
+  { key: 'poor', label: 'Poor' },
+  { key: 'very_bad', label: 'Very bad' },
 ];
 
 const VIBE_KEYS = new Set(VIBES.map((v) => v.key));
