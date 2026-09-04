@@ -39,10 +39,17 @@ export default function MealReviewGate() {
       } else {
         setOpen(false);
         clearReopenTimer();
+        console.info('[meal-review] popup not shown', {
+          in_window: data?.in_window,
+          already_reviewed: data?.already_reviewed,
+          skip_reason: data?.skip_reason,
+          ist_now: data?.ist_now,
+        });
       }
       return data;
-    } catch {
-      // Silent — never block the app if review API is down / migration pending
+    } catch (err) {
+      // Do not block the app, but log so missing migration / 404 is visible
+      console.warn('[meal-review] status failed — check API deploy + migration 0048', err?.message || err);
       return null;
     }
   }, [session, aal, clearReopenTimer]);

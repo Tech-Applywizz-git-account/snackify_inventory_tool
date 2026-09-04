@@ -6,9 +6,12 @@ import { requireRole } from '../middleware/auth.js';
 const router = Router();
 
 const TIMEZONE = 'Asia/Kolkata';
-const WINDOW_START_HOUR = 13; // 1:00 PM IST
-const WINDOW_END_HOUR = 14; // 2:00 PM IST (exclusive)
-const REOPEN_AFTER_SECONDS = 120;
+// Defaults: 1:00 PM – 3:00 PM IST weekdays (override with env for ops/testing)
+const WINDOW_START_HOUR = Number(process.env.MEAL_REVIEW_START_HOUR ?? 13);
+const WINDOW_END_HOUR = Number(process.env.MEAL_REVIEW_END_HOUR ?? 15);
+const REOPEN_AFTER_SECONDS = Number(process.env.MEAL_REVIEW_REOPEN_SECONDS ?? 120);
+// Set MEAL_REVIEW_FORCE_OPEN=true on the API host to always show popup (testing only)
+const FORCE_OPEN = String(process.env.MEAL_REVIEW_FORCE_OPEN || '').toLowerCase() === 'true';
 
 export const MEAL_TYPES = [
   { value: 'veg', label: 'Veg' },
@@ -83,15 +86,26 @@ function getWindowMeta(now = new Date()) {
   const mealDate = `${p.year}-${pad2(p.month + 1)}-${pad2(p.day)}`;
   const workingDay = isWorkingDayIST(now);
   const fractionalHour = p.hour + p.minute / 60 + p.second / 3600;
-  const inWindow =
+  const inClockWindow =
     workingDay && fractionalHour >= WINDOW_START_HOUR && fractionalHour < WINDOW_END_HOUR;
+  const inWindow = FORCE_OPEN || inClockWindow;
+
+  let skip_reason = null;
+  if (!inWindow) {
+    if (!workingDay) skip_reason = 'weekend';
+    else if (fractionalHour < WINDOW_START_HOUR) skip_reason = 'before_window';
+    else skip_reason = 'after_window';
+  }
 
   return {
     meal_date: mealDate,
     timezone: TIMEZONE,
     in_window: inWindow,
-    window_starts_at: istWallTimeToUtcIso(p.year, p.month, p.day, WINDOW_START_HOUR),
-    window_ends_at: istWallTimeToUtcIso(p.year, p.month, p.day, WINDOW_END_HOUR),
+    force_open: FORCE_OPEN,
+    skip_reason,
+    ist_now: `${pad2(p.hour)}:${pad2(p.minute)}:${pad2(p.second)}`,
+    window_starts_at: istWallTimeToUtcIso(p.year, p.month, p.day, Math.floor(WINDOW_START_HOUR)),
+    window_ends_at: istWallTimeToUtcIso(p.year, p.month, p.day, Math.floor(WINDOW_END_HOUR)),
     reopen_after_seconds: REOPEN_AFTER_SECONDS,
   };
 }
@@ -186,7 +200,7 @@ router.post('/', async (req, res, next) => {
     const window = getWindowMeta();
     if (!window.in_window) {
       return res.status(400).json({
-        error: 'Meal review is only open weekdays 1:00 PM–2:00 PM IST',
+        error: `Meal review is only open weekdays ${WINDOW_START_HOUR}:00–${WINDOW_END_HOUR}:00 IST`,
         ...window,
       });
     }

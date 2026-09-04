@@ -48,6 +48,9 @@ function getISTParts(dateObj = new Date()) {
   }
 }
 
+/** Dates closed for meal booking (holidays / office closed). */
+const BLOCKED_MEAL_DATES = new Set(['2026-09-05', '2026-09-06', '2026-09-07']);
+
 function getOpeningTimeLabel(mealDateStr, shift) {
   const [year, month, day] = mealDateStr.split('-').map(Number);
   const mealDateObj = new Date(Date.UTC(year, month - 1, day));
@@ -140,23 +143,14 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
     return { canBook: false, canSkip: false, reason: 'past' };
   }
 
-  function getNextWorkingDay(y, m, d) {
-    const temp = new Date(Date.UTC(y, m, d));
-    temp.setUTCDate(temp.getUTCDate() + 1);
-    while (temp.getUTCDay() === 0 || temp.getUTCDay() === 6) {
-      temp.setUTCDate(temp.getUTCDate() + 1);
-    }
-    return `${temp.getUTCFullYear()}-${String(temp.getUTCMonth() + 1).padStart(2, '0')}-${String(temp.getUTCDate()).padStart(2, '0')}`;
+  if (BLOCKED_MEAL_DATES.has(dateStr)) {
+    return { canBook: false, canSkip: false, reason: 'blocked' };
   }
 
   if (shift === 'morning') {
-    const nextWD = getNextWorkingDay(parts.year, parts.month, parts.day);
-    if (dateStr !== nextWD) {
-      return {
-        canBook: false,
-        canSkip: false,
-        reason: dateStr < nextWD ? 'past' : 'future_locked',
-      };
+    // Lunch is for upcoming days only (not same calendar day)
+    if (diffDays < 1) {
+      return { canBook: false, canSkip: false, reason: 'past' };
     }
 
     const targetDateObj = new Date(Date.UTC(tYear, tMonth - 1, tDay));
@@ -185,27 +179,24 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
       return { canBook: false, canSkip: true, reason: 'skip_only' };
     }
     return { canBook: true, canSkip: true, reason: 'open' };
-  } else {
-    // Night Shift
-    if (diffDays === 1) {
-      if (currentHour >= 20) {
-        return { canBook: true, canSkip: true, reason: 'open' };
-      }
-      return { canBook: false, canSkip: false, reason: 'not_open_yet' };
-    }
+  }
 
-    if (diffDays === 0) {
-      if (currentHour >= 17) {
-        return { canBook: false, canSkip: false, reason: 'locked' };
-      }
-      if (currentHour >= 14) {
-        return { canBook: false, canSkip: true, reason: 'skip_only' };
-      }
+  // Night Shift — today, or any upcoming working day
+  if (diffDays >= 1) {
+    if (currentHour >= 20) {
       return { canBook: true, canSkip: true, reason: 'open' };
     }
-
-    return { canBook: false, canSkip: false, reason: 'future_locked' };
+    return { canBook: false, canSkip: false, reason: 'not_open_yet' };
   }
+
+  // diffDays === 0
+  if (currentHour >= 17) {
+    return { canBook: false, canSkip: false, reason: 'locked' };
+  }
+  if (currentHour >= 14) {
+    return { canBook: false, canSkip: true, reason: 'skip_only' };
+  }
+  return { canBook: true, canSkip: true, reason: 'open' };
 }
 
 const CHOICE_UI = {
@@ -797,11 +788,12 @@ export default function MealBooking() {
 
             const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
             const b = getBookingForDate(dateStr);
-            const isPast = dateObj < today || dateObj.getTime() === today.getTime();
+            const isPast = dateObj < today;
             const isToday = dateObj.getTime() === today.getTime();
             const isSelected = selectedDate === dateStr;
             const bStatus = getBookingStatus(dateStr, userPrefs.shift, now);
             const isBookable = bStatus.canBook || bStatus.canSkip;
+            const isBlocked = bStatus.reason === 'blocked';
             const ui = b ? CHOICE_UI[b.choice] : null;
 
             return (
@@ -811,8 +803,8 @@ export default function MealBooking() {
                 onClick={() => setSelectedDate(isSelected ? null : dateStr)}
                 className={`h-16 rounded-xl border-2 flex flex-col items-center justify-center gap-0.5 transition-all text-xs
                   ${isSelected ? 'border-brand bg-brand/5' : 'border-transparent'}
-                  ${isPast ? 'opacity-40' : ''}
-                  ${!isPast && !isBookable ? 'opacity-60' : ''}
+                  ${isPast || isBlocked ? 'opacity-40' : ''}
+                  ${!isPast && !isBlocked && !isBookable ? 'opacity-60' : ''}
                   ${isBookable ? 'bg-brand/5 hover:bg-brand/10 ring-2 ring-brand/20' : 'hover:bg-slate-50'}
                   ${isToday ? 'ring-2 ring-slate-300' : ''}
                 `}
@@ -824,6 +816,8 @@ export default function MealBooking() {
                 </span>
                 {b ? (
                   <span className="text-base">{ui?.emoji}</span>
+                ) : isBlocked ? (
+                  <span className="text-[9px] text-slate-400 font-bold">Closed</span>
                 ) : isBookable ? (
                   <span className="text-[9px] text-brand font-bold">Book</span>
                 ) : (
@@ -865,14 +859,14 @@ export default function MealBooking() {
             const dateObj = new Date(`${selectedDate}T00:00:00+05:30`);
             const dow = dateObj.getDay();
             const dayOpts = DAY_OPTIONS[dow] || [];
-            const isPast = dateObj < today || dateObj.getTime() === today.getTime();
+            const isPast = dateObj < today;
             const bStatus = getBookingStatus(selectedDate, userPrefs.shift, now);
             const canBook = bStatus.canBook;
             const canSkip = bStatus.canSkip;
             const isBookable = canBook || canSkip;
 
-            // Past or today — view only
-            if (isPast) {
+            // Past dates (and morning "today") — view only
+            if (isPast || bStatus.reason === 'past') {
               return (
                 <div
                   className={`p-4 rounded-xl flex items-center justify-between gap-3 ${b ? `${CHOICE_UI[b.choice]?.bg} border ${CHOICE_UI[b.choice]?.border}` : 'bg-slate-50 border border-slate-200'}`}
@@ -916,8 +910,26 @@ export default function MealBooking() {
               );
             }
 
-            // Future but NOT next working day — locked
+            // Future but not currently bookable (time window / blocked / locked)
             if (!isBookable) {
+              if (bStatus.reason === 'blocked') {
+                return (
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center space-y-1">
+                    <span className="text-lg">🚫</span>
+                    <div className="text-sm font-semibold text-slate-600">Meals not available</div>
+                    <div className="text-xs text-slate-500 font-medium leading-relaxed px-2 py-1">
+                      Office is closed on this day. Meal booking is blocked for 5–7 Sep 2026.
+                    </div>
+                    {b && (
+                      <div className={`mt-2 p-2 rounded-lg ${CHOICE_UI[b.choice]?.bg}`}>
+                        <span className="text-sm font-semibold">
+                          {CHOICE_UI[b.choice]?.emoji} {CHOICE_UI[b.choice]?.label}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
               const openTimeLabel = getOpeningTimeLabel(selectedDate, userPrefs.shift);
               const toneMsg = getToneMessage(
                 userPrefs.notification_tone,
@@ -953,7 +965,7 @@ export default function MealBooking() {
                   <div>
                     <div className="text-lg font-bold text-slate-800">Hey, you already booked your meal</div>
                     <p className="mt-1 text-sm text-slate-600 leading-relaxed">
-                      Come back tomorrow to book again. Only one lunch booking is allowed per day.
+                      Only one meal booking is allowed per day. You can still book other upcoming dates.
                     </p>
                   </div>
                   <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl ${ui.bg}`}>
@@ -980,7 +992,7 @@ export default function MealBooking() {
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <div className="text-xs text-brand font-bold uppercase tracking-wider">
-                    {isChanging ? 'Change your booking' : 'Book for next working day'}
+                    {isChanging ? 'Change your booking' : 'Book your meal'}
                   </div>
                   {isChanging && (
                     <button
