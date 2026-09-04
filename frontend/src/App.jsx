@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import InactivityLock from './components/InactivityLock.jsx';
 import Layout from './components/Layout.jsx';
+import MealReviewGate from './components/MealReviewPopup.jsx';
 import { useAuth } from './hooks/useAuth.js';
 import { supabase } from './lib/supabase.js';
 import AdminPage from './pages/Admin.jsx';
@@ -20,6 +21,7 @@ import GuestPage from './pages/Guest.jsx';
 import ManualPurchasesPage from './pages/ManualPurchases.jsx';
 import MealBookingPage from './pages/MealBooking.jsx';
 import MealHistoryPage from './pages/MealHistory.jsx';
+import MealReviewsPage from './pages/MealReviews.jsx';
 import MealTokenDashboardPage from './pages/MealTokenDashboard.jsx';
 import MyMealBoxPage from './pages/MyMealBox.jsx';
 import OnboardingPage from './pages/Onboarding.jsx';
@@ -132,6 +134,7 @@ export default function App() {
           <Protected>
             <OnboardingGate>
               <InactivityLock>
+                <MealReviewGate />
                 <Layout />
               </InactivityLock>
             </OnboardingGate>
@@ -192,6 +195,14 @@ export default function App() {
           element={
             <Protected allow={['leadership', 'finance']}>
               <BillApprovalPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/meal-reviews"
+          element={
+            <Protected allow={['leadership', 'finance']}>
+              <MealReviewsPage />
             </Protected>
           }
         />

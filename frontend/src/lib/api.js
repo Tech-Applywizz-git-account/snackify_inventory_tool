@@ -186,6 +186,15 @@ export const api = {
   bookGuestMeal: (body) =>
     request('/api/guest-meal/book', { method: 'POST', body: JSON.stringify(body) }),
 
+  // Meal reviews (API-first — usable by web/mobile)
+  mealReviewStatus: () => request('/api/meal-reviews/status'),
+  submitMealReview: (body) =>
+    request('/api/meal-reviews', { method: 'POST', body: JSON.stringify(body) }),
+  myMealReview: (date) =>
+    request(`/api/meal-reviews/me${date ? `?date=${date}` : ''}`),
+  listMealReviews: (date) =>
+    request(`/api/meal-reviews${date ? `?date=${date}` : ''}`),
+
   // Meal Box System
   myMealToken: (date) => request(`/api/meal-print/my-token?date=${date}`),
   mealPrintStatus: (date) => request(`/api/meal-print/status?date=${date}`),
