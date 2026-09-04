@@ -19,7 +19,6 @@ frontend/tests/test-credentials.json
 frontend/tests/screenshots/
 
 
-
 # Print agent — local secrets and runtime files (do not commit)
 print-agent/.env
 print-agent/printed.json
