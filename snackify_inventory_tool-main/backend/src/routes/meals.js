@@ -1,0 +1,648 @@
+import { Router } from 'express';
+import { supabaseAdmin } from '../lib/supabase.js';
+import { requireRole } from '../middleware/auth.js';
+import { applyMealTokens, mealTokenPrice, walletForUser } from '../lib/tokens.js';
+
+const router = Router();
+
+// ── Day-of-week meal options ──────────────────────────────────────────────────
+// 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+const DAY_OPTIONS = {
+  1: ['veg'], // Monday: Veg only
+  2: ['veg', 'egg'], // Tuesday: Veg / Egg
+  3: ['veg', 'non_veg'], // Wednesday: Veg / Non-Veg
+  4: ['veg', 'egg'], // Thursday: Veg / Egg
+  5: ['veg', 'non_veg'], // Friday: Veg / Non-Veg
+};
+
+function getISTParts(dateObj = new Date()) {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(dateObj);
+    const m = {};
+    for (const p of parts) {
+      m[p.type] = p.value;
+    }
+    return {
+      year: parseInt(m.year, 10),
+      month: parseInt(m.month, 10) - 1, // 0-indexed
+      day: parseInt(m.day, 10),
+      hour: parseInt(m.hour, 10),
+      minute: parseInt(m.minute, 10),
+      second: parseInt(m.second, 10),
+    };
+  } catch (e) {
+    console.error('Error formatting IST parts, falling back to local system:', e);
+    return {
+      year: dateObj.getFullYear(),
+      month: dateObj.getMonth(),
+      day: dateObj.getDate(),
+      hour: dateObj.getHours(),
+      minute: dateObj.getMinutes(),
+      second: dateObj.getSeconds(),
+    };
+  }
+}
+
+function getMealDateDay(dateStr) {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return d.getUTCDay(); // 0=Sun ... 6=Sat
+}
+
+function isWorkingDay(dateStr) {
+  const day = getMealDateDay(dateStr);
+  return day >= 1 && day <= 5;
+}
+
+function getOptionsForDate(dateStr) {
+  const day = getMealDateDay(dateStr);
+  return DAY_OPTIONS[day] || [];
+}
+
+async function findMealBooking(userId, mealDate, columns = '*') {
+  const { data, error } = await supabaseAdmin
+    .from('meal_bookings')
+    .select(columns)
+    .eq('user_id', userId)
+    .eq('meal_date', mealDate)
+    .order('booked_at', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data || null;
+}
+
+/** Dates closed for meal booking (holidays / office closed). */
+const BLOCKED_MEAL_DATES = new Set(['2026-09-05', '2026-09-06', '2026-09-07']);
+
+function isBlockedMealDate(dateStr) {
+  return BLOCKED_MEAL_DATES.has(String(dateStr || ''));
+}
+
+function formatUTCDateStr(d) {
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+// Get the next working day (Mon-Fri) from today in IST, skipping blocked dates
+function getNextWorkingDay(nowDate = new Date()) {
+  const p = getISTParts(nowDate);
+  const d = new Date(Date.UTC(p.year, p.month, p.day));
+  d.setUTCDate(d.getUTCDate() + 1); // start from tomorrow
+  // Skip weekends and blocked meal dates (e.g. 5–7 Sep 2026 → unlocks 8 Sep)
+  while (true) {
+    const dow = d.getUTCDay();
+    const dateStr = formatUTCDateStr(d);
+    if (dow !== 0 && dow !== 6 && !isBlockedMealDate(dateStr)) break;
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return formatUTCDateStr(d);
+}
+
+/**
+ * Booking window rules (IST):
+ * Morning (lunch):
+ *   - Only next working day is bookable (blocked dates are skipped when computing next WD)
+ *   - Open 9:00 AM – 6:00 PM → can book + skip
+ *   - 6:00 PM – 8:00 PM → skip only (no new bookings)
+ *   - After 8:00 PM → locked
+ *   - Special: Fri/Sat/Sun morning → Monday meal open all day (no 6pm cut-off)
+ * Night (dinner):
+ *   - Can book today OR tomorrow
+ *   - Today: open till 2:00 PM
+ *   - Tomorrow: open 2:00 PM – 8:00 PM
+ */
+function getAllowedActions(mealDate, shift = 'morning', mockDate) {
+  const parts = getISTParts(mockDate || new Date());
+  const currentHour = parts.hour + parts.minute / 60;
+
+  const [tYear, tMonth, tDay] = mealDate.split('-').map(Number);
+  if (!tYear || !tMonth || !tDay) {
+    return { canBook: false, canSkip: false, reason: 'error' };
+  }
+
+  const targetDateUTC = Date.UTC(tYear, tMonth - 1, tDay);
+  const todayDateUTC = Date.UTC(parts.year, parts.month, parts.day);
+  const diffDays = Math.round((targetDateUTC - todayDateUTC) / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 0) {
+    return { canBook: false, canSkip: false, reason: 'past' };
+  }
+
+  if (isBlockedMealDate(mealDate)) {
+    return { canBook: false, canSkip: false, reason: 'blocked' };
+  }
+
+  if (shift === 'morning') {
+    const nextWD = getNextWorkingDay(mockDate || new Date());
+    if (mealDate !== nextWD) {
+      return {
+        canBook: false,
+        canSkip: false,
+        reason: mealDate < nextWD ? 'past' : 'future_locked',
+      };
+    }
+
+    const targetDateObj = new Date(Date.UTC(tYear, tMonth - 1, tDay));
+    const dow = targetDateObj.getUTCDay();
+    const todayDay = new Date(Date.UTC(parts.year, parts.month, parts.day)).getUTCDay();
+
+    // Weekend logic for Monday's meal: opens Friday at 9 AM, closes Sunday at 8 PM.
+    if (dow === 1 && (todayDay === 5 || todayDay === 6 || todayDay === 0)) {
+      if (todayDay === 5 && currentHour < 9) {
+        return { canBook: false, canSkip: false, reason: 'not_open_yet' };
+      }
+      if (todayDay === 0) {
+        if (currentHour >= 20) return { canBook: false, canSkip: false, reason: 'locked' };
+        if (currentHour >= 18) return { canBook: false, canSkip: true, reason: 'skip_only' };
+      }
+      return { canBook: true, canSkip: true, reason: 'open' };
+    }
+
+    if (currentHour < 9) {
+      return { canBook: false, canSkip: false, reason: 'not_open_yet' };
+    }
+    if (currentHour >= 20) {
+      return { canBook: false, canSkip: false, reason: 'locked' };
+    }
+    if (currentHour >= 18) {
+      return { canBook: false, canSkip: true, reason: 'skip_only' };
+    }
+    return { canBook: true, canSkip: true, reason: 'open' };
+  } else {
+    // Night Shift (Dinner) - books for same day's dinner
+    if (diffDays === 1) {
+      if (isBlockedMealDate(mealDate)) {
+        return { canBook: false, canSkip: false, reason: 'blocked' };
+      }
+      if (currentHour >= 20) {
+        return { canBook: true, canSkip: true, reason: 'open' };
+      }
+      return { canBook: false, canSkip: false, reason: 'not_open_yet' };
+    }
+
+    if (diffDays === 0) {
+      if (currentHour >= 17) {
+        return { canBook: false, canSkip: false, reason: 'locked' };
+      }
+      if (currentHour >= 14) {
+        return { canBook: false, canSkip: true, reason: 'skip_only' };
+      }
+      return { canBook: true, canSkip: true, reason: 'open' };
+    }
+
+    return { canBook: false, canSkip: false, reason: 'future_locked' };
+  }
+}
+
+// ── GET /api/meals/options?date=2026-05-21 ────────────────────────────────────
+// Returns what options are available for a date + current booking + cutoff status
+router.get('/options', async (req, res, next) => {
+  try {
+    let { date } = req.query;
+
+    const { data: prefs } = await supabaseAdmin
+      .from('employee_cafeteria_preferences')
+      .select('shift')
+      .eq('user_id', req.user.id)
+      .maybeSingle();
+    const userShift = prefs?.shift || 'morning';
+
+    if (!date) {
+      date = userShift === 'night'
+        ? (() => {
+            const p = getISTParts();
+            return `${p.year}-${String(p.month + 1).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+          })()
+        : getNextWorkingDay();
+    }
+
+    if (!isWorkingDay(date)) {
+      return res.json({
+        working_day: false,
+        meal_date: date,
+        options: [],
+        booking: null,
+        canBook: false,
+        canSkip: false,
+        reason: 'weekend',
+      });
+    }
+
+    const options = getOptionsForDate(date);
+    const actions = getAllowedActions(date, userShift);
+
+    const booking = await findMealBooking(req.user.id, date);
+    const tokenPrice = await mealTokenPrice(date);
+    let wallet = null;
+    try {
+      wallet = await walletForUser(req.user.id);
+    } catch (_) {}
+
+    const alreadyBooked = Boolean(booking?.choice && booking.choice !== 'skip');
+    res.json({
+      working_day: true,
+      meal_date: date,
+      options, // ['veg'] or ['veg','egg'] or ['veg','non_veg']
+      ...actions, // canBook, canSkip, reason
+      booking: booking || null,
+      already_booked: alreadyBooked,
+      canBook: alreadyBooked ? false : actions.canBook,
+      canSkip: alreadyBooked ? actions.canSkip : actions.canSkip,
+      reason: alreadyBooked ? 'already_booked' : actions.reason,
+      token_price: tokenPrice,
+      wallet,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── POST /api/meals/book ──────────────────────────────────────────────────────
+// Body: { date: "2026-05-21", choice: "veg" | "non_veg" | "egg" | "skip" }
+router.post('/book', async (req, res, next) => {
+  try {
+    const { date, choice: rawChoice, meal_type, onion_slices } = req.body;
+    const choice = rawChoice || meal_type;
+    if (!date || !choice) return res.status(400).json({ error: 'date and choice required' });
+
+    // Validate working day
+    if (!isWorkingDay(date)) {
+      return res.status(400).json({ error: 'Not a working day' });
+    }
+
+    if (isBlockedMealDate(date)) {
+      return res.status(400).json({
+        error: 'Meal booking is not available on this date (office closed).',
+      });
+    }
+
+    // Check date range
+    const settings = await getSettings();
+    if (date < settings.active_from || date > settings.active_until) {
+      return res.status(400).json({ error: 'Meal booking not available for this date' });
+    }
+
+    const { data: prefs } = await supabaseAdmin
+      .from('employee_cafeteria_preferences')
+      .select('shift')
+      .eq('user_id', req.user.id)
+      .maybeSingle();
+    const userShift = prefs?.shift || 'morning';
+
+    const actions = getAllowedActions(date, userShift);
+
+    if (choice === 'skip') {
+      // Skip allowed if canSkip
+      if (!actions.canSkip) {
+        return res.status(400).json({ error: 'Booking is fully locked. Cannot skip anymore.' });
+      }
+    } else {
+      // Booking (veg/non_veg/egg) allowed only if canBook
+      if (!actions.canBook) {
+        if (actions.canSkip) {
+          return res
+            .status(400)
+            .json({ error: 'After 6 PM you can only skip. Cannot change meal type.' });
+        }
+        const lockedMsg = {
+          past: 'You can only book lunch for the next working day.',
+          not_open_yet: 'Booking opens at 9:00 AM IST.',
+          future_locked: 'This date is not open for booking yet.',
+          blocked: 'Meal booking is not available on this date (office closed).',
+          weekend: 'Not a working day.',
+        };
+        return res.status(400).json({
+          error: lockedMsg[actions.reason] || 'Booking is currently closed.',
+        });
+      }
+
+      // Validate choice is valid for this day
+      const validOptions = getOptionsForDate(date);
+      if (!validOptions.includes(choice)) {
+        return res.status(400).json({
+          error: `${choice} is not available on this day. Options: ${validOptions.join(', ')}`,
+        });
+      }
+    }
+
+    // Validate onion slices on Wednesday (3) and Friday (5)
+    const mealDay = getMealDateDay(date);
+    const isNonVegDay = mealDay === 3 || mealDay === 5;
+    let savedOnionSlices = null;
+    if (isNonVegDay && choice === 'non_veg') {
+      if (onion_slices) {
+        const cleaned = String(onion_slices).trim().toLowerCase();
+        const match = cleaned.match(/^(\d+)\s*slices?$/);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num === 0) {
+            savedOnionSlices = 'no onion';
+          } else if (num === 1) {
+            savedOnionSlices = '1 slice';
+          } else {
+            savedOnionSlices = `${num} slices`;
+          }
+        } else if (cleaned === 'no onion' || cleaned === 'no_onion') {
+          savedOnionSlices = 'no onion';
+        } else {
+          savedOnionSlices = 'no onion';
+        }
+      } else {
+        savedOnionSlices = 'no onion';
+      }
+    }
+
+    const bookedAt = new Date().toISOString();
+    const existing = await findMealBooking(req.user.id, date);
+    const isRealMeal = (c) => c && c !== 'skip';
+    let data;
+
+    if (existing?.id) {
+      if (existing.choice === choice) {
+        return res.json({
+          ok: true,
+          booking: existing,
+          tokens_charged: existing.tokens_charged || 0,
+          idempotent: true,
+          message: isRealMeal(choice)
+            ? 'Already booked for this day.'
+            : 'Meal already skipped for this day.',
+        });
+      }
+
+      // One real meal per day — do not replace veg/egg/non_veg with another meal.
+      if (isRealMeal(existing.choice) && isRealMeal(choice)) {
+        return res.status(409).json({
+          error: 'You have already booked lunch for this day. Only one meal booking is allowed.',
+          code: 'ALREADY_BOOKED',
+          booking: existing,
+        });
+      }
+
+      const { data: updated, error } = await supabaseAdmin
+        .from('meal_bookings')
+        .update({ choice, booked_at: bookedAt, onion_slices: savedOnionSlices })
+        .eq('id', existing.id)
+        .select()
+        .single();
+      if (error) throw error;
+      data = updated;
+    } else {
+      const { data: inserted, error } = await supabaseAdmin
+        .from('meal_bookings')
+        .insert({
+          user_id: req.user.id,
+          meal_date: date,
+          choice,
+          booked_at: bookedAt,
+          onion_slices: savedOnionSlices,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        if (error.code !== '23505') throw error;
+
+        const retryExisting = await findMealBooking(req.user.id, date);
+        if (retryExisting?.id) {
+          return res.status(409).json({
+            error: 'You have already booked lunch for this day. Only one meal booking is allowed.',
+            code: 'ALREADY_BOOKED',
+            booking: retryExisting,
+          });
+        }
+        throw error;
+      }
+      data = inserted;
+    }
+
+
+    const emoji = { veg: '🥬', non_veg: '🍗', egg: '🥚', skip: '🚫' };
+    let spend = null;
+    try {
+      spend = await applyMealTokens({
+        userId: req.user.id,
+        bookingId: data.id,
+        mealDate: date,
+        choice,
+      });
+    } catch (e) {
+      const missing = /could not find|does not exist|schema cache|token_items|token_usage|PGRST/i.test(
+        String(e.message || e.code || ''),
+      );
+      if (!missing) {
+        if (existing?.id) {
+          await supabaseAdmin
+            .from('meal_bookings')
+            .update({ choice: existing.choice, onion_slices: existing.onion_slices || null })
+            .eq('id', existing.id);
+        } else {
+          await supabaseAdmin.from('meal_bookings').delete().eq('id', data.id);
+        }
+        throw e;
+      }
+    }
+
+    res.json({
+      ok: true,
+      booking: { ...data, tokens_charged: spend?.tokens_charged || 0 },
+      tokens_charged: spend?.tokens_charged || 0,
+      balance_after: spend?.balance_after,
+      message:
+        choice === 'skip'
+          ? '🚫 Meal skipped for this day'
+          : `${emoji[choice] || '🍱'} Booked ${choice} successfully!`,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── GET /api/meals/my-bookings?month=2026-05 ─────────────────────────────────
+// Returns all bookings for the user in a month (for calendar view)
+router.get('/my-bookings', async (req, res, next) => {
+  try {
+    const { month } = req.query; // "2026-05"
+    if (!month) return res.status(400).json({ error: 'month query param required (YYYY-MM)' });
+
+    const startDate = `${month}-01`;
+    // Get last day of month
+    const [y, m] = month.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const endDate = `${month}-${String(lastDay).padStart(2, '0')}`;
+
+    const { data, error } = await supabaseAdmin
+      .from('meal_bookings')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .gte('meal_date', startDate)
+      .lte('meal_date', endDate)
+      .order('meal_date');
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ── GET /api/meals/summary?date=2026-05-21 ───────────────────────────────────
+// FM + Finance: headcount summary for a date
+router.get(
+  '/summary',
+  requireRole('facility_manager', 'finance', 'leadership'),
+  async (req, res, next) => {
+    try {
+      const { date } = req.query;
+      if (!date) return res.status(400).json({ error: 'date query param required' });
+
+      const { data: bookings, error } = await supabaseAdmin
+        .from('meal_bookings')
+        .select('choice, user_id, profiles!inner(full_name, preferred_name)')
+        .eq('meal_date', date);
+
+      if (error) throw error;
+
+      const settings = await getSettings();
+
+      const summary = {
+        date,
+        veg: [],
+        non_veg: [],
+        egg: [],
+        skip: [],
+      };
+
+      for (const b of bookings || []) {
+        const name = b.profiles?.preferred_name || b.profiles?.full_name || 'Unknown';
+        if (summary[b.choice]) {
+          summary[b.choice].push(name);
+        }
+      }
+
+      // Get total employee count for "not booked"
+      const { count: totalEmployees } = await supabaseAdmin
+        .from('profiles')
+        .select('id', { count: 'exact', head: true });
+
+      const bookedCount = (bookings || []).length;
+
+      res.json({
+        ...summary,
+        veg_count: summary.veg.length,
+        non_veg_count: summary.non_veg.length,
+        egg_count: summary.egg.length,
+        skip_count: summary.skip.length,
+        not_booked: (totalEmployees || 0) - bookedCount,
+        total_meals: summary.veg.length + summary.non_veg.length + summary.egg.length,
+        cost: {
+          veg: summary.veg.length * (settings.cost_per_veg || 80),
+          non_veg: summary.non_veg.length * (settings.cost_per_non_veg || 120),
+          egg: summary.egg.length * (settings.cost_per_egg || 100),
+          total:
+            summary.veg.length * (settings.cost_per_veg || 80) +
+            summary.non_veg.length * (settings.cost_per_non_veg || 120) +
+            summary.egg.length * (settings.cost_per_egg || 100),
+        },
+      });
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+// ── GET /api/meals/settings ───────────────────────────────────────────────────
+router.get('/settings', async (_req, res, next) => {
+  try {
+    const settings = await getSettings();
+    res.json(settings);
+  } catch (e) {
+    next(e);
+  }
+});
+
+async function getSettings() {
+  const { data } = await supabaseAdmin.from('meal_settings').select('*').limit(1).single();
+  return (
+    data || {
+      cutoff_time: '18:00',
+      skip_cutoff_time: '20:00',
+      cost_per_veg: 80,
+      cost_per_non_veg: 120,
+      cost_per_egg: 100,
+      active_from: '2026-05-20',
+      active_until: '2026-12-31',
+    }
+  );
+}
+
+// ── POST /api/meals/:date/rate ───────────────────────────────────────────────
+// Rate a meal for a specific date (only today or yesterday allowed)
+router.post('/:date/rate', async (req, res, next) => {
+  try {
+    const { date } = req.params;
+    const { rating, feedback } = req.body;
+
+    if (!rating || rating < 1 || rating > 10) {
+      return res.status(400).json({ error: 'Rating must be between 1 and 10' });
+    }
+
+    // Only allow rating for today or yesterday (IST)
+    const parts = getISTParts();
+    const todayDateUTC = Date.UTC(parts.year, parts.month, parts.day);
+
+    const [mYear, mMonth, mDay] = date.split('-').map(Number);
+    if (!mYear || !mMonth || !mDay) {
+      return res.status(400).json({ error: 'Invalid meal date format' });
+    }
+    const mealDateUTC = Date.UTC(mYear, mMonth - 1, mDay);
+
+    const diffDays = Math.round((mealDateUTC - todayDateUTC) / (1000 * 60 * 60 * 24));
+
+    if (diffDays < -1) {
+      return res.status(400).json({ error: 'Can only rate meals from today or yesterday' });
+    }
+    if (diffDays > 0) {
+      return res.status(400).json({ error: 'Cannot rate a future meal' });
+    }
+
+    // Check booking exists and is not a skip
+    const booking = await findMealBooking(req.user.id, date);
+
+    if (!booking) {
+      return res.status(404).json({ error: 'No meal booking found for this date' });
+    }
+    if (booking.choice === 'skip') {
+      return res.status(400).json({ error: 'Cannot rate a skipped meal' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('meal_bookings')
+      .update({ rating: parseInt(rating, 10), feedback: feedback || null })
+      .eq('user_id', req.user.id)
+      .eq('meal_date', date)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ ok: true, booking: data });
+  } catch (e) {
+    next(e);
+  }
+});
+
+export default router;

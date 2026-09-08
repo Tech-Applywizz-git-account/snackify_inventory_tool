@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <!-- Dark rounded square background -->
+  <rect width="120" height="120" rx="24" fill="#2A2A2E"/>
+  <rect x="1.5" y="1.5" width="117" height="117" rx="22.5" stroke="white" stroke-opacity="0.06" stroke-width="1.5"/>
+
+  <!-- AW monogram — A in blue, W in green, connected at center -->
+  <!-- A stroke (blue) -->
+  <path d="M24 84L42 36L58 72" stroke="#2C76FF" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- A crossbar -->
+  <path d="M32 66L52 66" stroke="#2C76FF" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- W stroke (green) — starts from where A ends -->
+  <path d="M58 72L70 40L80 66L96 36" stroke="#29FE29" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Green dot (the i dot / brand mark) -->
+  <circle cx="96" cy="28" r="4.5" fill="#29FE29"/>
+</svg>
