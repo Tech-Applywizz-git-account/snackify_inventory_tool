@@ -255,10 +255,17 @@ export default function StaffView() {
   const [showPantryItemModal, setShowPantryItemModal] = useState(false);
   const [pantryItem, setPantryItem] = useState({
     name: '', category: 'food', emoji: '🍽️', description: '', coinPrice: '',
-    stockQuantity: '0', frontName: '', sandwichType: 'regular',
+    stockQuantity: '0', frontName: '', sandwichType: 'regular', customSandwichType: '',
   });
   const [editingItem, setEditingItem] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const sandwichTypeOptions = Array.from(new Set([
+    'regular',
+    'peanut_butter',
+    'mix_fruit_jam',
+    'pineapple_jam',
+    ...(Array.isArray(cafItems) ? cafItems.map((item) => item.sandwich_type).filter(Boolean) : []),
+  ])).filter((value) => value.toLowerCase() !== 'other');
 
   useEffect(() => {
     api
@@ -365,6 +372,10 @@ export default function StaffView() {
 
   async function handleAddPantryItemSubmit(e) {
     e.preventDefault();
+    const sandwichType = pantryItem.sandwichType.toLowerCase() === 'other'
+      ? pantryItem.customSandwichType.trim()
+      : pantryItem.sandwichType.trim();
+    if (!sandwichType) return;
     setIsSubmitting(true);
     try {
       await api.addCafeteriaItem({
@@ -375,12 +386,12 @@ export default function StaffView() {
         coin_price: Number(pantryItem.coinPrice),
         stock_quantity: Number(pantryItem.stockQuantity),
         frontend_name: (pantryItem.frontName || pantryItem.name).trim(),
-        sandwich_type: pantryItem.sandwichType || 'regular',
+        sandwich_type: sandwichType,
       });
       const updated = await api.cafeteriaItems();
       setCafItems(updated);
       setShowPantryItemModal(false);
-      setPantryItem({ name: '', category: 'food', emoji: '🍽️', description: '', coinPrice: '', stockQuantity: '0', frontName: '', sandwichType: 'regular' });
+      setPantryItem({ name: '', category: 'food', emoji: '🍽️', description: '', coinPrice: '', stockQuantity: '0', frontName: '', sandwichType: 'regular', customSandwichType: '' });
     } catch (error) {
       alert(`Failed to add pantry item: ${error.message}`);
     } finally {
@@ -967,11 +978,18 @@ export default function StaffView() {
                   className="w-full rounded-xl border-2 border-slate-100 px-3 py-2 text-sm"
                 />
                 <datalist id="pantry-sandwich-types">
-                  <option value="regular" />
-                  <option value="peanut_butter" />
-                  <option value="mix_fruit_jam" />
-                  <option value="pineapple_jam" />
+                  {sandwichTypeOptions.map((sandwichType) => <option key={sandwichType} value={sandwichType} />)}
+                  <option value="Other" />
                 </datalist>
+                {pantryItem.sandwichType.toLowerCase() === 'other' && (
+                  <input
+                    required
+                    value={pantryItem.customSandwichType}
+                    onChange={(e) => setPantryItem({ ...pantryItem, customSandwichType: e.target.value })}
+                    placeholder="Enter custom sandwich type"
+                    className="mt-2 w-full rounded-xl border-2 border-slate-100 px-3 py-2 text-sm"
+                  />
+                )}
               </div>
               <div className="col-span-2 flex gap-3 border-t border-slate-100 pt-3">
                 <button type="button" onClick={() => setShowPantryItemModal(false)} className="flex-1 rounded-xl border border-slate-200 py-2 text-sm font-bold text-slate-600">Cancel</button>
