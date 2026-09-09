@@ -16,61 +16,17 @@ function getISTDateParts(date = new Date()) {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
-function istDayRange(date) {
-  const [year, month, day] = date.split('-').map(Number);
-  return {
-    from: new Date(Date.UTC(year, month - 1, day, 0, 0, 0) - 19800000).toISOString(),
-    to: new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0) - 19800000).toISOString(),
-  };
-}
-
 async function buildDailyConsumptionReport(reportDate) {
-  const { from, to } = istDayRange(reportDate);
-  const [{ data: items, error: itemsError }, { data: usage, error: usageError }] = await Promise.all([
-    supabaseAdmin
-      .from('cafeteria_items')
-      .select('id, item_name, display_name, frontend_name')
-      .order('sort_order', { ascending: true }),
-    supabaseAdmin
-      .from('token_usage')
-      .select('lines, created_at')
-      .eq('reason', 'spend')
-      .gte('created_at', from)
-      .lt('created_at', to),
-  ]);
-  if (itemsError) throw itemsError;
-  if (usageError) throw usageError;
+  const { data: items, error } = await supabaseAdmin
+    .from('cafeteria_items')
+    .select('item_name, display_name, frontend_name, stock_today, stock_servings')
+    .order('sort_order', { ascending: true });
+  if (error) throw error;
 
-  const { data: tokenItems, error: tokenItemsError } = await supabaseAdmin
-    .from('token_items')
-    .select('id, display_name, cafeteria_item_id');
-  if (tokenItemsError) throw tokenItemsError;
-
-  const tokenMap = new Map((tokenItems || []).map((item) => [item.id, item]));
-  const totals = new Map((items || []).map((item) => [item.id, { item_name: item.display_name || item.frontend_name || item.item_name, quantity: 0, orders: 0 }]));
-  const fallback = new Map();
-
-  for (const usageRow of usage || []) {
-    for (const line of Array.isArray(usageRow.lines) ? usageRow.lines : []) {
-      const quantity = Number(line.qty) || 0;
-      const tokenItem = tokenMap.get(line.token_item_id);
-      const cafeteriaId = tokenItem?.cafeteria_item_id;
-      const key = cafeteriaId || `name:${String(line.name || line.item_name || 'Unknown').toLowerCase()}`;
-      const current = totals.get(key) || fallback.get(key) || {
-        item_name: line.name || line.item_name || 'Unknown item',
-        quantity: 0,
-        orders: 0,
-      };
-      current.quantity += quantity;
-      current.orders += 1;
-      if (totals.has(key)) totals.set(key, current);
-      else fallback.set(key, current);
-    }
-  }
-
-  return [...totals.values(), ...fallback.values()].map((row) => ({
-    ...row,
-    quantity: Number(row.quantity),
+  return (items || []).map((item) => ({
+    item_name: item.display_name || item.frontend_name || item.item_name,
+    stock_today: item.stock_today ?? null,
+    stock_servings: item.stock_servings ?? null,
   }));
 }
 
@@ -83,7 +39,14 @@ router.post('/daily-consumption-email', requireRole('leadership', 'admin'), asyn
     }
 
     const rows = await buildDailyConsumptionReport(reportDate);
-    const recipients = ['dinesh@applywizz.ai'];
+    const { data: subscribers, error: subscriberError } = await supabaseAdmin
+      .from('profiles')
+      .select('email')
+      .eq('consumer_report', true)
+      .not('email', 'is', null);
+    if (subscriberError) throw subscriberError;
+
+    const recipients = [...new Set((subscribers || []).map((subscriber) => subscriber.email).filter(Boolean))];
     await sendDailyConsumptionReportEmail(reportDate, rows, recipients);
     res.json({ ok: true, date: reportDate, items: rows.length, recipients: recipients.length });
   } catch (e) {

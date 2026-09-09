@@ -210,6 +210,11 @@ export const api = {
     request('/api/reports/monthly-expenses', { method: 'POST', body: JSON.stringify(body) }),
   deleteMonthlyExpense: (id) =>
     request(`/api/reports/monthly-expenses/${id}`, { method: 'DELETE' }),
+  addConsumerReportSubscriber: (email) =>
+    request('/api/admin/consumer-report-subscribers', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
   sendDailyConsumptionReport: (date) =>
     request('/api/reports/daily-consumption-email', {
       method: 'POST',
