@@ -217,13 +217,14 @@ export async function sendDailyConsumptionReportEmail(reportDate, rows, recipien
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#039;');
 
+  const totalQuantity = rows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
   const tableRows = rows
     .map(
       (row) => `
         <tr>
           <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">${escapeHtml(row.item_name)}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;text-align:right;">${row.stock_today ?? 'NULL'}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;text-align:right;">${row.stock_servings ?? 'NULL'}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;text-align:right;">${row.quantity}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;text-align:right;">${row.orders}</td>
         </tr>`
     )
     .join('');
@@ -232,13 +233,13 @@ export async function sendDailyConsumptionReportEmail(reportDate, rows, recipien
     <div style="font-family:Arial,sans-serif;color:#0f172a;">
       <h2>Daily Cafeteria Consumption Report</h2>
       <p><strong>Date:</strong> ${escapeHtml(reportDate)}</p>
-      <p><strong>Cafeteria items tracked:</strong> ${rows.length}</p>
+      <p><strong>Total items consumed:</strong> ${totalQuantity}</p>
       <table style="border-collapse:collapse;width:100%;max-width:700px;">
         <thead>
           <tr style="background:#f1f5f9;text-align:left;">
             <th style="padding:8px 10px;">Cafeteria item</th>
-            <th style="padding:8px 10px;text-align:right;">Stock today</th>
-            <th style="padding:8px 10px;text-align:right;">Stock servings</th>
+            <th style="padding:8px 10px;text-align:right;">Quantity</th>
+            <th style="padding:8px 10px;text-align:right;">Orders</th>
           </tr>
         </thead>
         <tbody>${tableRows}</tbody>
