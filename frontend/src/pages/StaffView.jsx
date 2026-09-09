@@ -232,8 +232,9 @@ function OBLeaveSection({ userId: _userId }) {
 
 export default function StaffView() {
   const { profile } = useAuth();
-  const isStaff = ['office_boy', 'facility_manager', 'leadership'].includes(profile?.role);
-  const canAdd = ['facility_manager', 'leadership'].includes(profile?.role);
+  const isStaff = ['office_boy', 'facility_manager', 'leadership', 'admin'].includes(profile?.role);
+  const canAdd = profile?.role === 'leadership';
+  const canAddPantryItem = ['leadership', 'admin', 'office_boy'].includes(profile?.role);
 
   const [items, setItems] = useState(null);
   const [officeSupplies, setOfficeSupplies] = useState([]);
@@ -251,8 +252,20 @@ export default function StaffView() {
   const [newItemUnit, setNewItemUnit] = useState('pieces');
   const [newItemCost, setNewItemCost] = useState('');
   const [newItemCount, setNewItemCount] = useState('');
+  const [showPantryItemModal, setShowPantryItemModal] = useState(false);
+  const [pantryItem, setPantryItem] = useState({
+    name: '', category: 'food', emoji: '🍽️', description: '', coinPrice: '',
+    stockQuantity: '0', frontName: '', sandwichType: 'regular', customSandwichType: '',
+  });
   const [editingItem, setEditingItem] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const sandwichTypeOptions = Array.from(new Set([
+    'regular',
+    'peanut_butter',
+    'mix_fruit_jam',
+    'pineapple_jam',
+    ...(Array.isArray(cafItems) ? cafItems.map((item) => item.sandwich_type).filter(Boolean) : []),
+  ])).filter((value) => value.toLowerCase() !== 'other');
 
   useEffect(() => {
     api
@@ -357,6 +370,35 @@ export default function StaffView() {
     }
   }
 
+  async function handleAddPantryItemSubmit(e) {
+    e.preventDefault();
+    const sandwichType = pantryItem.sandwichType.toLowerCase() === 'other'
+      ? pantryItem.customSandwichType.trim()
+      : pantryItem.sandwichType.trim();
+    if (!sandwichType) return;
+    setIsSubmitting(true);
+    try {
+      await api.addCafeteriaItem({
+        item_name: pantryItem.name.trim(),
+        category: pantryItem.category,
+        emoji: pantryItem.emoji || '🍽️',
+        description: pantryItem.description.trim(),
+        coin_price: Number(pantryItem.coinPrice),
+        stock_quantity: Number(pantryItem.stockQuantity),
+        frontend_name: (pantryItem.frontName || pantryItem.name).trim(),
+        sandwich_type: sandwichType,
+      });
+      const updated = await api.cafeteriaItems();
+      setCafItems(updated);
+      setShowPantryItemModal(false);
+      setPantryItem({ name: '', category: 'food', emoji: '🍽️', description: '', coinPrice: '', stockQuantity: '0', frontName: '', sandwichType: 'regular', customSandwichType: '' });
+    } catch (error) {
+      alert(`Failed to add pantry item: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function handleDeleteOfficeSupply(id) {
     if (!window.confirm('Are you sure you want to delete this item?')) return;
     try {
@@ -434,7 +476,7 @@ export default function StaffView() {
   return (
     <div className="space-y-6">
       {/* ── Tabs for Pantry vs Office Supplies ── */}
-      <div className="flex justify-start gap-6 border-b border-slate-200">
+      <div className="flex items-center justify-start gap-6 border-b border-slate-200">
         <button
           onClick={() => setActiveSection('pantry')}
           className={`pb-3 font-bold text-sm border-b-2 transition-all ${
@@ -455,6 +497,15 @@ export default function StaffView() {
         >
           📎 Office Supplies
         </button>
+        {canAddPantryItem && (
+          <button
+            type="button"
+            onClick={() => setShowPantryItemModal(true)}
+            className="mb-2 rounded-xl bg-brand px-4 py-2 text-xs font-bold text-white hover:opacity-90"
+          >
+            + Add Pantry Item
+          </button>
+        )}
       </div>
 
       {activeSection === 'pantry' ? (
@@ -623,9 +674,24 @@ export default function StaffView() {
         </>
       ) : (
         <>
-          <div>
-            <h1 className="text-2xl font-semibold">Office Supplies</h1>
-            <p className="text-sm text-slate-500">Tracked office supplies and essentials.</p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-semibold">Office Supplies</h1>
+              <p className="text-sm text-slate-500">Tracked office supplies and essentials.</p>
+            </div>
+            {canAdd && (
+              <button
+                type="button"
+                onClick={() => {
+                  setModalSection('office_supplies');
+                  setModalCategory(activeOfficeCat);
+                  setShowAddModal(true);
+                }}
+                className="shrink-0 text-xs font-bold text-brand hover:underline flex items-center gap-1"
+              >
+                ➕ Add Item
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -663,18 +729,6 @@ export default function StaffView() {
                         <span>{CATEGORY_EMOJI[cat] || '📎'}</span>
                         <span>{cat.replace('_', ' ')}</span>
                       </h2>
-                      {canAdd && (
-                        <button
-                          onClick={() => {
-                            setModalSection('office_supplies');
-                            setModalCategory(cat);
-                            setShowAddModal(true);
-                          }}
-                          className="text-xs font-bold text-brand hover:underline flex items-center gap-1"
-                        >
-                          ➕ Add Item
-                        </button>
-                      )}
                     </div>
                     {rows.length === 0 ? (
                       <p className="text-sm text-slate-400 italic py-4">No items in this category yet.</p>
@@ -890,6 +944,56 @@ export default function StaffView() {
                 >
                   {isSubmitting ? (editingItem ? 'Saving...' : 'Adding...') : (editingItem ? 'Save Changes' : 'Add Item')}
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showPantryItemModal && canAddPantryItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-800">Add Pantry Item</h3>
+              <button type="button" onClick={() => setShowPantryItemModal(false)} className="text-xl text-slate-400">✕</button>
+            </div>
+            <form onSubmit={handleAddPantryItemSubmit} className="grid grid-cols-2 gap-3">
+              <input required placeholder="Product name" value={pantryItem.name} onChange={(e) => setPantryItem({ ...pantryItem, name: e.target.value })} className="col-span-2 rounded-xl border-2 border-slate-100 px-3 py-2 text-sm" />
+              <select value={pantryItem.category} onChange={(e) => setPantryItem({ ...pantryItem, category: e.target.value })} className="rounded-xl border-2 border-slate-100 px-3 py-2 text-sm">
+                <option value="food">Food</option><option value="snack">Snack</option><option value="beverage">Beverage</option><option value="meal">Meal</option>
+              </select>
+              <input required placeholder="Emoji" value={pantryItem.emoji} onChange={(e) => setPantryItem({ ...pantryItem, emoji: e.target.value })} className="rounded-xl border-2 border-slate-100 px-3 py-2 text-sm" />
+              <textarea placeholder="Description" value={pantryItem.description} onChange={(e) => setPantryItem({ ...pantryItem, description: e.target.value })} className="col-span-2 rounded-xl border-2 border-slate-100 px-3 py-2 text-sm" />
+              <input required min="0" type="number" placeholder="Coin price" value={pantryItem.coinPrice} onChange={(e) => setPantryItem({ ...pantryItem, coinPrice: e.target.value })} className="rounded-xl border-2 border-slate-100 px-3 py-2 text-sm" />
+              <input required min="0" type="number" placeholder="Stock quantity" value={pantryItem.stockQuantity} onChange={(e) => setPantryItem({ ...pantryItem, stockQuantity: e.target.value })} className="rounded-xl border-2 border-slate-100 px-3 py-2 text-sm" />
+              <input placeholder="Frontend name" value={pantryItem.frontName} onChange={(e) => setPantryItem({ ...pantryItem, frontName: e.target.value })} className="rounded-xl border-2 border-slate-100 px-3 py-2 text-sm" />
+              <div>
+                <label htmlFor="pantry-sandwich-type" className="sr-only">Sandwich type</label>
+                <input
+                  id="pantry-sandwich-type"
+                  list="pantry-sandwich-types"
+                  value={pantryItem.sandwichType}
+                  onChange={(e) => setPantryItem({ ...pantryItem, sandwichType: e.target.value })}
+                  placeholder="Sandwich type"
+                  className="w-full rounded-xl border-2 border-slate-100 px-3 py-2 text-sm"
+                />
+                <datalist id="pantry-sandwich-types">
+                  {sandwichTypeOptions.map((sandwichType) => <option key={sandwichType} value={sandwichType} />)}
+                  <option value="Other" />
+                </datalist>
+                {pantryItem.sandwichType.toLowerCase() === 'other' && (
+                  <input
+                    required
+                    value={pantryItem.customSandwichType}
+                    onChange={(e) => setPantryItem({ ...pantryItem, customSandwichType: e.target.value })}
+                    placeholder="Enter custom sandwich type"
+                    className="mt-2 w-full rounded-xl border-2 border-slate-100 px-3 py-2 text-sm"
+                  />
+                )}
+              </div>
+              <div className="col-span-2 flex gap-3 border-t border-slate-100 pt-3">
+                <button type="button" onClick={() => setShowPantryItemModal(false)} className="flex-1 rounded-xl border border-slate-200 py-2 text-sm font-bold text-slate-600">Cancel</button>
+                <button type="submit" disabled={isSubmitting} className="flex-1 rounded-xl bg-brand py-2 text-sm font-bold text-white disabled:opacity-50">{isSubmitting ? 'Adding...' : 'Add Item'}</button>
               </div>
             </form>
           </div>

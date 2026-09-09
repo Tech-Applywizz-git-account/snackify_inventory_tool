@@ -153,7 +153,7 @@ export default function App() {
         <Route
           path="/available"
           element={
-            <Protected allow={['facility_manager', 'finance', 'leadership', 'office_boy']}>
+            <Protected allow={['facility_manager', 'finance', 'leadership', 'admin', 'office_boy']}>
               <StaffViewPage />
             </Protected>
           }
