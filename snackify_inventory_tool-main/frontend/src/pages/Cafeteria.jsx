@@ -154,6 +154,12 @@ const STAGE_INFO = {
 // Items that get a customization prompt
 const BREAD_ITEMS = ['bread + peanut butter', 'bread + jam'];
 const isBreadItem = (name) => BREAD_ITEMS.includes((name || '').toLowerCase());
+const ACTIVE_ORDER_STATUSES = ['confirming', 'pending', 'in_progress'];
+const MAX_ACTIVE_ORDERS = 5;
+const keepLatestActiveOrders = (orders) =>
+  (orders || [])
+    .filter((order) => ACTIVE_ORDER_STATUSES.includes(order.status))
+    .slice(0, MAX_ACTIVE_ORDERS);
 
 const SANDWICH_SPREADS = [
   {
@@ -1785,10 +1791,7 @@ export default function Cafeteria() {
       setItems(enrichItemsWithVirtualDrinks(itemsData || []));
       setSelfPickupDay(pickupStatus);
 
-      const active = (requestsData || []).filter((r) =>
-        ['confirming', 'pending', 'in_progress'].includes(r.status)
-      );
-      setActiveOrders(active);
+      setActiveOrders(keepLatestActiveOrders(requestsData));
 
       const recent = (requestsData || [])
         .filter((r) => r.status === 'done' || r.status === 'cancelled')
@@ -2041,6 +2044,9 @@ export default function Cafeteria() {
       setShowSheet(false);
       setPayOrderId(lastReq?.id || null);
       setPayPhase('paid');
+      if (lastReq) {
+        setActiveOrders((orders) => keepLatestActiveOrders([lastReq, ...orders]));
+      }
       if (location && session) {
         setSavedLocation(location);
         supabase
