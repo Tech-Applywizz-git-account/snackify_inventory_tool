@@ -5,6 +5,7 @@ import {
   BellRing,
   CheckCircle2,
   Coffee,
+  FileText,
   KeyRound,
   Loader2,
   LogOut,
@@ -51,6 +52,8 @@ export default function Preferences() {
   const [employeeCode, setEmployeeCode] = useState('');
   const [codeSaving, setCodeSaving] = useState(false);
   const [cardData, setCardData] = useState(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportMsg, setReportMsg] = useState('');
 
   useEffect(() => {
     if (!profile?.id) return;
@@ -170,6 +173,19 @@ export default function Preferences() {
       alert(`Error saving preferences: ${e.message}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function sendDailyConsumptionReport() {
+    setReportBusy(true);
+    setReportMsg('');
+    try {
+      const result = await api.sendDailyConsumptionReport(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
+      setReportMsg(`Report sent to ${result.recipients} admin${result.recipients === 1 ? '' : 's'}.`);
+    } catch (e) {
+      setReportMsg(e.message || 'Could not send the daily report.');
+    } finally {
+      setReportBusy(false);
     }
   }
 
@@ -474,6 +490,27 @@ export default function Preferences() {
           )}
         </AnimatePresence>
       </div>
+
+      {['leadership', 'admin'].includes(profile?.role) && (
+        <div className="card space-y-3">
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <FileText size={18} className="text-brand" /> Daily Consumption Report
+          </h2>
+          <p className="text-sm text-slate-500">
+            Generate today&apos;s cafeteria item consumption report and email it to the admins.
+          </p>
+          <button
+            type="button"
+            className="btn-primary w-full py-3 flex items-center justify-center gap-2"
+            onClick={sendDailyConsumptionReport}
+            disabled={reportBusy}
+          >
+            {reportBusy ? <Loader2 className="animate-spin" size={18} /> : <FileText size={18} />}
+            {reportBusy ? 'Generating and sending...' : 'Send today\'s report'}
+          </button>
+          {reportMsg && <div className="text-sm text-slate-600">{reportMsg}</div>}
+        </div>
+      )}
 
       {/* Security Info */}
       <div className="card space-y-4">

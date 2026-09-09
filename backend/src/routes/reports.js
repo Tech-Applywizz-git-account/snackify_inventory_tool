@@ -1,8 +1,95 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
+import { sendDailyConsumptionReportEmail } from '../lib/microsoftGraph.js';
 
 const router = Router();
+
+function getISTDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.filter((p) => p.type !== 'literal').map((p) => [p.type, p.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function istDayRange(date) {
+  const [year, month, day] = date.split('-').map(Number);
+  return {
+    from: new Date(Date.UTC(year, month - 1, day, 0, 0, 0) - 19800000).toISOString(),
+    to: new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0) - 19800000).toISOString(),
+  };
+}
+
+async function buildDailyConsumptionReport(reportDate) {
+  const { from, to } = istDayRange(reportDate);
+  const [{ data: items, error: itemsError }, { data: usage, error: usageError }] = await Promise.all([
+    supabaseAdmin
+      .from('cafeteria_items')
+      .select('id, item_name, display_name, frontend_name')
+      .order('sort_order', { ascending: true }),
+    supabaseAdmin
+      .from('token_usage')
+      .select('lines, created_at')
+      .eq('reason', 'spend')
+      .gte('created_at', from)
+      .lt('created_at', to),
+  ]);
+  if (itemsError) throw itemsError;
+  if (usageError) throw usageError;
+
+  const { data: tokenItems, error: tokenItemsError } = await supabaseAdmin
+    .from('token_items')
+    .select('id, display_name, cafeteria_item_id');
+  if (tokenItemsError) throw tokenItemsError;
+
+  const tokenMap = new Map((tokenItems || []).map((item) => [item.id, item]));
+  const totals = new Map((items || []).map((item) => [item.id, { item_name: item.display_name || item.frontend_name || item.item_name, quantity: 0, orders: 0 }]));
+  const fallback = new Map();
+
+  for (const usageRow of usage || []) {
+    for (const line of Array.isArray(usageRow.lines) ? usageRow.lines : []) {
+      const quantity = Number(line.qty) || 0;
+      const tokenItem = tokenMap.get(line.token_item_id);
+      const cafeteriaId = tokenItem?.cafeteria_item_id;
+      const key = cafeteriaId || `name:${String(line.name || line.item_name || 'Unknown').toLowerCase()}`;
+      const current = totals.get(key) || fallback.get(key) || {
+        item_name: line.name || line.item_name || 'Unknown item',
+        quantity: 0,
+        orders: 0,
+      };
+      current.quantity += quantity;
+      current.orders += 1;
+      if (totals.has(key)) totals.set(key, current);
+      else fallback.set(key, current);
+    }
+  }
+
+  return [...totals.values(), ...fallback.values()].map((row) => ({
+    ...row,
+    quantity: Number(row.quantity),
+  }));
+}
+
+// POST /api/reports/daily-consumption-email — leadership/admin only
+router.post('/daily-consumption-email', requireRole('leadership', 'admin'), async (req, res, next) => {
+  try {
+    const reportDate = String(req.body?.date || getISTDateParts());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
+    const rows = await buildDailyConsumptionReport(reportDate);
+    const recipients = ['dinesh@applywizz.ai'];
+    await sendDailyConsumptionReportEmail(reportDate, rows, recipients);
+    res.json({ ok: true, date: reportDate, items: rows.length, recipients: recipients.length });
+  } catch (e) {
+    next(e);
+  }
+});
 
 // GET /api/reports/monthly-expenses
 router.get('/monthly-expenses', requireRole('finance', 'leadership'), async (_req, res, next) => {
