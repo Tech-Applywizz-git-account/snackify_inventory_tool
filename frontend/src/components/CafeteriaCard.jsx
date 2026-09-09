@@ -10,16 +10,18 @@ export function maskCafeteriaCard(num) {
   return formatCardNumber(num) || 'XXXX XXXX XXXX XXXX';
 }
 
+export function maskEmployeeCode(code) {
+  const normalized = String(code || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  return normalized ? `XXXX XXXX XXXX ${normalized.slice(-4).padStart(4, 'X')}` : 'XXXX XXXX XXXX XXXX';
+}
+
 export default function CafeteriaCard({
-  cardNumber,
-  cardMasked,
-  cardholder = '',
+  fullName = '',
+  employeeCode = '',
   onClick,
 }) {
-  const raw = String(cardNumber || cardMasked || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-  const pan = formatCardNumber(raw) || 'XXXX XXXX XXXX XXXX';
-  const assigned = raw.length > 0;
-  const holder = String(cardholder || 'Applywizzian').slice(0, 24);
+  const pan = maskEmployeeCode(employeeCode);
+  const holder = String(fullName || 'Applywizzian').slice(0, 24);
 
   return (
     <button
@@ -56,7 +58,7 @@ export default function CafeteriaCard({
           </div>
         </div>
       </div>
-      {!assigned ? (
+      {!employeeCode ? (
         <div className="mt-3 text-[11px] text-slate-400">Admin will assign your card number.</div>
       ) : null}
     </button>

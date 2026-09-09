@@ -215,6 +215,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ date }),
     }),
+  addConsumerReportSubscriber: (email) =>
+    request('/api/admin/consumer-report-subscribers', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
 
   // Manual Purchases (no-invoice, submitted via Telegram)
   listManualPurchases: (status = 'all') =>

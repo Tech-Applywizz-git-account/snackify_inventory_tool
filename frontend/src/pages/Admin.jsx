@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../lib/api.js';
 
@@ -152,6 +153,8 @@ export default function Admin() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('staff');
   const [inviteName, setInviteName] = useState('');
+  const [reportEmail, setReportEmail] = useState('');
+  const [reportModalOpen, setReportModalOpen] = useState(false);
 
   const load = useCallback(async () => {
     setErr('');
@@ -260,6 +263,23 @@ export default function Admin() {
     }
   }
 
+  async function onAddReportSubscriber(e) {
+    e.preventDefault();
+    setBusy(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      await api.addConsumerReportSubscriber(reportEmail.trim());
+      setOkMsg(`Daily consumption reports will be sent to ${reportEmail.trim()}.`);
+      setReportEmail('');
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onResetAuthenticator() {
     if (!resetTarget) return;
 
@@ -333,6 +353,31 @@ export default function Admin() {
           </select>
           <button className="btn-primary sm:col-span-2" disabled={busy}>
             {busy ? 'Adding…' : '+ Add'}
+          </button>
+        </form>
+      </div>
+
+      <div className="card">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
+          <h2 className="font-semibold">Users added for daily reports</h2>
+          <button type="button" className="btn-secondary text-sm" onClick={() => setReportModalOpen(true)}>
+            View Added Users
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mb-4">
+          Add an existing user or create a new user account that should receive the daily cafeteria report.
+        </p>
+        <form onSubmit={onAddReportSubscriber} className="flex flex-col sm:flex-row gap-3">
+          <input
+            type="email"
+            required
+            placeholder="admin@example.com"
+            className="input flex-1"
+            value={reportEmail}
+            onChange={(e) => setReportEmail(e.target.value)}
+          />
+          <button type="submit" className="btn-primary" disabled={busy}>
+            {busy ? 'Adding…' : 'Add recipient'}
           </button>
         </form>
       </div>
@@ -478,6 +523,41 @@ export default function Admin() {
               >
                 {busy ? 'Resetting…' : 'Confirm Reset'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reportModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setReportModalOpen(false)}>
+          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Added Report Users</h3>
+                <p className="text-sm text-slate-500 mt-1">Users currently subscribed to receive the daily report.</p>
+              </div>
+              <button type="button" aria-label="Close added report users" className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100" onClick={() => setReportModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+                  <tr><th className="px-4 py-3">Name</th><th className="px-4 py-3">Email</th><th className="px-4 py-3">Employee code</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {users.filter((user) => user.consumer_report).map((user) => (
+                    <tr key={user.id}>
+                      <td className="px-4 py-3 font-semibold text-slate-900">{user.preferred_name || user.full_name || '—'}</td>
+                      <td className="px-4 py-3 text-slate-600">{user.email || '—'}</td>
+                      <td className="px-4 py-3 font-mono text-slate-600">{user.employee_code || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {users.filter((user) => user.consumer_report).length === 0 && (
+                <div className="p-5 text-center text-sm text-slate-500">No report recipients have been added yet.</div>
+              )}
             </div>
           </div>
         </div>

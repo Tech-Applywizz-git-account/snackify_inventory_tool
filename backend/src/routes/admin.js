@@ -61,12 +61,12 @@ export function createAdminRouter(overrides = {}) {
     try {
       let { data: profiles, error: pErr } = await d.supabaseAdmin
         .from('profiles')
-        .select('id, full_name, role, preferred_name, created_at, cafeteria_card_number')
+        .select('id, full_name, role, preferred_name, employee_code, consumer_report, created_at, cafeteria_card_number')
         .order('created_at', { ascending: true });
       if (pErr && /cafeteria_card_number/i.test(pErr.message || '')) {
         const retry = await d.supabaseAdmin
           .from('profiles')
-          .select('id, full_name, role, preferred_name, created_at')
+          .select('id, full_name, role, preferred_name, employee_code, consumer_report, created_at')
           .order('created_at', { ascending: true });
         profiles = retry.data;
         pErr = retry.error;
@@ -228,6 +228,55 @@ export function createAdminRouter(overrides = {}) {
 
       res.status(201).json({ ok: true, user_id: userId, email, role, profile });
     } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post('/consumer-report-subscribers', async (req, res, next) => {
+    try {
+      const schema = z.object({ email: z.string().email() });
+      const { email } = schema.parse(req.body);
+      const normalizedEmail = email.trim().toLowerCase();
+      const defaultPassword = getDefaultPassword();
+
+      const { data: userList, error: listError } = await d.supabaseAdmin.auth.admin.listUsers({
+        page: 1,
+        perPage: 200,
+      });
+      if (listError) throw listError;
+      let userId = userList?.users.find((u) => u.email?.toLowerCase() === normalizedEmail)?.id;
+
+      if (!userId) {
+        if (!defaultPassword) {
+          return res.status(503).json({ error: 'User creation is temporarily unavailable.' });
+        }
+        const { data: created, error: createError } = await d.supabaseAdmin.auth.admin.createUser({
+          email: normalizedEmail,
+          password: defaultPassword,
+          email_confirm: true,
+          user_metadata: { full_name: normalizedEmail },
+        });
+        if (createError) throw createError;
+        userId = created.user.id;
+      }
+
+      const { data: subscriber, error: profileError } = await d.supabaseAdmin
+        .from('profiles')
+        .upsert(
+          { id: userId, email: normalizedEmail, full_name: normalizedEmail, consumer_report: true },
+          { onConflict: 'id' }
+        )
+        .select('id, full_name, email, employee_code, consumer_report')
+        .single();
+      if (profileError) throw profileError;
+
+      res.status(201).json({ ok: true, subscriber });
+    } catch (e) {
+      if (/consumer_report|schema cache|column .* does not exist/i.test(String(e?.message || ''))) {
+        return res.status(503).json({
+          error: 'Apply the consumer_report database migration before adding recipients.',
+        });
+      }
       next(e);
     }
   });

@@ -251,9 +251,8 @@ export default function Preferences() {
       <div className="card space-y-4">
         <h2 className="text-base font-semibold">Digital Cafeteria Card</h2>
         <CafeteriaCard
-          cardNumber={cardData?.card?.cafeteria_card_number}
-          cardMasked={cardData?.card?.card_masked}
-          cardholder={cardData?.card?.cardholder || profile?.preferred_name || profile?.full_name || ''}
+          fullName={profile?.full_name || cardData?.profile?.full_name || ''}
+          employeeCode={cardData?.profile?.employee_code || employeeCode}
         />
       </div>
 
