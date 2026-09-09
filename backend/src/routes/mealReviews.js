@@ -278,7 +278,7 @@ router.get('/', requireRole('leadership', 'finance'), async (req, res, next) => 
     if (userIds.length) {
       const { data: profiles } = await supabaseAdmin
         .from('profiles')
-        .select('id, full_name, preferred_name, email')
+        .select('id, employee_code, full_name, preferred_name, email')
         .in('id', userIds);
       profileMap = new Map((profiles || []).map((p) => [p.id, p]));
 
@@ -300,6 +300,7 @@ router.get('/', requireRole('leadership', 'finance'), async (req, res, next) => 
       return {
         id: r.id,
         user_id: r.user_id,
+        employee_code: p?.employee_code || null,
         full_name: p?.full_name || null,
         preferred_name: p?.preferred_name || null,
         email: p?.email || emailMap.get(r.user_id) || null,

@@ -109,6 +109,10 @@ export default function Layout() {
   const [ticketOpen, setTicketOpen] = useState(false);
   const hasCard = Boolean(card?.cafeteria_card_number || (card?.card_masked && !String(card.card_masked).includes('----')));
 
+  function openMealReview() {
+    window.dispatchEvent(new Event('open-meal-review'));
+  }
+
   useEffect(() => {
     if (!profile?.id) return;
     api.tokensMe().then((d) => {
@@ -141,6 +145,13 @@ export default function Layout() {
                 {labels[to]}
               </NavLink>
             ))}
+            <button
+              type="button"
+              onClick={openMealReview}
+              className="px-3 py-1.5 rounded-md text-sm font-medium text-slate-600 hover:bg-slate-100"
+            >
+              Review
+            </button>
           </nav>
           <div className="flex items-center gap-2">
             {!hasCard && profile?.id ? (
@@ -202,6 +213,13 @@ export default function Layout() {
               {labels[to]}
             </NavLink>
           ))}
+          <button
+            type="button"
+            onClick={openMealReview}
+            className="whitespace-nowrap px-3 py-1.5 rounded-md text-xs font-medium text-slate-600 bg-slate-100"
+          >
+            Review
+          </button>
         </nav>
       </header>
       <main className="flex-1 mx-auto w-full max-w-7xl px-4 sm:px-6 py-6">

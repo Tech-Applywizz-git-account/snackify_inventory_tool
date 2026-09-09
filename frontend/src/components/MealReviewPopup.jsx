@@ -60,6 +60,30 @@ export default function MealReviewGate() {
     refreshStatus();
   }, [session, aal, refreshStatus]);
 
+  useEffect(() => {
+    async function handleOpenReview() {
+      if (status?.already_reviewed) {
+        setOpen(true);
+        return;
+      }
+      if (status?.in_window) {
+        setOpen(true);
+        return;
+      }
+
+      try {
+        const data = await api.mealReviewStatus();
+        setStatus(data);
+        setOpen(true);
+      } catch (err) {
+        console.warn('[meal-review] unable to open review', err?.message || err);
+      }
+    }
+
+    window.addEventListener('open-meal-review', handleOpenReview);
+    return () => window.removeEventListener('open-meal-review', handleOpenReview);
+  }, [status]);
+
   useEffect(() => () => clearReopenTimer(), [clearReopenTimer]);
 
   function scheduleReopen(secs) {
@@ -82,7 +106,7 @@ export default function MealReviewGate() {
     }
   }
 
-  function handleSubmitted() {
+  function handleSubmitted(review) {
     submittedRef.current = true;
     setOpen(false);
     clearReopenTimer();
@@ -92,28 +116,43 @@ export default function MealReviewGate() {
             ...s,
             already_reviewed: true,
             show_popup: false,
+            my_review: review || s.my_review,
           }
         : s
     );
   }
 
+  const canReview = status?.in_window && !status?.already_reviewed;
+
   return (
-    <MealReviewPopup
-      open={open}
-      status={status}
-      onClose={handleClose}
-      onSubmitted={handleSubmitted}
-    />
+    <>
+      {canReview && !open && (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="fixed right-4 top-20 z-[70] rounded-full bg-brand px-5 py-2.5 text-sm font-bold text-white shadow-lg transition-colors hover:bg-brand/90"
+        >
+          Review
+        </button>
+      )}
+      <MealReviewPopup
+        open={open}
+        status={status}
+        onClose={handleClose}
+        onSubmitted={handleSubmitted}
+      />
+    </>
   );
 }
 
-function MealReviewPopup({ open, status, onClose, onSubmitted }) {
+export function MealReviewPopup({ open, status, onClose, onSubmitted }) {
   const mealTypes = status?.meal_types || [
     { value: 'veg', label: 'Veg' },
     { value: 'non_veg', label: 'Non-veg' },
   ];
   const vibes = status?.vibes || [];
   const maxStars = status?.rating_scale?.max || 5;
+  const alreadyReviewed = Boolean(status?.already_reviewed);
 
   const [mealType, setMealType] = useState('');
   const [rating, setRating] = useState(0);
@@ -125,16 +164,16 @@ function MealReviewPopup({ open, status, onClose, onSubmitted }) {
 
   useEffect(() => {
     if (open) {
-      setMealType('');
-      setRating(0);
+      setMealType(status?.my_review?.meal_type || '');
+      setRating(status?.my_review?.rating || 0);
       setHoverStar(0);
-      setVibe(vibes[0]?.key || '');
-      setComment('');
+      setVibe(status?.my_review?.vibe || vibes[0]?.key || '');
+      setComment(status?.my_review?.comment || '');
       setError('');
       setBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when opened
-  }, [open]);
+  }, [open, status, vibes]);
 
   async function submit() {
     setError('');
@@ -153,13 +192,13 @@ function MealReviewPopup({ open, status, onClose, onSubmitted }) {
 
     setBusy(true);
     try {
-      await api.submitMealReview({
+      const result = await api.submitMealReview({
         meal_type: mealType,
         rating,
         vibe,
         comment: comment || null,
       });
-      onSubmitted();
+      onSubmitted(result?.review);
     } catch (e) {
       const msg = e?.message || 'Could not save review';
       if (msg.toLowerCase().includes('already reviewed')) {
@@ -199,10 +238,10 @@ function MealReviewPopup({ open, status, onClose, onSubmitted }) {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 id="meal-review-title" className="text-lg font-extrabold text-slate-900">
-                  How was today&apos;s meal?
+                  {alreadyReviewed ? 'Review successfully submitted' : 'How was today\'s meal?'}
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Quick vibe check — takes 10 seconds.
+                  {alreadyReviewed ? 'Your review for today is saved.' : 'Quick vibe check — takes 10 seconds.'}
                   {status?.meal_date ? ` · ${status.meal_date}` : ''}
                 </p>
               </div>
@@ -215,6 +254,34 @@ function MealReviewPopup({ open, status, onClose, onSubmitted }) {
               </button>
             </div>
 
+            {alreadyReviewed ? (
+              <div className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50/70 p-4">
+                <div className="text-sm font-bold text-emerald-700">Thank you for your feedback.</div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Meal type</div>
+                    <div className="font-semibold text-slate-800">
+                      {mealType === 'veg' ? '🥬 Veg' : '🍗 Non-veg'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Rating</div>
+                    <div className="font-semibold text-amber-700">{rating}/5</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Vibe</div>
+                    <div className="font-semibold text-brand">{status?.my_review?.vibe_label || vibe || '—'}</div>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Comment</div>
+                  <div className={comment ? 'whitespace-pre-wrap break-words text-sm text-slate-700' : 'text-sm italic text-slate-400'}>
+                    {comment || 'NULL'}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
             {/* Meal type */}
             <div>
               <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
@@ -328,6 +395,8 @@ function MealReviewPopup({ open, status, onClose, onSubmitted }) {
                 {busy ? 'Saving…' : 'Submit review'}
               </button>
             </div>
+              </>
+            )}
           </motion.div>
         </motion.div>
       )}

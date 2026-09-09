@@ -154,8 +154,47 @@ const STAGE_INFO = {
 // Items that get a customization prompt
 const BREAD_ITEMS = ['bread + peanut butter', 'bread + jam'];
 const isBreadItem = (name) => BREAD_ITEMS.includes((name || '').toLowerCase());
+const ACTIVE_ORDER_STATUSES = ['confirming', 'pending', 'in_progress'];
+const MAX_ACTIVE_ORDERS = 5;
+const keepLatestActiveOrders = (orders) =>
+  (orders || [])
+    .filter((order) => ACTIVE_ORDER_STATUSES.includes(order.status))
+    .slice(0, MAX_ACTIVE_ORDERS);
 
 const SANDWICH_SPREADS = [
+  {
+    key: 'chilli_cheese_blend',
+    displayName: 'Chilli Cheese Blend Sandwich',
+    spreadLabel: 'Chilli Cheese Blend',
+    emoji: '🧀',
+    oneSideAmount: '20g',
+    bothSidesAmount: '40g',
+    oneSideCalories: 180,
+    bothSidesCalories: 260,
+    matches: (text) => text.includes('chilli cheese blend'),
+  },
+  {
+    key: 'jalapeno_dip',
+    displayName: 'Jalapeno Dip Sandwich',
+    spreadLabel: 'Jalapeno Dip',
+    emoji: '🌶️',
+    oneSideAmount: '20g',
+    bothSidesAmount: '40g',
+    oneSideCalories: 160,
+    bothSidesCalories: 220,
+    matches: (text) => text.includes('jalapeno dip'),
+  },
+  {
+    key: 'avocado_salsa_dressing',
+    displayName: 'Avocado Salsa Sandwich',
+    spreadLabel: 'Avocado Salsa',
+    emoji: '🥑',
+    oneSideAmount: '20g',
+    bothSidesAmount: '40g',
+    oneSideCalories: 180,
+    bothSidesCalories: 260,
+    matches: (text) => text.includes('avocado salsa'),
+  },
   {
     key: 'peanut_butter',
     displayName: 'Peanut Butter Sandwich',
@@ -1752,10 +1791,7 @@ export default function Cafeteria() {
       setItems(enrichItemsWithVirtualDrinks(itemsData || []));
       setSelfPickupDay(pickupStatus);
 
-      const active = (requestsData || []).filter((r) =>
-        ['confirming', 'pending', 'in_progress'].includes(r.status)
-      );
-      setActiveOrders(active);
+      setActiveOrders(keepLatestActiveOrders(requestsData));
 
       const recent = (requestsData || [])
         .filter((r) => r.status === 'done' || r.status === 'cancelled')
@@ -2008,6 +2044,9 @@ export default function Cafeteria() {
       setShowSheet(false);
       setPayOrderId(lastReq?.id || null);
       setPayPhase('paid');
+      if (lastReq) {
+        setActiveOrders((orders) => keepLatestActiveOrders([lastReq, ...orders]));
+      }
       if (location && session) {
         setSavedLocation(location);
         supabase
@@ -2159,33 +2198,11 @@ export default function Cafeteria() {
   // ── Group items by category ────────────────────────────────────────────────────
   // Include greyed-out dependency-backed items so users understand why they cannot order.
   // Exclude only items that are truly hidden backing stock rows.
-  // Also exclude items the facility manager has explicitly marked as out of stock today (stock_today = 0).
+  // Keep out-of-stock items in the catalog so employees can see them; ItemChip
+  // renders the unavailable state and prevents ordering.
   //
-  // Special case for sandwich-spread items: both the named sandwich item ("Pineapple Jam Sandwich")
-  // and the backing ingredient ("Pineapple Jam") match the same spread config key and can both render
-  // as the same UI card. If the FM marks ANY row with that spread key as out-of-stock, hide ALL rows
-  // sharing that key so the card is fully hidden from employees.
-  const oosSpreadKeys = new Set(
-    items
-      .filter((item) => {
-        const stockToday = item.stock_today;
-        return stockToday !== null && stockToday !== undefined && stockToday <= 0;
-      })
-      .map((item) => getSandwichSpreadConfig(item)?.key)
-      .filter(Boolean)
-  );
-
   const visibleItems = dedupeItemsById(
-    items.filter(isCustomerCatalogItem).filter((item) => {
-      const stockToday = item.stock_today;
-      const obMarkedOut =
-        stockToday !== null && stockToday !== undefined && stockToday <= 0;
-      if (obMarkedOut) return false;
-      // Also hide if another row for the same sandwich-spread key was marked out-of-stock
-      const spreadKey = getSandwichSpreadConfig(item)?.key;
-      if (spreadKey && oosSpreadKeys.has(spreadKey)) return false;
-      return true;
-    })
+    items.filter(isCustomerCatalogItem)
   );
   const grouped = visibleItems.reduce((acc, item) => {
     const cat = getDisplayCategory(item);

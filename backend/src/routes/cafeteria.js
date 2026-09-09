@@ -26,19 +26,73 @@ router.get('/items', async (_req, res, next) => {
 });
 
 // POST /api/cafeteria/items — leadership only
-router.post('/items', requireRole('leadership'), async (req, res, next) => {
+router.post('/items', requireRole('leadership', 'admin', 'office_boy'), async (req, res, next) => {
   try {
-    const { item_name, category, emoji = '☕', description = '', tags = [] } = req.body;
-    if (!item_name || !category) {
-      return res.status(400).json({ error: 'item_name and category are required' });
+    const {
+      item_name,
+      display_name,
+      category = 'food',
+      emoji = '🍽️',
+      description = '',
+      tags = [],
+      coin_price,
+      stock_quantity = 0,
+      frontend_name,
+      sandwich_type = 'regular',
+    } = req.body;
+    const itemName = String(item_name || '').trim();
+    const frontName = String(frontend_name || display_name || itemName).trim();
+    const coinPrice = Number(coin_price);
+    const stockQuantity = Number(stock_quantity);
+
+    if (!itemName || !frontName || !category) {
+      return res.status(400).json({ error: 'item_name, frontend_name, and category are required' });
     }
+    if (!Number.isInteger(coinPrice) || coinPrice < 0) {
+      return res.status(400).json({ error: 'coin_price must be a non-negative integer' });
+    }
+    if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
+      return res.status(400).json({ error: 'stock_quantity must be a non-negative integer' });
+    }
+
+    const skuCode = `CAF_${itemName.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '')}`;
     const { data, error } = await supabaseAdmin
       .from('cafeteria_items')
-      .insert({ item_name, category, emoji, description, tags, available: true })
+      .insert({
+        item_name: itemName,
+        display_name: String(display_name || frontName).trim(),
+        frontend_name: frontName,
+        category,
+        emoji,
+        description,
+        tags,
+        available: true,
+        orderable: true,
+        stock_today: stockQuantity,
+        stock_servings: stockQuantity,
+        sandwich_type,
+        visible_to_employees: true,
+      })
       .select()
       .single();
     if (error) throw error;
-    res.status(201).json(data);
+
+    const { error: tokenError } = await supabaseAdmin.from('token_items').upsert(
+      {
+        sku_code: skuCode,
+        display_name: frontName,
+        kind: category === 'meal' ? 'meal' : 'snack',
+        tokens: coinPrice,
+        aliases: [itemName, frontName],
+        cafeteria_item_id: data.id,
+        active: true,
+      },
+      { onConflict: 'sku_code' }
+    );
+    if (tokenError) throw tokenError;
+
+    const catalog = await loadCatalog().catch(() => []);
+    res.status(201).json(attachTokenPrice(data, catalog));
   } catch (e) {
     next(e);
   }

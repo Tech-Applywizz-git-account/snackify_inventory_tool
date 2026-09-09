@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Star } from 'lucide-react';
 import { api } from '../lib/api.js';
 
 function todayIST() {
@@ -35,14 +34,14 @@ export default function MealReviewsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-col items-center gap-3 text-center">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Meal Reviews</h1>
           <p className="text-sm text-slate-500 mt-0.5">
             Who reviewed lunch, stars, vibes, and free-text feedback.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-center gap-2">
           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider" htmlFor="review-date">
             Date
           </label>
@@ -59,11 +58,11 @@ export default function MealReviewsPage() {
         </div>
       </div>
 
-      {err && <div className="text-sm text-rose-600 bg-rose-50 rounded-xl p-3">{err}</div>}
+      {err && <div className="mx-auto w-full max-w-5xl rounded-xl bg-rose-50 p-3 text-center text-sm text-rose-600">{err}</div>}
 
-      <div className="card">
-        <div className="flex items-center justify-between mb-4">
-          <div className="text-sm font-bold text-slate-700">
+      <div className="card mx-auto w-full max-w-5xl">
+        <div className="mb-3 flex items-center justify-center">
+          <div className="text-center text-sm font-bold text-slate-700">
             {count} review{count === 1 ? '' : 's'} · {date}
           </div>
         </div>
@@ -73,50 +72,60 @@ export default function MealReviewsPage() {
         ) : rows.length === 0 ? (
           <div className="py-12 text-center text-slate-400 text-sm">No reviews for this date yet.</div>
         ) : (
-          <div className="space-y-3">
-            {rows.map((r) => (
-              <div
-                key={r.id}
-                className="border border-slate-100 rounded-xl p-4 bg-slate-50/50 flex flex-col sm:flex-row sm:items-start gap-3"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="font-bold text-slate-900 truncate">
-                    {r.preferred_name || r.full_name || 'Unknown'}
-                  </div>
-                  <div className="text-xs text-slate-400 truncate">{r.email || r.user_id}</div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                    <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 font-semibold text-slate-700">
+          <div className="overflow-hidden">
+            <table className="w-full table-fixed border-collapse text-left text-xs sm:text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/80 text-center text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  <th className="w-[12%] px-1.5 py-2.5 sm:px-2">Employee code</th>
+                  <th className="w-[19%] px-1.5 py-2.5 sm:px-2">Employee</th>
+                  <th className="w-[12%] px-1.5 py-2.5 sm:px-2">Meal type</th>
+                  <th className="w-[9%] px-1.5 py-2.5 sm:px-2">Rating</th>
+                  <th className="w-[11%] px-1.5 py-2.5 sm:px-2">Vibe</th>
+                  <th className="w-[27%] px-1.5 py-2.5 sm:px-2">Comment</th>
+                  <th className="w-[10%] px-1.5 py-2.5 sm:px-2">Reviewed</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rows.map((r) => (
+                  <tr key={r.id} className="align-top text-slate-700 transition-colors hover:bg-slate-50/70">
+                    <td className="break-words px-1.5 py-2.5 font-bold text-slate-900 sm:px-2">
+                      {r.employee_code || 'Null'}
+                    </td>
+                    <td className="break-words px-1.5 py-2.5 sm:px-2">
+                      <div className="truncate font-semibold text-slate-900">
+                        {r.preferred_name || r.full_name || 'Unknown'}
+                      </div>
+                      <div className="truncate text-xs text-slate-400">{r.email || r.user_id}</div>
+                    </td>
+                    <td className="break-words px-1.5 py-2.5 sm:px-2">
                       {r.meal_type === 'veg' ? '🥬 Veg' : '🍗 Non-veg'}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full bg-amber-50 border border-amber-100 text-amber-800 font-semibold inline-flex items-center gap-1">
-                      <Star size={12} className="fill-amber-400 text-amber-400" />
+                    </td>
+                    <td className="break-words px-1.5 py-2.5 font-semibold text-amber-700 sm:px-2">
                       {r.rating}/5
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full bg-brand/10 text-brand font-semibold">
+                    </td>
+                    <td className="break-words px-1.5 py-2.5 font-semibold text-brand sm:px-2">
                       {r.vibe_label || r.vibe}
-                    </span>
-                  </div>
-                  {r.comment ? (
-                    <p className="mt-2 text-sm text-slate-600 whitespace-pre-wrap break-words">
-                      {r.comment}
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-xs text-slate-400 italic">No written comment</p>
-                  )}
-                </div>
-                <div className="text-[11px] text-slate-400 shrink-0">
-                  {r.created_at
-                    ? new Date(r.created_at).toLocaleString('en-IN', {
-                        timeZone: 'Asia/Kolkata',
-                        day: '2-digit',
-                        month: 'short',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })
-                    : ''}
-                </div>
-              </div>
-            ))}
+                    </td>
+                    <td className="whitespace-normal break-words px-1.5 py-2.5 leading-5 text-slate-600 sm:px-2">
+                      <span className={r.comment ? '' : 'italic text-slate-400'}>
+                        {r.comment || 'NULL'}
+                      </span>
+                    </td>
+                    <td className="break-words px-1.5 py-2.5 text-xs text-slate-400 sm:px-2">
+                      {r.created_at
+                        ? new Date(r.created_at).toLocaleString('en-IN', {
+                            timeZone: 'Asia/Kolkata',
+                            day: '2-digit',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
