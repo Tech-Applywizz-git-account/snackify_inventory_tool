@@ -481,11 +481,10 @@ export function createAuthRouter(overrides = {}) {
         return res.json({ nextStep: 'otp' }); // don't reveal inactive status
       }
 
-      if (profile.role === 'leadership') {
+      const verifiedFactor = await findVerifiedTotpFactor(existingUser.id);
+      if (profile.role === 'leadership' && !verifiedFactor) {
         return res.json({ nextStep: 'password' });
       }
-
-      const verifiedFactor = await findVerifiedTotpFactor(existingUser.id);
       if (!verifiedFactor) {
         return res.json({ nextStep: 'otp' });
       }
@@ -510,7 +509,10 @@ export function createAuthRouter(overrides = {}) {
 
       if (txErr) throw txErr;
 
-      res.json({ nextStep: 'authenticator', transactionId: tx.id });
+      res.json({
+        nextStep: profile.role === 'leadership' ? 'admin-options' : 'authenticator',
+        transactionId: tx.id,
+      });
     } catch (e) {
       if (e instanceof z.ZodError) {
         return res.status(400).json({ error: 'Invalid request.' });

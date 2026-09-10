@@ -78,7 +78,12 @@ export default function Login() {
 
     try {
       const data = await api.startLogin(trimmed);
-      if (data.nextStep === 'password') {
+      if (data.nextStep === 'admin-options') {
+        setTransactionId(data.transactionId);
+        setTotpCode('');
+        setPassword('');
+        setStep('admin-options');
+      } else if (data.nextStep === 'password') {
         setPassword('');
         setStep('password');
       } else if (data.nextStep === 'authenticator') {
@@ -124,6 +129,18 @@ export default function Login() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function chooseAdminPassword() {
+    setErr('');
+    setPassword('');
+    setStep('password');
+  }
+
+  function chooseAdminAuthenticator() {
+    setErr('');
+    setTotpCode('');
+    setStep('verify');
   }
 
   async function submitOtp(e) {
@@ -508,6 +525,42 @@ export default function Login() {
                     )}
 
                     {/* ═══ STEP: ADMIN PASSWORD ═══ */}
+                    {step === 'admin-options' && (
+                      <motion.div
+                        key="admin-options"
+                        className="space-y-4"
+                        initial={{ opacity: 0, y: 16 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.4 }}
+                      >
+                        <div className="text-center">
+                          <h2 className="text-xl font-bold text-white mb-1">Admin sign in</h2>
+                          <p className="text-sm text-white/40">Choose a sign-in method.</p>
+                        </div>
+                        <div className="grid gap-3">
+                          <button
+                            type="button"
+                            className="w-full rounded-2xl px-4 py-3.5 text-sm font-semibold text-white"
+                            style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)' }}
+                            onClick={chooseAdminPassword}
+                          >
+                            Sign in with admin password
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full rounded-2xl px-4 py-3.5 text-sm font-semibold text-white"
+                            style={{ background: 'rgba(41,254,41,0.12)', border: '1px solid rgba(41,254,41,0.25)' }}
+                            onClick={chooseAdminAuthenticator}
+                          >
+                            Sign in with Microsoft Authenticator
+                          </button>
+                        </div>
+                        {err && <Msg text={err} />}
+                        <BackBtn onClick={resetToEmail} />
+                      </motion.div>
+                    )}
+
                     {step === 'password' && (
                       <motion.div
                         key="password"
