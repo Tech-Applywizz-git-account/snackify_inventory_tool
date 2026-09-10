@@ -60,6 +60,11 @@ export const api = {
     }),
   startLogin: (email) =>
     request('/api/auth/start-login', { method: 'POST', body: JSON.stringify({ email }) }),
+  verifyAdminPassword: (email, password) =>
+    request('/api/auth/verify-admin-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
   verifyTotpLogin: (transactionId, code) =>
     request('/api/auth/verify-totp-login', {
       method: 'POST',
@@ -101,6 +106,7 @@ export const api = {
   aiSummaryHistory: () => request('/api/reports/ai-summary/history'),
 
   listUsers: () => request('/api/admin/users'),
+  listUnbookedUsers: () => request('/api/admin/unbooked-users'),
   setUserRole: (userId, role) =>
     request(`/api/admin/users/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   setUserPreferredName: (userId, preferredName) =>
@@ -127,6 +133,8 @@ export const api = {
     request('/api/admin/users/create', { method: 'POST', body: JSON.stringify(body) }),
   inviteUser: (body) =>
     request('/api/admin/users/invite', { method: 'POST', body: JSON.stringify(body) }),
+  lateMealBooking: (body) =>
+    request('/api/admin/late-meal-booking', { method: 'POST', body: JSON.stringify(body) }),
 
   submitRequest: (raw_text) =>
     request('/api/requests', { method: 'POST', body: JSON.stringify({ raw_text }) }),

@@ -3,8 +3,56 @@ import { z } from 'zod';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
 import { lookupEmployeeIdByEmail } from '../lib/hrms.js';
+import { applyMealTokens, refundTokens } from '../lib/tokens.js';
+import { getCabinName } from './cron.js';
 
 const roleEnum = z.enum(['facility_manager', 'finance', 'leadership', 'staff', 'office_boy']);
+const lateMealChoices = z.enum(['veg', 'egg', 'non_veg']);
+
+function getISTDateString() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function getISTParts() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  return Object.fromEntries(parts.map((part) => [part.type, Number(part.value)]));
+}
+
+function mealOptionsForDate(date) {
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+  return {
+    1: ['veg'],
+    2: ['veg', 'egg'],
+    3: ['veg', 'non_veg'],
+    4: ['veg', 'egg'],
+    5: ['veg', 'non_veg'],
+  }[day] || [];
+}
+
+function generateLateMealToken(date, cabinName, sequence) {
+  const dateObj = new Date(`${date}T00:00:00Z`);
+  const month = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'][dateObj.getUTCMonth()];
+  const abbreviation = cabinName === 'Pantry Counter'
+    ? 'PTRY'
+    : cabinName === 'Unassigned'
+      ? 'UNASG'
+      : cabinName.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 6) || 'GEN';
+  return `${String(dateObj.getUTCDate()).padStart(2, '0')}${month}-${abbreviation}-${String(sequence).padStart(3, '0')}`;
+}
 
 // Reads DEFAULT_PASSWORD from env at call time; never falls back to a hardcoded value.
 // Named export for focused tests — not a public API.
@@ -86,6 +134,42 @@ export function createAdminRouter(overrides = {}) {
         email: emailMap.get(p.id) || null,
       }));
       res.json(rows);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // GET /api/admin/unbooked-users - active users without today's meal booking
+  router.get('/unbooked-users', async (_req, res, next) => {
+    try {
+      const mealDate = getISTDateString();
+      const [{ data: profiles, error: profilesErr }, { data: bookings, error: bookingsErr }] = await Promise.all([
+        d.supabaseAdmin
+          .from('profiles')
+          .select('id, full_name, preferred_name, active, created_at')
+          .eq('active', true)
+          .order('full_name', { ascending: true }),
+        d.supabaseAdmin
+          .from('meal_bookings')
+          .select('user_id')
+          .eq('meal_date', mealDate),
+      ]);
+      if (profilesErr) throw profilesErr;
+      if (bookingsErr) throw bookingsErr;
+
+      const bookedUserIds = new Set((bookings || []).map((booking) => booking.user_id));
+      const { data: usersList, error: usersErr } = await d.supabaseAdmin.auth.admin.listUsers({
+        page: 1,
+        perPage: 200,
+      });
+      if (usersErr) throw usersErr;
+
+      const emailMap = new Map((usersList?.users || []).map((user) => [user.id, user.email]));
+      const users = (profiles || [])
+        .filter((user) => !bookedUserIds.has(user.id))
+        .map((user) => ({ ...user, email: emailMap.get(user.id) || null }));
+
+      res.json({ meal_date: mealDate, users });
     } catch (e) {
       next(e);
     }
@@ -369,6 +453,112 @@ export function createAdminRouter(overrides = {}) {
         ok: true,
         user_id: req.params.userId,
         email: targetUser.email || null,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Admin-only late booking. This creates one targeted print job and never
+  // re-runs the daily cabin batch or touches historical print jobs.
+  router.post('/late-meal-booking', async (req, res, next) => {
+    try {
+      const { user_id, choice } = z.object({
+        user_id: z.string().uuid(),
+        choice: lateMealChoices,
+      }).parse(req.body);
+      const ist = getISTParts();
+      if (ist.hour < 10) {
+        return res.status(400).json({ error: 'Late meal booking opens after 10:00 AM IST.' });
+      }
+
+      const mealDate = getISTDateString();
+      const options = mealOptionsForDate(mealDate);
+      if (!options.includes(choice)) {
+        return res.status(400).json({ error: `${choice} is not available for today.` });
+      }
+
+      const { data: target, error: targetErr } = await d.supabaseAdmin
+        .from('profiles')
+        .select('id, full_name, preferred_name, active')
+        .eq('id', user_id)
+        .maybeSingle();
+      if (targetErr) throw targetErr;
+      if (!target || !target.active) return res.status(404).json({ error: 'Active user not found.' });
+
+      const { data: existing, error: existingErr } = await d.supabaseAdmin
+        .from('meal_bookings')
+        .select('id, choice, token_number')
+        .eq('user_id', user_id)
+        .eq('meal_date', mealDate)
+        .maybeSingle();
+      if (existingErr) throw existingErr;
+      if (existing) return res.status(409).json({ error: 'This user already has a meal booking for today.' });
+
+      const { data: prefs, error: prefsErr } = await d.supabaseAdmin
+        .from('employee_cafeteria_preferences')
+        .select('cabin, preferred_location')
+        .eq('user_id', user_id)
+        .maybeSingle();
+      if (prefsErr) throw prefsErr;
+      const cabinName = getCabinName(prefs?.cabin, prefs?.preferred_location);
+
+      const { count: existingTokenCount, error: countErr } = await d.supabaseAdmin
+        .from('meal_bookings')
+        .select('id', { count: 'exact', head: true })
+        .eq('meal_date', mealDate)
+        .eq('cabin_name', cabinName)
+        .not('token_number', 'is', null);
+      if (countErr) throw countErr;
+      const tokenNumber = generateLateMealToken(mealDate, cabinName, (existingTokenCount || 0) + 1);
+
+      const { data: booking, error: bookingErr } = await d.supabaseAdmin
+        .from('meal_bookings')
+        .insert({
+          user_id,
+          meal_date: mealDate,
+          choice,
+          booked_at: new Date().toISOString(),
+          token_number: tokenNumber,
+          cabin_name: cabinName,
+        })
+        .select()
+        .single();
+      if (bookingErr) throw bookingErr;
+
+      let spend;
+      try {
+        spend = await applyMealTokens({ userId: user_id, bookingId: booking.id, mealDate, choice });
+      } catch (e) {
+        await d.supabaseAdmin.from('meal_bookings').delete().eq('id', booking.id);
+        throw e;
+      }
+
+      const { data: job, error: jobErr } = await d.supabaseAdmin
+        .from('meal_print_jobs')
+        .insert({
+          meal_date: mealDate,
+          cabin_name: cabinName,
+          print_type: 'reprint',
+          scheduled_for: new Date().toISOString(),
+          status: 'pending',
+          token_count: 1,
+          requested_by: req.user.id,
+          booking_user_id: user_id,
+        })
+        .select()
+        .single();
+      if (jobErr) {
+        await refundTokens({ userId: user_id, refType: 'meal_booking', refId: booking.id });
+        await d.supabaseAdmin.from('meal_bookings').delete().eq('id', booking.id);
+        throw jobErr;
+      }
+
+      res.status(201).json({
+        ok: true,
+        meal_date: mealDate,
+        booking: { ...booking, tokens_charged: spend?.tokens_charged || 0 },
+        print_job: job,
       });
     } catch (e) {
       next(e);
