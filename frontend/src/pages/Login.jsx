@@ -49,6 +49,7 @@ export default function Login() {
 
   const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [otpCode, setOtpCode] = useState('');
@@ -77,7 +78,10 @@ export default function Login() {
 
     try {
       const data = await api.startLogin(trimmed);
-      if (data.nextStep === 'authenticator') {
+      if (data.nextStep === 'password') {
+        setPassword('');
+        setStep('password');
+      } else if (data.nextStep === 'authenticator') {
         setTransactionId(data.transactionId);
         setTotpCode('');
         setStep('verify');
@@ -91,6 +95,34 @@ export default function Login() {
     } finally {
       setBusy(false);
       submitting.current = false;
+    }
+  }
+
+  async function submitAdminPassword(e) {
+    e.preventDefault();
+    setErr('');
+    if (!password) {
+      setErr('Enter the admin password.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api.verifyAdminPassword(email, password);
+      const { error: sessionErr } = await supabase.auth.setSession({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+      });
+      if (sessionErr) {
+        setErr(`Could not finish sign-in: ${sessionErr.message}`);
+        return;
+      }
+      setStep('done');
+      navigate('/', { replace: true });
+    } catch (ex) {
+      setErr(ex.message || 'Sign-in failed.');
+      setPassword('');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -156,6 +188,7 @@ export default function Login() {
     setErr('');
     setOtpCode('');
     setTotpCode('');
+    setPassword('');
     setQrCode('');
     setTransactionId('');
     setEnrollmentTransactionId('');
@@ -469,6 +502,41 @@ export default function Login() {
                           <CodeInput value={otpCode} onChange={setOtpCode} />
                           {err && <Msg text={err} />}
                           <GradientBtn busy={busy}>{busy ? 'Verifying…' : 'Verify email →'}</GradientBtn>
+                        </form>
+                        <BackBtn onClick={resetToEmail} />
+                      </motion.div>
+                    )}
+
+                    {/* ═══ STEP: ADMIN PASSWORD ═══ */}
+                    {step === 'password' && (
+                      <motion.div
+                        key="password"
+                        className="space-y-4"
+                        initial={{ opacity: 0, y: 16 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.4 }}
+                      >
+                        <div className="text-center">
+                          <h2 className="text-xl font-bold text-white mb-1">Admin sign in</h2>
+                          <p className="text-sm text-white/40">Enter the admin portal password.</p>
+                        </div>
+                        <form onSubmit={submitAdminPassword} className="space-y-3">
+                          <input
+                            type="password"
+                            required
+                            autoComplete="current-password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="Admin password"
+                            className="w-full rounded-2xl px-4 py-3.5 text-sm text-white placeholder-white/20 focus:outline-none"
+                            style={{
+                              background: 'rgba(255,255,255,0.05)',
+                              border: '1px solid rgba(255,255,255,0.1)',
+                            }}
+                          />
+                          {err && <Msg text={err} />}
+                          <GradientBtn busy={busy}>{busy ? 'Signing in…' : 'Sign in →'}</GradientBtn>
                         </form>
                         <BackBtn onClick={resetToEmail} />
                       </motion.div>

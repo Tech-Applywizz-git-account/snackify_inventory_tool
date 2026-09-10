@@ -35,6 +35,21 @@ function savePrinted() {
   fs.writeFileSync(PRINTED_LOG, JSON.stringify([...printedIds]));
 }
 
+function currentIstDayBounds() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const today = `${values.year}-${values.month}-${values.day}`;
+  const start = new Date(`${today}T00:00:00+05:30`);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
 // -- Receipt helpers ------------------------------------------
 function stripEmojis(str) {
   if (!str) return '';
@@ -290,13 +305,14 @@ $bytes = [System.IO.File]::ReadAllBytes('${tempFile.replace(/\\/g, '\\\\')}')
 
 // -- Poll Supabase for new orders -----------------------------
 async function checkOrders() {
-  const since = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+  const { start, end } = currentIstDayBounds();
 
   const { data: orders, error } = await supabase
     .from('v_request_queue')
     .select('*')
     .in('status', ['pending', 'done'])
-    .gte('created_at', since)
+    .gte('created_at', start)
+    .lt('created_at', end)
     .order('created_at', { ascending: true });
 
   if (error) {

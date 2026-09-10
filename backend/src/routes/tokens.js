@@ -12,6 +12,21 @@ import {
 
 const router = Router();
 
+function currentIstDayBounds() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const today = `${values.year}-${values.month}-${values.day}`;
+  const start = new Date(`${today}T00:00:00+05:30`);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
 function nextWorkingDate() {
   const now = new Date();
   const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -239,10 +254,13 @@ router.patch('/card-style', async (req, res, next) => {
 
 router.get('/print-queue', requireRole('office_boy', 'facility_manager', 'leadership'), async (_req, res, next) => {
   try {
+    const { start, end } = currentIstDayBounds();
     const { data: cafeteria } = await supabaseAdmin
       .from('token_usage')
       .select('id, user_id, lines, tokens_delta, print_status, print_error, print_attempts, created_at, ref_id, ref_type')
       .in('print_status', ['pending', 'printing', 'failed'])
+      .gte('created_at', start)
+      .lt('created_at', end)
       .order('created_at', { ascending: true })
       .limit(100);
     const { data: meals } = await supabaseAdmin
