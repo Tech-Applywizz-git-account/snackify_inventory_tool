@@ -37,6 +37,11 @@ function norm(name) {
     .replace(/\s+/g, ' ');
 }
 
+function isFreeWaterItem(name) {
+  const text = norm(name);
+  return text === 'water' || text === 'water bottle' || text.includes('mineral water');
+}
+
 function nameKeys(name) {
   const n = norm(name);
   const key = n
@@ -266,18 +271,29 @@ export async function ensureMonthGrant(userId) {
 }
 
 export async function spendTokens({ userId, idempotencyKey, refType, refId, lines }) {
+  const payableLines = (lines || []).filter((line) => !isFreeWaterItem(line?.name));
+  if (payableLines.length === 0) {
+    const wallet = await ensureMonthGrant(userId);
+    return {
+      usage_id: null,
+      tokens_charged: 0,
+      balance_after: Number(wallet?.balance) || 0,
+      lines: [],
+      idempotent: false,
+    };
+  }
   const { data, error } = await supabaseAdmin.rpc('snackify_spend', {
     p_user_id: userId,
     p_idempotency_key: idempotencyKey,
     p_ref_type: refType,
     p_ref_id: refId,
-    p_lines: lines,
+    p_lines: payableLines,
   });
   if (!error) return data;
   if (!rpcFailedMissing(error)) throw tokenError(error);
 
   const catalog = await loadCatalog();
-  const priced = (lines || []).map((l) => {
+  const priced = payableLines.map((l) => {
     const qty = Math.max(1, parseInt(l.qty, 10) || 1);
     const hit = matchTokenItem(catalog, l.name);
     const fromLine = Number(l.tokens || l.unit_tokens || l.coinPrice) || 0;

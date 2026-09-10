@@ -167,6 +167,9 @@ export default function Admin() {
   const [unbookedUsers, setUnbookedUsers] = useState(null);
   const [unbookedUsersOpen, setUnbookedUsersOpen] = useState(false);
   const [unbookedUsersLoading, setUnbookedUsersLoading] = useState(false);
+  const [bookedUsers, setBookedUsers] = useState(null);
+  const [bookedUsersOpen, setBookedUsersOpen] = useState(false);
+  const [bookedUsersLoading, setBookedUsersLoading] = useState(false);
   const [lateMealSearch, setLateMealSearch] = useState('');
   const [lateMealSearchQuery, setLateMealSearchQuery] = useState('');
   const [lateMealMatches, setLateMealMatches] = useState([]);
@@ -380,6 +383,19 @@ export default function Admin() {
     }
   }
 
+  async function onShowBookedUsers() {
+    setBookedUsersLoading(true);
+    setErr('');
+    try {
+      setBookedUsers(await api.listBookedUsers());
+      setBookedUsersOpen(true);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBookedUsersLoading(false);
+    }
+  }
+
   function downloadUnbookedUsers() {
     if (!unbookedUsers?.users?.length) return;
 
@@ -483,14 +499,24 @@ export default function Admin() {
         <div className="card">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
             <h2 className="font-semibold">Add User / Book Late Meal</h2>
-            <button
-              type="button"
-              className="btn-secondary text-sm"
-              onClick={onShowUnbookedUsers}
-              disabled={unbookedUsersLoading}
-            >
-              {unbookedUsersLoading ? 'Loading…' : 'Show Not Booked Today'}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                onClick={onShowUnbookedUsers}
+                disabled={unbookedUsersLoading}
+              >
+                {unbookedUsersLoading ? 'Loading…' : 'Show Not Booked Today'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                onClick={onShowBookedUsers}
+                disabled={bookedUsersLoading}
+              >
+                {bookedUsersLoading ? 'Loading…' : 'Show Booked Today'}
+              </button>
+            </div>
           </div>
           <p className="text-xs text-slate-500 mb-4">
             Available after 10:00 AM IST. This creates today&apos;s booking and prints one receipt only for the selected user.
@@ -646,7 +672,7 @@ export default function Admin() {
                     </td>
                     <td className="py-2 pr-3">
                       <select
-                        className="input py-1 text-xs"
+                        className="input min-w-[140px] py-1 text-xs"
                         value={u.role}
                         disabled={busy || (isMe && u.role === 'leadership')}
                         onChange={(e) => onChangeRole(u.id, e.target.value)}
@@ -818,6 +844,65 @@ export default function Admin() {
                 disabled={unbookedUsers.users.length === 0}
               >
                 Download CSV
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bookedUsersOpen && bookedUsers && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => setBookedUsersOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-2xl max-h-[85vh] rounded-t-xl sm:rounded-xl shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 p-4 border-b">
+              <div>
+                <h2 className="font-semibold">Users who have booked</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  {bookedUsers.meal_date} · {bookedUsers.users.length} booking{bookedUsers.users.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="p-2 text-slate-500 hover:text-slate-900"
+                aria-label="Close users who have booked"
+                onClick={() => setBookedUsersOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="overflow-y-auto max-h-[65vh] p-4">
+              {bookedUsers.users.length === 0 ? (
+                <p className="text-sm text-slate-500">No users have booked a meal for today.</p>
+              ) : (
+                <div className="divide-y border rounded-md">
+                  {bookedUsers.users.map((user, index) => (
+                    <div key={user.id} className="flex items-center gap-3 p-3">
+                      <div className="w-8 shrink-0 text-sm font-semibold text-slate-500">{index + 1}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-slate-900">
+                          {user.preferred_name || user.full_name || user.email || user.id}
+                        </div>
+                        {user.preferred_name && user.full_name && (
+                          <div className="text-xs text-slate-500">{user.full_name}</div>
+                        )}
+                        {user.email && <div className="text-xs text-slate-500">{user.email}</div>}
+                      </div>
+                      <div className="shrink-0 text-sm font-medium capitalize text-slate-700">
+                        {user.choice === 'non_veg' ? 'Non-veg' : user.choice || 'Booked'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end p-4 border-t">
+              <button type="button" className="btn-secondary" onClick={() => setBookedUsersOpen(false)}>
+                Close
               </button>
             </div>
           </div>

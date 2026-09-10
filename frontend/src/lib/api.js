@@ -107,6 +107,7 @@ export const api = {
 
   listUsers: () => request('/api/admin/users'),
   listUnbookedUsers: () => request('/api/admin/unbooked-users'),
+  listBookedUsers: () => request('/api/admin/booked-users'),
   setUserRole: (userId, role) =>
     request(`/api/admin/users/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   setUserPreferredName: (userId, preferredName) =>

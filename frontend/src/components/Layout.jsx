@@ -175,7 +175,7 @@ export default function Layout() {
               </div>
             ) : null}
             {wallet?.balance != null ? (
-              <div className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-slate-800 bg-amber-50 border border-amber-200 rounded-full px-3 py-1">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 bg-amber-50 border border-amber-200 rounded-full px-3 py-1">
                 <SnackCoin size={14} />
                 {wallet.balance}
               </div>

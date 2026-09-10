@@ -175,6 +175,46 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
+  // GET /api/admin/booked-users - active users with today's meal booking
+  router.get('/booked-users', async (_req, res, next) => {
+    try {
+      const mealDate = getISTDateString();
+      const [{ data: profiles, error: profilesErr }, { data: bookings, error: bookingsErr }] = await Promise.all([
+        d.supabaseAdmin
+          .from('profiles')
+          .select('id, full_name, preferred_name, active, created_at')
+          .eq('active', true)
+          .order('full_name', { ascending: true }),
+        d.supabaseAdmin
+          .from('meal_bookings')
+          .select('user_id, choice')
+          .eq('meal_date', mealDate),
+      ]);
+      if (profilesErr) throw profilesErr;
+      if (bookingsErr) throw bookingsErr;
+
+      const bookingByUserId = new Map((bookings || []).map((booking) => [booking.user_id, booking]));
+      const { data: usersList, error: usersErr } = await d.supabaseAdmin.auth.admin.listUsers({
+        page: 1,
+        perPage: 200,
+      });
+      if (usersErr) throw usersErr;
+
+      const emailMap = new Map((usersList?.users || []).map((user) => [user.id, user.email]));
+      const users = (profiles || [])
+        .filter((user) => bookingByUserId.has(user.id))
+        .map((user) => ({
+          ...user,
+          email: emailMap.get(user.id) || null,
+          choice: bookingByUserId.get(user.id)?.choice || null,
+        }));
+
+      res.json({ meal_date: mealDate, users });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   router.patch('/users/:id/role', async (req, res, next) => {
     try {
       const role = roleEnum.parse(req.body.role);
