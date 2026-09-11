@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { createContext, createElement, useContext, useEffect, useRef, useState } from 'react';
 import { isPushSupported, subscribeToPush } from '../lib/push.js';
 import { supabase } from '../lib/supabase.js';
 
@@ -26,9 +26,12 @@ function readAalFromSession(session) {
   }
 }
 
-export function useAuth() {
+const AuthContext = createContext(null);
+
+function useAuthValue() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [aal, setAal] = useState('aal1');
   const bootstrapped = useRef(false);
@@ -64,6 +67,8 @@ export function useAuth() {
           console.log('[useAuth] session exists, checking AAL + profile');
           checkAal(sess);
           await loadProfile(sess.user.id);
+        } else {
+          setProfileLoading(false);
         }
       } catch (e) {
         console.error('[useAuth] bootstrap error:', e);
@@ -100,11 +105,13 @@ export function useAuth() {
         const jwtAal = readAalFromSession(newSession) || 'aal1';
         setAal(jwtAal);
         setSession(newSession);
-        loadProfile(newSession.user.id);
+        setProfileLoading(true);
+        loadProfile(newSession.user.id).finally(() => setProfileLoading(false));
         if (jwtAal === 'aal2') tryAutoSubscribePush(newSession);
       } else {
         setSession(null);
         setProfile(null);
+        setProfileLoading(false);
         setAal('aal1');
       }
     });
@@ -116,5 +123,14 @@ export function useAuth() {
     };
   }, []);
 
-  return { session, profile, loading, aal };
+  return { session, profile, profileLoading, loading, aal };
+}
+
+export function AuthProvider({ children }) {
+  const value = useAuthValue();
+  return createElement(AuthContext.Provider, { value }, children);
+}
+
+export function useAuth() {
+  return useContext(AuthContext) || useAuthValue();
 }

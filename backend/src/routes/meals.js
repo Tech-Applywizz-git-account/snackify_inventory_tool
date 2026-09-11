@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
 import { applyMealTokens, mealTokenPrice, walletForUser } from '../lib/tokens.js';
 import { sendMealBookingConfirmationEmail } from '../lib/microsoftGraph.js';
+import { getRequireReviewToBookMeals } from '../lib/mealReviewBookingSetting.js';
 
 const router = Router();
 
@@ -312,6 +313,9 @@ router.post('/book', async (req, res, next) => {
         return res.status(400).json({ error: 'Booking is fully locked. Cannot skip anymore.' });
       }
     } else {
+      const reviewGate = await getReviewGate(req.user.id, date);
+      if (reviewGate.blocked) return res.status(403).json(reviewGate);
+
       // Booking (veg/non_veg/egg) allowed only if canBook
       if (!actions.canBook) {
         if (actions.canSkip) {
@@ -599,8 +603,8 @@ router.get('/settings', async (_req, res, next) => {
 
 async function getSettings() {
   const { data } = await supabaseAdmin.from('meal_settings').select('*').limit(1).single();
-  return (
-    data || {
+  return {
+    ...(data || {
       cutoff_time: '18:00',
       skip_cutoff_time: '20:00',
       cost_per_veg: 80,
@@ -608,8 +612,41 @@ async function getSettings() {
       cost_per_egg: 100,
       active_from: '2026-05-20',
       active_until: '2026-12-31',
-    }
-  );
+    }),
+    require_review_to_book_meals: getRequireReviewToBookMeals(),
+  };
+}
+
+async function getReviewGate(userId, targetDate) {
+  if (!getRequireReviewToBookMeals()) return { blocked: false };
+
+  const { data: previousMeal, error: mealError } = await supabaseAdmin
+    .from('meal_bookings')
+    .select('meal_date, choice')
+    .eq('user_id', userId)
+    .neq('choice', 'skip')
+    .lt('meal_date', targetDate)
+    .order('meal_date', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (mealError) throw mealError;
+  if (!previousMeal) return { blocked: false };
+
+  const { data: review, error: reviewError } = await supabaseAdmin
+    .from('meal_reviews')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('meal_date', previousMeal.meal_date)
+    .maybeSingle();
+  if (reviewError) throw reviewError;
+  if (review) return { blocked: false };
+
+  return {
+    blocked: true,
+    code: 'MEAL_REVIEW_REQUIRED',
+    previous_meal_date: previousMeal.meal_date,
+    error: 'Please complete your review for your previous meal before booking the next meal.',
+  };
 }
 
 // ── POST /api/meals/:date/rate ───────────────────────────────────────────────
