@@ -469,7 +469,8 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
     const { data: bookings, error: bookingsErr } = await supabaseAdmin
       .from('meal_bookings')
       .select('user_id')
-      .eq('meal_date', tomorrowStr);
+      .eq('meal_date', tomorrowStr)
+      .neq('choice', 'skip');
 
     if (bookingsErr) throw bookingsErr;
 
@@ -486,33 +487,60 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
       });
     }
 
-    // Respond immediately to prevent cron timeout
-    res.json({
-      ok: true,
-      message: `Sending reminders to ${nonBookedUsers.length} users.`,
+    // Send emails sequentially and wait for completion so the cron caller knows
+    // which users were actually sent or failed. Retry Graph failures briefly.
+    let sent = 0;
+    let failed = 0;
+    for (const user of nonBookedUsers) {
+      try {
+        // Re-check immediately before sending because users can book while this
+        // worker is processing the earlier recipients.
+        const { data: latestBooking, error: latestBookingErr } = await supabaseAdmin
+          .from('meal_bookings')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('meal_date', tomorrowStr)
+          .neq('choice', 'skip')
+          .maybeSingle();
+
+        if (latestBookingErr) throw latestBookingErr;
+        if (latestBooking) {
+          console.log(`[MealReminder] Skipping ${user.email}; meal already booked for ${tomorrowStr}`);
+          continue;
+        }
+
+        let lastError;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            await sendMealBookingReminderEmail(user.email, tomorrowStr, isFinal);
+            lastError = null;
+            break;
+          } catch (e) {
+            lastError = e;
+            if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1000));
+          }
+        }
+        if (lastError) throw lastError;
+
+        console.log(`[MealReminder] Email sent successfully to ${user.email} (${user.full_name}) for ${tomorrowStr} (isFinal: ${isFinal})`);
+        sent++;
+      } catch (e) {
+        console.error(`[MealReminder] Failed to send email to ${user.email}:`, e.message);
+        failed++;
+      }
+      // Delay between recipients to avoid Microsoft Graph concurrency throttling.
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    console.log(`[MealReminder] Done. Sent: ${sent}, Failed: ${failed}, Total: ${nonBookedUsers.length}`);
+    return res.json({
+      ok: failed === 0,
+      message: `Meal reminders processed. Sent: ${sent}, failed: ${failed}.`,
       tomorrow: tomorrowStr,
       queuedCount: nonBookedUsers.length,
+      emailsSent: sent,
+      emailsFailed: failed,
     });
-
-    // 6. Send emails sequentially in the background (fire-and-forget)
-    // Sequential with delay to avoid Microsoft Graph MailboxConcurrency throttle (HTTP 429)
-    (async () => {
-      let sent = 0;
-      let failed = 0;
-      for (const user of nonBookedUsers) {
-        try {
-          await sendMealBookingReminderEmail(user.email, tomorrowStr, isFinal);
-          console.log(`[MealReminder] Email sent successfully to ${user.email} (${user.full_name}) for ${tomorrowStr} (isFinal: ${isFinal})`);
-          sent++;
-        } catch (e) {
-          console.error(`[MealReminder] Failed to send email to ${user.email}:`, e.message);
-          failed++;
-        }
-        // 400ms delay between each email to stay within Microsoft Graph concurrency limits
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      console.log(`[MealReminder] Done. Sent: ${sent}, Failed: ${failed}, Total: ${nonBookedUsers.length}`);
-    })();
   } catch (e) {
     next(e);
   }
@@ -876,9 +904,10 @@ router.post('/meal-booking-confirmation', async (req, res, next) => {
     // 3. Query all tomorrow's meal bookings (excluding skip)
     const { data: bookings, error: bookingsErr } = await supabaseAdmin
       .from('meal_bookings')
-      .select('user_id, choice')
+      .select('id, user_id, choice')
       .eq('meal_date', tomorrowStr)
-      .neq('choice', 'skip');
+      .neq('choice', 'skip')
+      .is('confirmation_email_sent_at', null);
 
     if (bookingsErr) throw bookingsErr;
 
@@ -910,7 +939,7 @@ router.post('/meal-booking-confirmation', async (req, res, next) => {
       });
     }
 
-    const choiceMap = new Map(bookings.map((b) => [b.user_id, b.choice]));
+    const bookingMap = new Map(bookings.map((b) => [b.user_id, b]));
 
     // Respond immediately to prevent cron timeout
     res.json({
@@ -926,8 +955,13 @@ router.post('/meal-booking-confirmation', async (req, res, next) => {
       let failed = 0;
       for (const user of profiles) {
         try {
-          const choice = choiceMap.get(user.id) || 'unknown';
+          const booking = bookingMap.get(user.id);
+          const choice = booking?.choice || 'unknown';
           await sendMealBookingConfirmationEmail(user.email, user.full_name, choice, tomorrowStr);
+          await supabaseAdmin
+            .from('meal_bookings')
+            .update({ confirmation_email_sent_at: new Date().toISOString() })
+            .eq('id', booking.id);
           console.log(`[MealBookingConfirmation] Confirmation email sent successfully to ${user.email} (${user.full_name}) for ${tomorrowStr}`);
           sent++;
         } catch (e) {

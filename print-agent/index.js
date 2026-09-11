@@ -55,6 +55,29 @@ function savePrinted() {
   }
 }
 
+function istDateString(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function currentIstDayBounds() {
+  const today = istDateString();
+  const start = new Date(`${today}T00:00:00+05:30`);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { today, start: start.toISOString(), end: end.toISOString() };
+}
+
+function isCurrentIstDay(dateValue) {
+  return istDateString(new Date(dateValue || 0)) === istDateString();
+}
+
 // ── ESC/POS Helpers ──────────────────────────────────────────────────────────
 const ESC = '\x1B';
 const GS  = '\x1D';
@@ -528,6 +551,10 @@ function getPrinterLabel() {
 }
 
 async function printOrderReceipt(order, { night = false, source = 'realtime' } = {}) {
+  if (!isCurrentIstDay(order.created_at)) {
+    console.log(`[print-agent] Skipping historical pantry order ${order.id}`);
+    return;
+  }
   if (printedIds.has(order.id)) return;
 
   const orderId = order.user_order_number || (order.id || '').slice(0, 8);
@@ -789,13 +816,13 @@ async function autoConfirmStuck() {
 // ── Auto-print any missed pending orders (startup & safety net) ──────────────
 async function printUnprintedPendingOrders() {
   try {
-    // Fetch all pending orders from the last 12 hours
-    const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+    const { start, end } = currentIstDayBounds();
     const { data: pendingOrders, error } = await supabase
       .from('requests')
       .select('*')
       .eq('status', 'pending')
-      .gt('created_at', twelveHoursAgo)
+      .gte('created_at', start)
+      .lt('created_at', end)
       .order('created_at', { ascending: true });
 
     if (error) throw error;
@@ -803,7 +830,7 @@ async function printUnprintedPendingOrders() {
     const unprinted = (pendingOrders || []).filter((order) => !printedIds.has(order.id));
     if (unprinted.length === 0) return;
 
-    console.log(`[print-agent] Found ${unprinted.length} unprinted pending orders from last 12h...`);
+    console.log(`[print-agent] Found ${unprinted.length} unprinted pending orders for today...`);
     for (const order of unprinted) {
       await printOrderReceipt(order, { source: 'poll' });
     }
@@ -862,12 +889,15 @@ let printerHealthy = true;
 
 async function drainTokenUsagePrints() {
   try {
+    const { start, end } = currentIstDayBounds();
     const { data: rows, error } = await supabase
       .from('token_usage')
       .select('*')
       .in('print_status', ['pending', 'failed'])
       .eq('print_retryable', true)
       .eq('reason', 'spend')
+      .gte('created_at', start)
+      .lt('created_at', end)
       .order('created_at', { ascending: true })
       .limit(25);
     if (error) throw error;

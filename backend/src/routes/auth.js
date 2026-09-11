@@ -11,6 +11,10 @@ const LOGIN_TX_TTL_MS = 5 * 60 * 1000;        // 5 min
 const MAX_TOTP_ATTEMPTS = 5;
 const RESERVATION_LEASE_MS = 60 * 1000;        // 60s stale reservation recovery
 
+function getAdminPortalPassword() {
+  return process.env.ADMIN_PORTAL_PASSWORD || null;
+}
+
 function displayNameFromEmail(email) {
   return email
     .split('@')[0]
@@ -92,7 +96,7 @@ export function createAuthRouter(overrides = {}) {
     ) || null;
   }
 
-  async function getUserAal1Session(email) {
+  async function getUserSession(email) {
     const { data: linkData, error: linkErr } = await d.supabaseAdmin.auth.admin.generateLink({
       type: 'magiclink',
       email,
@@ -109,9 +113,15 @@ export function createAuthRouter(overrides = {}) {
     });
     if (sessionErr) throw sessionErr;
 
-    const accessToken = sessionData?.session?.access_token;
-    if (!accessToken) throw new Error('Failed to establish user session');
-    return accessToken;
+    if (!sessionData?.session?.access_token) {
+      throw new Error('Failed to establish user session');
+    }
+    return sessionData.session;
+  }
+
+  async function getUserAal1Session(email) {
+    const session = await getUserSession(email);
+    return session.access_token;
   }
 
   async function reserveTransaction(table, tx, { requireUnused = false } = {}) {
@@ -472,6 +482,9 @@ export function createAuthRouter(overrides = {}) {
       }
 
       const verifiedFactor = await findVerifiedTotpFactor(existingUser.id);
+      if (profile.role === 'leadership' && !verifiedFactor) {
+        return res.json({ nextStep: 'password' });
+      }
       if (!verifiedFactor) {
         return res.json({ nextStep: 'otp' });
       }
@@ -496,7 +509,51 @@ export function createAuthRouter(overrides = {}) {
 
       if (txErr) throw txErr;
 
-      res.json({ nextStep: 'authenticator', transactionId: tx.id });
+      res.json({
+        nextStep: profile.role === 'leadership' ? 'admin-options' : 'authenticator',
+        transactionId: tx.id,
+      });
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Invalid request.' });
+      }
+      next(e);
+    }
+  });
+
+  // ── POST /api/auth/verify-admin-password ────────────────────────────────
+  // Leadership portal access uses the server-side admin password instead of
+  // Microsoft Authenticator. The password is never sent to the frontend code
+  // or stored in the database by this route.
+  router.post('/verify-admin-password', async (req, res, next) => {
+    try {
+      const schema = z.object({
+        email: z.string().email(),
+        password: z.string().min(1),
+      });
+      const { email: rawEmail, password } = schema.parse(req.body);
+      const email = d.normalizeEmail(rawEmail);
+      const configuredPassword = getAdminPortalPassword();
+
+      if (!configuredPassword) {
+        return res.status(503).json({ error: 'Admin password login is not configured.' });
+      }
+
+      const existingUser = await findUserByEmail(email);
+      const profile = existingUser ? await findProfileById(existingUser.id) : null;
+      if (!existingUser || !profile?.active || profile.role !== 'leadership') {
+        return res.status(401).json({ error: 'Invalid email or password.' });
+      }
+
+      if (password !== configuredPassword) {
+        return res.status(401).json({ error: 'Invalid email or password.' });
+      }
+
+      const session = await getUserSession(email);
+      return res.json({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      });
     } catch (e) {
       if (e instanceof z.ZodError) {
         return res.status(400).json({ error: 'Invalid request.' });

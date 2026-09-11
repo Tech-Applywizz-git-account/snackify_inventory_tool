@@ -63,18 +63,31 @@ describe('Meal Booking Reminder Cron Endpoint', () => {
 
   function makeMockChain(result) {
     const chain = {};
+    const filters = [];
+    const resolveResult = () => (typeof result === 'function' ? result(filters) : result);
     for (const m of [
       'select', 'update', 'delete', 'upsert',
-      'eq', 'neq', 'is', 'gt', 'lt', 'gte', 'lte',
+      'is', 'gt', 'lt', 'gte', 'lte',
       'order', 'limit', 'not', 'or', 'filter',
     ]) {
       chain[m] = () => chain;
     }
+    chain.eq = (field, value) => {
+      filters.push(['eq', field, value]);
+      return chain;
+    };
+    chain.neq = (field, value) => {
+      filters.push(['neq', field, value]);
+      return chain;
+    };
     chain.insert = () => chain;
     chain.not = () => chain;
-    chain.maybeSingle = async () => ({ data: result, error: null });
-    chain.single = async () => ({ data: result, error: null });
-    chain.then = (resolve) => Promise.resolve({ data: result, error: null }).then(resolve);
+    chain.maybeSingle = async () => {
+      const resolved = resolveResult();
+      return { data: Array.isArray(resolved) ? resolved[0] || null : resolved, error: null };
+    };
+    chain.single = async () => ({ data: resolveResult(), error: null });
+    chain.then = (resolve) => Promise.resolve({ data: resolveResult(), error: null }).then(resolve);
     return chain;
   }
 
@@ -206,7 +219,7 @@ describe('Meal Booking Reminder Cron Endpoint', () => {
 
     // Mock meal bookings database response: Alice has already booked
     const mockBookings = [
-      { user_id: 'user-1' },
+      { user_id: 'user-1', choice: 'veg' },
     ];
 
     supabaseAdmin.from = (table) => {
@@ -215,7 +228,12 @@ describe('Meal Booking Reminder Cron Endpoint', () => {
         return makeMockChain(mockProfiles);
       }
       if (table === 'meal_bookings') {
-        return makeMockChain(mockBookings);
+        return makeMockChain((filters) => {
+          const userFilter = filters.find((filter) => filter[0] === 'eq' && filter[1] === 'user_id');
+          return userFilter
+            ? mockBookings.filter((booking) => booking.user_id === userFilter[2])
+            : mockBookings;
+        });
       }
       return makeMockChain([]);
     };

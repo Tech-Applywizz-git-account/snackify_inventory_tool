@@ -327,7 +327,7 @@ export function MealReviewPopup({ open, status, onClose, onSubmitted }) {
                       <Star
                         size={28}
                         className={
-                          active ? 'fill-amber-400 text-amber-400' : 'text-slate-200 fill-slate-200'
+                          active ? 'fill-amber-400 text-amber-500' : 'fill-white text-slate-300'
                         }
                       />
                     </button>

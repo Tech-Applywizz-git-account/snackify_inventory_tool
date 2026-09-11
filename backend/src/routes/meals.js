@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
 import { applyMealTokens, mealTokenPrice, walletForUser } from '../lib/tokens.js';
+import { sendMealBookingConfirmationEmail } from '../lib/microsoftGraph.js';
 
 const router = Router();
 
@@ -457,9 +458,30 @@ router.post('/book', async (req, res, next) => {
       }
     }
 
+    let confirmationEmailSent = false;
+    if (isRealMeal(choice) && req.user.email) {
+      try {
+        await sendMealBookingConfirmationEmail(
+          req.user.email,
+          req.user.preferred_name || req.user.full_name || req.user.email,
+          choice,
+          date,
+        );
+        await supabaseAdmin
+          .from('meal_bookings')
+          .update({ confirmation_email_sent_at: new Date().toISOString() })
+          .eq('id', data.id);
+        confirmationEmailSent = true;
+        console.log(`[MealBookingConfirmation] Immediate confirmation sent to ${req.user.email} for ${date}`);
+      } catch (e) {
+        console.error(`[MealBookingConfirmation] Immediate confirmation failed for ${req.user.email}:`, e.message);
+      }
+    }
+
     res.json({
       ok: true,
       booking: { ...data, tokens_charged: spend?.tokens_charged || 0 },
+      confirmation_email_sent: confirmationEmailSent,
       tokens_charged: spend?.tokens_charged || 0,
       balance_after: spend?.balance_after,
       message:

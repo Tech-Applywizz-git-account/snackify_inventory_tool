@@ -282,7 +282,11 @@ function getCatalogSearchText(item) {
 
 function isCustomerWaterItem(item) {
   const text = itemSearchText(item);
-  return text === 'water' || text === 'water bottle';
+  return text === 'water' || text === 'water bottle' || text.includes('mineral water');
+}
+
+function payableItemTokens(item) {
+  return isCustomerWaterItem(item) ? 0 : itemTokens(item);
 }
 
 function isInternalOnlyCatalogItem(item) {
@@ -673,7 +677,7 @@ function ItemChip({
           </div>
         )}
           <div className="text-[10px] text-slate-800 font-bold mt-0.5 flex items-center justify-center gap-1">
-            {itemTokens(item) > 0 ? (
+            {!isCustomerWaterItem(item) && itemTokens(item) > 0 ? (
               <>
                 <SnackCoin size={12} />
                 {itemTokens(item)} coins
@@ -1231,7 +1235,7 @@ function OrderSheet({
   const totalCalories = cartItems.reduce((sum, { item, qty, customNote }) => {
     return sum + getCartItemCalories(item, qty, customNote);
   }, 0);
-  const totalTokens = cartItems.reduce((sum, { item, qty }) => sum + qty * itemTokens(item), 0);
+  const totalTokens = cartItems.reduce((sum, { item, qty }) => sum + qty * payableItemTokens(item), 0);
   const totalCount = cartItems.reduce((sum, x) => sum + x.qty, 0);
 
   return (
@@ -1311,11 +1315,13 @@ function OrderSheet({
                     <Trash2 size={10} />
                   </button>
                   </div>
-                  <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-800">
-                    <SnackCoin size={12} />
-                    {qty * itemTokens(item)}
-                    <span className="font-medium text-slate-400">({itemTokens(item)} × {qty})</span>
-                  </span>
+                  {!isCustomerWaterItem(item) && (
+                    <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-800">
+                      <SnackCoin size={12} />
+                      {qty * payableItemTokens(item)}
+                      <span className="font-medium text-slate-400">({payableItemTokens(item)} × {qty})</span>
+                    </span>
+                  )}
                 </div>
               </div>
             );
@@ -1493,18 +1499,20 @@ function OrderSheet({
             <div key={item.id} className="flex items-center justify-between gap-2">
               <span className="truncate">{getItemDisplayName(item)} × {qty}</span>
               <span className="font-bold text-slate-800 inline-flex items-center gap-1 shrink-0">
-                <SnackCoin size={12} />{qty * itemTokens(item)}
+                {!isCustomerWaterItem(item) && <><SnackCoin size={12} />{qty * payableItemTokens(item)}</>}
               </span>
             </div>
           ))}
           <div className="flex items-center justify-between">
             <span>Item total</span>
-            <span className="font-bold text-slate-800 inline-flex items-center gap-1"><SnackCoin size={14} />{totalTokens}</span>
+            <span className="font-bold text-slate-800 inline-flex items-center gap-1">
+              {totalTokens > 0 && <SnackCoin size={14} />}{totalTokens}
+            </span>
           </div>
           <div className="flex items-center justify-between border-t border-slate-200 pt-2">
             <span className="font-bold text-slate-900">To pay</span>
             <span className="font-bold text-slate-900 inline-flex items-center gap-1">
-              <SnackCoin size={16} />{totalTokens}
+              {totalTokens > 0 && <SnackCoin size={16} />}{totalTokens}
             </span>
           </div>
           {totalCalories > 0 && (
@@ -2015,7 +2023,7 @@ export default function Cafeteria() {
     setShowSheet(false);
     setOrderBusy(true);
     setErrorMsg('');
-    const total = cartItems.reduce((sum, { item, qty }) => sum + qty * itemTokens(item), 0);
+    const total = cartItems.reduce((sum, { item, qty }) => sum + qty * payableItemTokens(item), 0);
     setPayAmount(total);
     setPayError('');
     setPayOrderId(null);

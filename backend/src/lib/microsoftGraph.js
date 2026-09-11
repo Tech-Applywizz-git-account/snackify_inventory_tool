@@ -671,8 +671,7 @@ export async function sendMealNightReportEmail(emails, reportData) {
  */
 export async function sendMealBookingConfirmationEmail(email, name, choice, mealDate) {
   if (!isGraphConfigured()) {
-    console.warn('[MealBookingConfirmation] Microsoft Graph not configured — skipping email confirmation.');
-    return;
+    throw new Error('Microsoft Graph not configured; confirmation email was not sent.');
   }
 
   const token = await getGraphToken();
