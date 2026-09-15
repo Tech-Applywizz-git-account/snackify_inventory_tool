@@ -798,7 +798,8 @@ router.post('/meal-skip-reminder', async (req, res, next) => {
       });
     }
 
-    // 3. Query all users who have booked a meal for tomorrow (Veg, Non-Veg, etc., not skipped)
+    // 3. Query all users who have booked a meal for tomorrow. The change-of-
+    // plans email is sent to every booked user, regardless of booking time.
     const { data: bookings, error: bookingsErr } = await supabaseAdmin
       .from('meal_bookings')
       .select('user_id')
