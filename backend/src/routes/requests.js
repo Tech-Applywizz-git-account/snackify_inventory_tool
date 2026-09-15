@@ -619,7 +619,7 @@ const QUICK_ORDER_INSTRUCTION_TEMPLATES = {
 
 async function generateQuickOrderInstruction(user, item, qty, location, notes) {
   const firstName =
-    user.preferred_name || (user.full_name || user.email || 'Someone').split(' ')[0];
+    user.full_name || user.preferred_name || (user.email || 'Someone').split(' ')[0];
   const userTone = await getUserTone(user.id);
   const templates =
     QUICK_ORDER_INSTRUCTION_TEMPLATES[userTone] || QUICK_ORDER_INSTRUCTION_TEMPLATES.Friendly;
@@ -1640,7 +1640,7 @@ async function checkStockOnly(user, itemName, qty, breadType) {
 
 async function generateMultiItemInstruction(user, itemsSummary, location, notes) {
   const firstName =
-    user.preferred_name || (user.full_name || user.email || 'Someone').split(' ')[0];
+    user.full_name || user.preferred_name || (user.email || 'Someone').split(' ')[0];
   const userTone = await getUserTone(user.id);
   const locPart = location ? ` to ${location}` : '';
   const notePart = notes ? ` Note: ${notes}.` : '';

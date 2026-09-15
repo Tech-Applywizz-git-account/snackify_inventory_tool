@@ -606,7 +606,7 @@ export default function Admin() {
       ['S.No.', 'Name', 'Email', 'Date'],
       ...unbookedUsers.users.map((user, index) => [
         index + 1,
-        user.preferred_name || user.full_name || '',
+        user.full_name || user.preferred_name || '',
         user.email || '',
         unbookedUsers.meal_date,
       ]),
@@ -1076,7 +1076,7 @@ export default function Admin() {
                 <tbody className="divide-y divide-slate-100">
                   {users.filter((user) => user.consumer_report).map((user) => (
                     <tr key={user.id}>
-                      <td className="px-4 py-3 font-semibold text-slate-900">{user.preferred_name || user.full_name || '—'}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-900">{user.full_name || user.preferred_name || '—'}</td>
                       <td className="px-4 py-3 text-slate-600">{user.email || '—'}</td>
                       <td className="px-4 py-3 font-mono text-slate-600">{user.employee_code || '—'}</td>
                     </tr>
@@ -1127,7 +1127,7 @@ export default function Admin() {
                       <div className="w-8 shrink-0 text-sm font-semibold text-slate-500">{index + 1}</div>
                       <div>
                         <div className="font-medium text-slate-900">
-                          {user.preferred_name || user.full_name || user.email || user.id}
+                          {user.full_name || user.preferred_name || user.email || user.id}
                         </div>
                         {user.preferred_name && user.full_name && (
                           <div className="text-xs text-slate-500">{user.full_name}</div>
@@ -1191,7 +1191,7 @@ export default function Admin() {
                       <div className="w-8 shrink-0 text-sm font-semibold text-slate-500">{index + 1}</div>
                       <div className="min-w-0 flex-1">
                         <div className="font-medium text-slate-900">
-                          {user.preferred_name || user.full_name || user.email || user.id}
+                          {user.full_name || user.preferred_name || user.email || user.id}
                         </div>
                         {user.preferred_name && user.full_name && (
                           <div className="text-xs text-slate-500">{user.full_name}</div>

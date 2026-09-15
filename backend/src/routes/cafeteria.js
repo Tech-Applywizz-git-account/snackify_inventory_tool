@@ -283,7 +283,7 @@ router.post('/ob-leave', requireRole('office_boy', 'facility_manager'), async (r
     if (error) throw error;
 
     // Notify leadership via Teams
-    const obName = req.user.preferred_name || req.user.full_name || 'Office Boy';
+    const obName = req.user.full_name || req.user.preferred_name || 'Office Boy';
     postLeaveAlertToTeams({
       ob_name: obName,
       leave_date: leave_date,

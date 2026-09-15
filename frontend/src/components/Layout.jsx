@@ -182,12 +182,12 @@ export default function Layout() {
             ) : null}
             {/* Avatar with initials — always visible */}
             <div className="h-8 w-8 rounded-full bg-brand/10 border border-brand/20 text-brand grid place-items-center font-bold text-sm shrink-0">
-              {(profile?.preferred_name || profile?.full_name || '?').charAt(0).toUpperCase()}
+              {(profile?.full_name || profile?.preferred_name || '?').charAt(0).toUpperCase()}
             </div>
             {/* Name + role — hidden on mobile */}
             <div className="text-right text-xs text-slate-500 hidden sm:block leading-tight">
               <div className="font-semibold text-slate-800">
-                {profile?.preferred_name || profile?.full_name || '…'}
+                {profile?.full_name || profile?.preferred_name || '…'}
               </div>
               <div className="text-slate-400">{roleDisplay[profile?.role] || profile?.role}</div>
             </div>

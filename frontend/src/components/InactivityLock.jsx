@@ -10,7 +10,7 @@ const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 minutes
 export default function InactivityLock({ children }) {
   // Pull name and profile directly — no prop threading needed
   const { profile } = useAuth();
-  const userName = profile?.preferred_name || profile?.full_name;
+  const userName = profile?.full_name || profile?.preferred_name;
 
   // 'idle' | 'locked' | 'verify'
   const [step, setStep] = useState('idle');

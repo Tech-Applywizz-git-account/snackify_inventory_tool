@@ -485,7 +485,7 @@ router.post('/book', async (req, res, next) => {
       try {
         await sendMealBookingConfirmationEmail(
           req.user.email,
-          req.user.preferred_name || req.user.full_name || req.user.email,
+          req.user.full_name || req.user.preferred_name || req.user.email,
           choice,
           date,
         );
@@ -554,7 +554,7 @@ async function getMealSummary(date) {
   const settings = await getSettings();
   const summary = { date, veg: [], non_veg: [], egg: [], skip: [] };
   for (const booking of bookings || []) {
-    const name = booking.profiles?.preferred_name || booking.profiles?.full_name || 'Unknown';
+    const name = booking.profiles?.full_name || booking.profiles?.preferred_name || 'Unknown';
     if (summary[booking.choice]) summary[booking.choice].push(name);
   }
 

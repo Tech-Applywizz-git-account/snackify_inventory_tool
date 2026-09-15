@@ -278,7 +278,7 @@ function CabinCard({ cabin, date, onTrigger, onReprint }) {
                 </p>
               ) : (
                 bookings.map((b, idx) => {
-                  const name = b.profiles?.preferred_name || b.profiles?.full_name || 'Unknown';
+                  const name = b.profiles?.full_name || b.profiles?.preferred_name || 'Unknown';
                   const code = b.profiles?.employee_code || '--';
                   const choiceEmoji = { veg: '🥬', non_veg: '🍗', egg: '🥚' };
 
