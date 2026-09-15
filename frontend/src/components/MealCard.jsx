@@ -54,20 +54,22 @@ function formatDate(dateStr) {
   return `${DAY_NAMES[d.getDay()]}, ${d.getDate()} ${MONTH_NAMES[d.getMonth()]}`;
 }
 
-function getNextWorkingDay() {
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const d = new Date(now);
-  d.setDate(d.getDate() + 1); // start from tomorrow
-
-  // Skip weekends
-  while (d.getDay() === 0 || d.getDay() === 6) {
-    d.setDate(d.getDate() + 1);
-  }
-
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
+function getDateString(date) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function getDayWiseDates() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const today = new Date(now);
+  const nextDay = new Date(now);
+  nextDay.setDate(nextDay.getDate() + 1);
+  return [
+    { label: 'Today', date: getDateString(today) },
+    { label: 'Next Day', date: getDateString(nextDay) },
+  ];
 }
 
 function CountdownTimer({ cutoffHour }) {
@@ -100,38 +102,28 @@ function CountdownTimer({ cutoffHour }) {
 }
 
 export default function MealCard() {
-  const [data, setData] = useState(null);
+  const [dataByDate, setDataByDate] = useState({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
-  const [targetDate] = useState(getNextWorkingDay);
+  const [dayWiseDates] = useState(getDayWiseDates);
   const [onionSlices, setOnionSlices] = useState('no onion');
 
-  const dateParts = targetDate.split('-').map(Number);
-  const targetDay = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2])).getUTCDay();
-  const isNonVegDay = targetDay === 3 || targetDay === 5; // Wednesday (3) or Friday (5)
-
   const load = useCallback(async () => {
-    try {
-      const result = await api.mealOptions(targetDate);
-      setData(result);
-      if (result?.booking?.onion_slices) {
-        setOnionSlices(result.booking.onion_slices);
-      } else {
-        setOnionSlices('no onion');
-      }
-    } catch (e) {
-      console.error('MealCard load error:', e);
-    } finally {
-      setLoading(false);
-    }
-  }, [targetDate]);
+    const results = await Promise.allSettled(dayWiseDates.map(({ date }) => api.mealOptions(date)));
+    const nextData = {};
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') nextData[dayWiseDates[index].date] = result.value;
+    });
+    setDataByDate(nextData);
+    setLoading(false);
+  }, [dayWiseDates]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  async function book(choice, slices = onionSlices) {
+  async function book(targetDate, choice, slices = onionSlices) {
     setBusy(true);
     setMsg('');
     try {
@@ -148,11 +140,7 @@ export default function MealCard() {
   }
 
   if (loading) return null;
-  if (!data?.working_day) return null;
-
-  const { options, canBook, canSkip, reason, booking } = data;
-  const currentChoice = booking?.choice;
-  const isLocked = !canBook && !canSkip;
+  if (!dayWiseDates.some(({ date }) => dataByDate[date])) return null;
 
   return (
     <motion.div
@@ -160,34 +148,43 @@ export default function MealCard() {
       animate={{ opacity: 1, y: 0 }}
       className="bg-white rounded-2xl border-2 border-slate-100 p-4 space-y-3"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-xl">🍱</span>
-          <div>
-            <div className="font-bold text-slate-800 text-sm">Tomorrow's Lunch</div>
-            <div className="text-xs text-slate-400">{formatDate(targetDate)}</div>
-          </div>
-        </div>
-        <div className="flex flex-col items-end gap-0.5">
-          {reason === 'open' && (
-            <>
-              <CountdownTimer cutoffHour={18} />
-              <span className="text-[10px] text-slate-300 font-medium">Book by 6 PM</span>
-            </>
-          )}
-          {reason === 'skip_only' && (
-            <span className="text-xs bg-amber-50 text-amber-600 font-bold px-2 py-1 rounded-full">
-              Skip only till 8 PM
-            </span>
-          )}
-          {isLocked && (
-            <span className="text-xs bg-slate-100 text-slate-500 font-bold px-2 py-1 rounded-full">
-              🔒 Locked
-            </span>
-          )}
+      <div className="flex items-center gap-2">
+        <span className="text-xl">🍱</span>
+        <div>
+          <div className="font-bold text-slate-800 text-sm">Meal Booking</div>
+          <div className="text-xs text-slate-400">Choose separately for each day</div>
         </div>
       </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {dayWiseDates.map(({ label, date }) => {
+          const data = dataByDate[date];
+          if (!data) return null;
+          const options = data.options || [];
+          const canBook = Boolean(data.canBook);
+          const canSkip = Boolean(data.canSkip);
+          const reason = data.reason;
+          const booking = data.booking;
+          const currentChoice = booking?.choice;
+          const isLocked = !canBook && !canSkip;
+          const isWorkingDay = data.working_day !== false;
+
+          return (
+            <div key={date} className="rounded-xl border border-slate-100 p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-bold text-slate-800 text-sm">{label}</div>
+                  <div className="text-xs text-slate-400">{formatDate(date)}</div>
+                </div>
+                <div className="flex flex-col items-end gap-0.5">
+                  {reason === 'open' && <CountdownTimer cutoffHour={18} />}
+                  {isLocked && <span className="text-xs bg-slate-100 text-slate-500 font-bold px-2 py-1 rounded-full">🔒 Locked</span>}
+                </div>
+              </div>
+
+              {!isWorkingDay && !currentChoice && (
+                <div className="text-xs text-slate-500 bg-slate-50 rounded-lg p-2">Office closed on this day.</div>
+              )}
 
       {/* Current booking display */}
       {currentChoice && currentChoice !== 'skip' && (reason === 'skip_only' || isLocked) && (
@@ -204,7 +201,7 @@ export default function MealCard() {
           {canSkip && (
             <button
               disabled={busy}
-              onClick={() => book('skip')}
+              onClick={() => book(date, 'skip')}
               className="text-xs font-bold text-rose-500 bg-rose-50 px-3 py-1.5 rounded-lg hover:bg-rose-100 transition-all disabled:opacity-40"
             >
               🚫 Cancel
@@ -241,7 +238,7 @@ export default function MealCard() {
                 key={opt}
                 whileTap={{ scale: 0.95 }}
                 disabled={busy || !canBook}
-                onClick={() => book(opt)}
+                onClick={() => book(date, opt)}
                 className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-xl border-2 font-bold text-sm transition-all
                   ${
                     selected
@@ -262,7 +259,7 @@ export default function MealCard() {
           <motion.button
             whileTap={{ scale: 0.95 }}
             disabled={busy}
-            onClick={() => book('skip')}
+            onClick={() => book(date, 'skip')}
             className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-xl border-2 font-bold text-sm transition-all
               ${
                 currentChoice === 'skip'
@@ -278,6 +275,10 @@ export default function MealCard() {
           </motion.button>
         </div>
       )}
+            </div>
+          );
+        })}
+      </div>
 
 
       {/* Flash message */}

@@ -161,7 +161,7 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
 
   if (shift === 'morning') {
     const nextWD = getNextWorkingDay(parts.year, parts.month, parts.day);
-    if (dateStr !== nextWD) {
+    if (diffDays !== 0 && dateStr !== nextWD) {
       return {
         canBook: false,
         canSkip: false,
@@ -672,6 +672,14 @@ export default function MealBooking() {
   const firstDay = getFirstDayOfWeek(year, month);
   const startOffset = firstDay === 0 ? 6 : firstDay - 1;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayDateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const nextDate = new Date(today);
+  nextDate.setDate(nextDate.getDate() + 1);
+  const nextDateStr = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-${String(nextDate.getDate()).padStart(2, '0')}`;
+  const dayWiseDates = [
+    { label: 'Today', date: todayDateStr },
+    { label: 'Next Day', date: nextDateStr },
+  ];
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -769,6 +777,54 @@ export default function MealBooking() {
           <span className="text-slate-400">Not booked</span>
         </div>
       </div>
+
+      {/* Day-wise booking view */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-lg font-bold text-slate-800">Book by day</h2>
+          <p className="text-xs text-slate-500">View and manage your meal for each day separately.</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {dayWiseDates.map(({ label, date }) => {
+            const dayBooking = getBookingForDate(date);
+            const dayStatus = getBookingStatus(date, userPrefs.shift, now);
+            const dayDate = new Date(`${date}T00:00:00+05:30`);
+            const dayName = dayDate.toLocaleDateString('en-IN', {
+              weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata',
+            });
+            const choiceUi = dayBooking ? CHOICE_UI[dayBooking.choice] : null;
+
+            return (
+              <button
+                key={date}
+                type="button"
+                onClick={() => setSelectedDate(date)}
+                className={`text-left rounded-2xl border-2 p-4 transition-all ${
+                  selectedDate === date ? 'border-brand bg-brand/5' : 'border-slate-100 bg-white hover:border-brand/40'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-slate-800">{label}</span>
+                  <span className="text-xs text-slate-500">{dayName}</span>
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  {dayBooking ? (
+                    <span className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm font-bold ${choiceUi?.bg || 'bg-slate-50'} ${choiceUi?.text || 'text-slate-700'}`}>
+                      <span>{choiceUi?.emoji || '🍽️'}</span>
+                      {choiceUi?.label || dayBooking.choice}
+                    </span>
+                  ) : (
+                    <span className="text-sm font-semibold text-slate-400">Not booked</span>
+                  )}
+                  <span className="text-xs font-bold text-brand">
+                    {dayBooking ? 'View / Change' : dayStatus.canBook || dayStatus.canSkip ? 'Book now' : 'View'}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
       {/* Month Navigation */}
       <div className="flex items-center justify-between bg-white rounded-2xl border border-slate-100 p-3">
