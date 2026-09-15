@@ -1,4 +1,5 @@
 import { supabaseAdmin } from './supabase.js';
+import { applyLocalDiscounts, loadLocalDiscounts, useLocalDiscounts } from './localDiscounts.js';
 
 export const MONTHLY_GRANT = 4000;
 
@@ -40,6 +41,16 @@ function norm(name) {
 function isFreeWaterItem(name) {
   const text = norm(name);
   return text === 'water' || text === 'water bottle' || text.includes('mineral water');
+}
+
+export function calculateCoinDiscount({ unitTokens, qty = 1, policy, applyDiscount = true, discountBudget }) {
+  if (!applyDiscount || !policy?.discount_enabled) return 0;
+  const required = Math.max(0, Number(policy.discount_coins_required) || 0);
+  if (required > 0 && Number(discountBudget) < required) return 0;
+  const unit = Math.max(0, Number(unitTokens) || 0);
+  const quantity = Math.max(1, parseInt(qty, 10) || 1);
+  const amount = Math.max(0, Number(policy.discount_amount) || 0);
+  return Math.min(amount, unit) * quantity;
 }
 
 function nameKeys(name) {
@@ -156,19 +167,29 @@ export async function loadCatalog() {
     MEAL_FRI: 140,
     WATER_BOTTLE: 10,
   };
-  return merged.map((row) => {
+  const pricedRows = merged.map((row) => {
     const sku = String(row.sku_code || '').toUpperCase();
     if (PRICE_OVERRIDES[sku] == null) return row;
     return { ...row, tokens: PRICE_OVERRIDES[sku] };
   });
+  return useLocalDiscounts()
+    ? applyLocalDiscounts(pricedRows, await loadLocalDiscounts())
+    : pricedRows;
 }
 
 export function attachTokenPrice(item, catalog) {
   const name = item?.frontend_name || item?.display_name || item?.item_name || item?.name || '';
-  const fromCatalog = unitTokensForName(catalog, name);
+  const catalogItem = matchTokenItem(catalog, name);
+  const fromCatalog = catalogItem ? Number(catalogItem.tokens) || 0 : 0;
   const existing = Number(item?.token_price ?? item?.coin_price);
   const unit = fromCatalog > 0 ? fromCatalog : (existing > 0 ? existing : 0);
-  return { ...item, token_price: unit, coin_price: unit };
+  return {
+    ...item,
+    token_price: unit,
+    coin_price: unit,
+    discount_enabled: Boolean(catalogItem?.discount_enabled),
+    discount_amount: Number(catalogItem?.discount_amount) || 0,
+  };
 }
 
 function rpcFailedMissing(error) {
@@ -282,17 +303,21 @@ export async function spendTokens({ userId, idempotencyKey, refType, refId, line
       idempotent: false,
     };
   }
-  const { data, error } = await supabaseAdmin.rpc('snackify_spend', {
-    p_user_id: userId,
-    p_idempotency_key: idempotencyKey,
-    p_ref_type: refType,
-    p_ref_id: refId,
-    p_lines: payableLines,
-  });
-  if (!error) return data;
-  if (!rpcFailedMissing(error)) throw tokenError(error);
+  if (!useLocalDiscounts()) {
+    const { data, error } = await supabaseAdmin.rpc('snackify_spend', {
+      p_user_id: userId,
+      p_idempotency_key: idempotencyKey,
+      p_ref_type: refType,
+      p_ref_id: refId,
+      p_lines: payableLines,
+    });
+    if (!error) return data;
+    if (!rpcFailedMissing(error)) throw tokenError(error);
+  }
 
+  // Development fallback: apply policies from the local JSON file.
   const catalog = await loadCatalog();
+  const grant = await jsEnsureGrant(userId);
   const priced = payableLines.map((l) => {
     const qty = Math.max(1, parseInt(l.qty, 10) || 1);
     const hit = matchTokenItem(catalog, l.name);
@@ -309,11 +334,24 @@ export async function spendTokens({ userId, idempotencyKey, refType, refId, line
       token_item_id: hit?.id || null,
       qty,
       unit_tokens: unit,
-      tokens: unit * qty,
+      tokens_before_discount: unit * qty,
+      discount_tokens: calculateCoinDiscount({
+        unitTokens: unit,
+        qty,
+        policy: hit,
+        applyDiscount: l.apply_discount,
+        discountBudget: grant.balance,
+      }),
+      tokens: unit * qty - calculateCoinDiscount({
+        unitTokens: unit,
+        qty,
+        policy: hit,
+        applyDiscount: l.apply_discount,
+        discountBudget: grant.balance,
+      }),
     };
   });
   const total = priced.reduce((s, l) => s + l.tokens, 0);
-  const grant = await jsEnsureGrant(userId);
   if (grant.balance < total) {
     const err = new Error(`Not enough tokens. Need ${total}, have ${grant.balance}.`);
     err.code = 'INSUFFICIENT_TOKENS';

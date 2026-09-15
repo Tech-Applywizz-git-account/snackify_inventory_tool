@@ -47,6 +47,15 @@ function itemTokens(item) {
   return Number(item?.token_price ?? item?.coin_price) || 0;
 }
 
+function itemDiscountTokens(item) {
+  if (!item?.discount_enabled) return 0;
+  return Math.min(itemTokens(item), Math.max(0, Number(item.discount_amount) || 0));
+}
+
+function discountedItemTokens(item) {
+  return Math.max(0, itemTokens(item) - itemDiscountTokens(item));
+}
+
 function getISTGreeting() {
   const now = new Date().toLocaleString('en-US', {
     timeZone: 'Asia/Kolkata',
@@ -286,7 +295,7 @@ function isCustomerWaterItem(item) {
 }
 
 function payableItemTokens(item) {
-  return isCustomerWaterItem(item) ? 0 : itemTokens(item);
+  return isCustomerWaterItem(item) ? 0 : discountedItemTokens(item);
 }
 
 function isInternalOnlyCatalogItem(item) {
@@ -680,10 +689,18 @@ function ItemChip({
             {!isCustomerWaterItem(item) && itemTokens(item) > 0 ? (
               <>
                 <SnackCoin size={12} />
-                {itemTokens(item)} coins
+                {itemDiscountTokens(item) > 0 && (
+                  <span className="text-slate-400 line-through">{itemTokens(item)}</span>
+                )}
+                {payableItemTokens(item)} coins
               </>
             ) : null}
           </div>
+        {itemDiscountTokens(item) > 0 && (
+          <div className="text-[10px] text-emerald-600 font-bold text-center">
+            Save {itemDiscountTokens(item)} coins
+          </div>
+        )}
         {item.description && (
           <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{item.description}</div>
         )}
@@ -1318,6 +1335,9 @@ function OrderSheet({
                   {!isCustomerWaterItem(item) && (
                     <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-800">
                       <SnackCoin size={12} />
+                      {itemDiscountTokens(item) > 0 && (
+                        <span className="text-slate-400 line-through">{qty * itemTokens(item)}</span>
+                      )}
                       {qty * payableItemTokens(item)}
                       <span className="font-medium text-slate-400">({payableItemTokens(item)} × {qty})</span>
                     </span>
@@ -2034,6 +2054,7 @@ export default function Cafeteria() {
         return {
           name: getOrderItemName(item),
           qty,
+          apply_discount: true,
           breadType,
           customNote
         };

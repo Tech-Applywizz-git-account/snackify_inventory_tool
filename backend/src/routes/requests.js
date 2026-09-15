@@ -755,6 +755,7 @@ router.post('/', async (req, res, next) => {
           name: it.name,
           qty: parseInt(it.qty, 10) || 1,
           tokens: Number(it.tokens || it.coinPrice || it.token_price) || 0,
+          apply_discount: it.apply_discount !== false,
         })),
         clientOrderId
       );
@@ -849,7 +850,7 @@ router.post('/', async (req, res, next) => {
       const charged = await chargePlacedRequest(
         req.user,
         qData,
-        [{ name: quick_item, qty }],
+        [{ name: quick_item, qty, apply_discount: true }],
         clientOrderId
       );
       return res.status(201).json({ needs_followup: false, request: charged });

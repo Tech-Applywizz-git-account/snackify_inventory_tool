@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../lib/supabase.js';
 import { postLeaveAlertToTeams } from '../lib/teams.js';
 import { requireRole } from '../middleware/auth.js';
 import { attachTokenPrice, loadCatalog } from '../lib/tokens.js';
+import { loadLocalDiscounts, saveLocalDiscount, useLocalDiscounts } from '../lib/localDiscounts.js';
 
 const router = Router();
 
@@ -20,6 +21,84 @@ router.get('/items', async (_req, res, next) => {
     if (error) throw error;
     const catalog = await loadCatalog().catch(() => []);
     res.json((data || []).map((row) => attachTokenPrice(row, catalog)));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /api/cafeteria/discounts - leadership manages live coin discount policies
+router.get('/discounts', requireRole('leadership', 'admin'), async (_req, res, next) => {
+  try {
+    if (!useLocalDiscounts()) {
+      const { data, error } = await supabaseAdmin
+        .from('token_items')
+        .select('id, sku_code, display_name, tokens, active, discount_enabled, discount_amount')
+        .eq('active', true)
+        .order('display_name', { ascending: true });
+      if (error) throw error;
+      return res.json(data || []);
+    }
+
+    const policies = await loadLocalDiscounts();
+    const catalog = await loadCatalog();
+    res.json(
+      catalog
+        .filter((item) => item.active !== false)
+        .sort((a, b) => String(a.display_name).localeCompare(String(b.display_name)))
+        .map((item) => ({
+          id: item.id,
+          sku_code: item.sku_code,
+          display_name: item.display_name,
+          tokens: item.tokens,
+          active: item.active,
+          discount_enabled: Boolean(policies[item.sku_code?.toUpperCase()]?.discount_enabled),
+          discount_amount: Number(policies[item.sku_code?.toUpperCase()]?.discount_amount) || 0,
+        }))
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+// PATCH /api/cafeteria/discounts/:id - changes are read by users on their next catalog load
+router.patch('/discounts/:id', requireRole('leadership', 'admin'), async (req, res, next) => {
+  try {
+    const enabled = Boolean(req.body?.discount_enabled);
+    const amount = Number(req.body?.discount_amount);
+    if (!Number.isInteger(amount) || amount < 0) {
+      return res.status(400).json({ error: 'discount_amount must be a non-negative integer' });
+    }
+
+    if (!useLocalDiscounts()) {
+      const { data, error } = await supabaseAdmin
+        .from('token_items')
+        .update({
+          discount_enabled: enabled,
+          discount_amount: amount,
+          discount_coins_required: amount,
+        })
+        .eq('id', req.params.id)
+        .select('id, sku_code, display_name, tokens, active, discount_enabled, discount_amount')
+        .single();
+      if (error) throw error;
+      return res.json(data);
+    }
+
+    const catalog = await loadCatalog();
+    const item = catalog.find((row) => String(row.id) === String(req.params.id));
+    if (!item) return res.status(404).json({ error: 'Token item not found' });
+    const policy = await saveLocalDiscount(item.sku_code, {
+      discount_enabled: enabled,
+      discount_amount: amount,
+    });
+    res.json({
+      id: item.id,
+      sku_code: item.sku_code,
+      display_name: item.display_name,
+      tokens: item.tokens,
+      active: item.active,
+      ...policy,
+    });
   } catch (e) {
     next(e);
   }
