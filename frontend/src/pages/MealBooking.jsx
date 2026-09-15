@@ -672,14 +672,13 @@ export default function MealBooking() {
   const firstDay = getFirstDayOfWeek(year, month);
   const startOffset = firstDay === 0 ? 6 : firstDay - 1;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayDateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const nextDate = new Date(today);
-  nextDate.setDate(nextDate.getDate() + 1);
-  const nextDateStr = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-${String(nextDate.getDate()).padStart(2, '0')}`;
-  const dayWiseDates = [
-    { label: 'Today', date: todayDateStr },
-    { label: 'Next Day', date: nextDateStr },
-  ];
+  const nextWorkingDate = new Date(today);
+  nextWorkingDate.setDate(nextWorkingDate.getDate() + 1);
+  while (nextWorkingDate.getDay() === 0 || nextWorkingDate.getDay() === 6) {
+    nextWorkingDate.setDate(nextWorkingDate.getDate() + 1);
+  }
+  const nextWorkingDateStr = `${nextWorkingDate.getFullYear()}-${String(nextWorkingDate.getMonth() + 1).padStart(2, '0')}-${String(nextWorkingDate.getDate()).padStart(2, '0')}`;
+  const dayWiseDates = [{ label: 'Tomorrow', date: nextWorkingDateStr }];
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">

@@ -168,7 +168,7 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
 
   if (shift === 'morning') {
     const nextWD = getNextWorkingDay(mockDate || new Date());
-    if (diffDays !== 0 && mealDate !== nextWD) {
+    if (mealDate !== nextWD) {
       return {
         canBook: false,
         canSkip: false,
