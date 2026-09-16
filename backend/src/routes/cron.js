@@ -38,6 +38,16 @@ export function getCabinName(bookingCabin, preferredLocation) {
   return locationToCabin[preferredLocation] || preferredLocation || 'Unassigned';
 }
 
+export function filterDayMealBookings(bookings, preferences) {
+  const nightShiftUserIds = new Set(
+    (preferences || [])
+      .filter((preference) => preference.shift === 'night')
+      .map((preference) => preference.user_id)
+  );
+
+  return (bookings || []).filter((booking) => !nightShiftUserIds.has(booking.user_id));
+}
+
 // ── Helper: get IST date string "YYYY-MM-DD" ─────────────────────────────────
 function getISTDateString() {
   const now = new Date();
@@ -198,9 +208,11 @@ router.post('/schedule-meal-print', async (req, res) => {
       cabinMap[p.user_id] = getCabinName(p.cabin, p.preferred_location);
     }
 
-    // Group bookings by cabin (preferring already set cabin_name, falling back to preference mapping)
+    const dayMealBookings = filterDayMealBookings(bookings, prefs);
+
+    // Group day-meal bookings by cabin (preferring already set cabin_name, falling back to preference mapping)
     const byCabin = {};
-    for (const b of bookings) {
+    for (const b of dayMealBookings) {
       const cabin = b.cabin_name || cabinMap[b.user_id] || 'Unassigned';
       if (!byCabin[cabin]) byCabin[cabin] = [];
       byCabin[cabin].push(b);

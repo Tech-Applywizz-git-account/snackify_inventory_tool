@@ -704,6 +704,19 @@ async function executePrintJob(job) {
         .neq('choice', 'skip')
         .order('token_number');
       bookings = data || [];
+
+      if (bookings.length > 0) {
+        const { data: preferences } = await supabase
+          .from('employee_cafeteria_preferences')
+          .select('user_id, shift')
+          .in('user_id', bookings.map((booking) => booking.user_id).filter(Boolean));
+        const nightShiftUserIds = new Set(
+          (preferences || [])
+            .filter((preference) => preference.shift === 'night')
+            .map((preference) => preference.user_id)
+        );
+        bookings = bookings.filter((booking) => !nightShiftUserIds.has(booking.user_id));
+      }
     }
 
     if (bookings.length === 0) {
