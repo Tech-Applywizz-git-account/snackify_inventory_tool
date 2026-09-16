@@ -29,7 +29,7 @@ router.post('/ticket', async (req, res, next) => {
       .eq('role', 'facility_manager');
 
     const digits = String(me?.cafeteria_card_number || '').replace(/\D/g, '');
-    const employeeName = me?.full_name || me?.preferred_name || req.user.email || 'Applywizzian';
+    const employeeName = me?.preferred_name || me?.full_name || req.user.email || 'Applywizzian';
     const employeeEmail = me?.email || req.user.email;
 
     await sendSupportTicketEmail({

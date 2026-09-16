@@ -55,9 +55,9 @@ async function cardForUser(userId) {
         return {
           cafeteria_card_number: code || null,
           card_masked: code ? code.replace(/(.{4})/g, '$1 ').trim() : null,
-          cardholder: retry.data?.full_name || retry.data?.preferred_name || '',
+          cardholder: retry.data?.preferred_name || retry.data?.full_name || '',
           color: 'neon',
-          display_name: retry.data?.full_name || retry.data?.preferred_name || '',
+          display_name: retry.data?.preferred_name || retry.data?.full_name || '',
         };
       }
       return empty;
@@ -66,9 +66,9 @@ async function cardForUser(userId) {
     return {
       cafeteria_card_number: code || null,
       card_masked: code ? code.replace(/(.{4})/g, '$1 ').trim() : null,
-      cardholder: data?.cafeteria_card_display_name || data?.full_name || data?.preferred_name || '',
+      cardholder: data?.cafeteria_card_display_name || data?.preferred_name || data?.full_name || '',
       color: data?.cafeteria_card_color || 'neon',
-      display_name: data?.cafeteria_card_display_name || data?.full_name || data?.preferred_name || '',
+      display_name: data?.cafeteria_card_display_name || data?.preferred_name || data?.full_name || '',
     };
   } catch {
     return empty;

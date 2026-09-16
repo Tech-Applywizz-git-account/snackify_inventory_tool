@@ -806,13 +806,14 @@ export function createAuthRouter(overrides = {}) {
         userId = user.id;
       }
 
-      // Store the guest's actual name without adding a Guest prefix.
-      const displayName = name.trim() || email.split('@')[0];
+      // Always update the profile with the guest's actual email and the newly entered name.
+      const displayName = name.trim() || `Guest (${email.split('@')[0]})`;
+      const guestPrefName = `Guest ${name.trim() || email.split('@')[0]}`;
       const { error: updateErr } = await d.supabaseAdmin
         .from('profiles')
         .update({
           full_name: displayName,
-          preferred_name: displayName,
+          preferred_name: guestPrefName,
           email: email,
         })
         .eq('id', userId);

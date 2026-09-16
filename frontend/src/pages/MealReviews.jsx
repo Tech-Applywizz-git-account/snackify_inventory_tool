@@ -93,7 +93,7 @@ export default function MealReviewsPage() {
                     </td>
                     <td className="break-words px-1.5 py-2.5 sm:px-2">
                       <div className="truncate font-semibold text-slate-900">
-                        {r.full_name || r.preferred_name || 'Unknown'}
+                        {r.preferred_name || r.full_name || 'Unknown'}
                       </div>
                       <div className="truncate text-xs text-slate-400">{r.email || r.user_id}</div>
                     </td>

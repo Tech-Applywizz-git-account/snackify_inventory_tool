@@ -402,8 +402,8 @@ router.get(
         if (x.token_number && y.token_number) return x.token_number.localeCompare(y.token_number);
         if (x.token_number) return -1;
         if (y.token_number) return 1;
-        const nameX = x.profiles?.full_name || x.profiles?.preferred_name || '';
-        const nameY = y.profiles?.full_name || y.profiles?.preferred_name || '';
+        const nameX = x.profiles?.preferred_name || x.profiles?.full_name || '';
+        const nameY = y.profiles?.preferred_name || y.profiles?.full_name || '';
         return nameX.localeCompare(nameY);
       });
 
