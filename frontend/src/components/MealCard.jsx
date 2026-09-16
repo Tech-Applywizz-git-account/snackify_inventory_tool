@@ -63,12 +63,13 @@ function getDateString(date) {
 
 function getDayWiseDates() {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const nextWorkingDay = new Date(now);
-  nextWorkingDay.setDate(nextWorkingDay.getDate() + 1);
-  while (nextWorkingDay.getDay() === 0 || nextWorkingDay.getDay() === 6) {
-    nextWorkingDay.setDate(nextWorkingDay.getDate() + 1);
-  }
-  return [{ label: 'Tomorrow', date: getDateString(nextWorkingDay) }];
+  const today = new Date(now);
+  const nextDay = new Date(now);
+  nextDay.setDate(nextDay.getDate() + 1);
+  return [
+    { label: 'Today', date: getDateString(today) },
+    { label: 'Next Day', date: getDateString(nextDay) },
+  ];
 }
 
 function CountdownTimer({ cutoffHour }) {
