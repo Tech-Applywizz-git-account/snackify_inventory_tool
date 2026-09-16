@@ -45,52 +45,6 @@ function BasisBadge({ basis }) {
   return <span className={`pill ${cls}`}>{label}</span>;
 }
 
-function CafeteriaDiscountRow({ item, saving, onSave }) {
-  const [form, setForm] = useState({
-    discount_enabled: Boolean(item.discount_enabled),
-    discount_amount: item.discount_amount || 0,
-  });
-  const percent = item.tokens > 0
-    ? Math.min(100, (Number(form.discount_amount || 0) / Number(item.tokens)) * 100)
-    : 0;
-
-  return (
-    <tr className="border-b last:border-0">
-      <td className="py-2 px-2 font-medium text-slate-900 whitespace-nowrap">
-        {item.display_name} <span className="text-xs text-slate-400">({item.tokens})</span>
-      </td>
-      <td className="py-2 px-2">
-        <input
-          type="checkbox"
-          checked={form.discount_enabled}
-          onChange={(e) => setForm((current) => ({ ...current, discount_enabled: e.target.checked }))}
-          disabled={saving}
-          className="h-4 w-4 accent-brand"
-        />
-      </td>
-      <td className="py-2 px-2 text-xs font-semibold text-emerald-700">
-        {percent % 1 === 0 ? percent : percent.toFixed(1)}%
-      </td>
-      <td className="py-2 px-2">
-        <input
-          aria-label={`${item.display_name} Discount coins`}
-          type="number"
-          min="0"
-          className="input py-1 px-2 text-xs w-24"
-          value={form.discount_amount}
-          onChange={(e) => setForm((current) => ({ ...current, discount_amount: e.target.value }))}
-          disabled={saving}
-        />
-      </td>
-      <td className="py-2 px-2">
-        <button type="button" className="btn-secondary text-xs" disabled={saving} onClick={() => onSave(item, form)}>
-          {saving ? 'Saving...' : 'Save'}
-        </button>
-      </td>
-    </tr>
-  );
-}
-
 function ForecastPanel() {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState('');
@@ -226,8 +180,6 @@ export default function Admin() {
   const [lateMealSelectedUser, setLateMealSelectedUser] = useState(null);
   const [lateMealUserId, setLateMealUserId] = useState('');
   const [lateMealChoice, setLateMealChoice] = useState('veg');
-  const [cafeteriaDiscounts, setCafeteriaDiscounts] = useState(null);
-  const [discountSavingId, setDiscountSavingId] = useState(null);
 
   const load = useCallback(async () => {
     setErr('');
@@ -263,31 +215,6 @@ export default function Admin() {
       .catch((e) => setErr(e.message))
       .finally(() => setMealSettingLoading(false));
   }, []);
-
-  useEffect(() => {
-    api
-      .cafeteriaDiscounts()
-      .then(setCafeteriaDiscounts)
-      .catch((e) => setErr(e.message));
-  }, []);
-
-  async function onSaveCafeteriaDiscount(item, form) {
-    setDiscountSavingId(item.id);
-    setErr('');
-    setOkMsg('');
-    try {
-      const updated = await api.updateCafeteriaDiscount(item.id, {
-        discount_enabled: form.discount_enabled,
-        discount_amount: Number(form.discount_amount) || 0,
-      });
-      setCafeteriaDiscounts((current) => (current || []).map((row) => row.id === updated.id ? updated : row));
-      setOkMsg(`${updated.display_name} discount updated.`);
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setDiscountSavingId(null);
-    }
-  }
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -578,40 +505,6 @@ export default function Admin() {
         </div>
       )}
       {err && <div className="text-sm text-rose-700 bg-rose-50 p-3 rounded-md">{err}</div>}
-
-      <div className="card">
-        <h2 className="font-semibold">Cafeteria coin discounts</h2>
-        <p className="text-xs text-slate-500 mt-1 mb-4">
-          When enabled, the configured discount coins are subtracted for each unit when the customer has the required coin balance.
-        </p>
-        {!cafeteriaDiscounts ? (
-          <div className="text-sm text-slate-500">Loading discounts...</div>
-        ) : (
-          <div className="overflow-x-auto -mx-2 sm:mx-0">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="text-left text-slate-500 border-b">
-                  <th className="py-2 px-2">Product</th>
-                  <th className="py-2 px-2">Enabled</th>
-                  <th className="py-2 px-2">Discount %</th>
-                  <th className="py-2 px-2">Discount coins</th>
-                  <th className="py-2 px-2">Save</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cafeteriaDiscounts.map((item) => (
-                  <CafeteriaDiscountRow
-                    key={item.id}
-                    item={item}
-                    saving={discountSavingId === item.id}
-                    onSave={onSaveCafeteriaDiscount}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
 
       <div className="card">
         <div className="flex items-start justify-between gap-4">

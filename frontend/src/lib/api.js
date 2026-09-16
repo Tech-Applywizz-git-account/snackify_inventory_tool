@@ -182,9 +182,6 @@ export const api = {
 
    // Cafeteria
    cafeteriaItems: () => request('/api/cafeteria/items'),
-   cafeteriaDiscounts: () => request('/api/cafeteria/discounts'),
-   updateCafeteriaDiscount: (id, body) =>
-     request(`/api/cafeteria/discounts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   tokensMe: () => request('/api/tokens/me'),
   tokensBootstrap: () => request('/api/tokens/bootstrap'),
    quickOrder: (body) => request('/api/requests', { method: 'POST', body: JSON.stringify(body) }),
