@@ -3,17 +3,6 @@ import { X } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../lib/api.js';
 
-function getTodayISTString() {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
 // DB value : display label
 const ROLE_OPTIONS = [
   { value: 'leadership', label: 'Admin' },
@@ -227,8 +216,6 @@ export default function Admin() {
   const [bookedUsers, setBookedUsers] = useState(null);
   const [bookedUsersOpen, setBookedUsersOpen] = useState(false);
   const [bookedUsersLoading, setBookedUsersLoading] = useState(false);
-  const [mealDayLists, setMealDayLists] = useState({});
-  const [mealDayListsLoading, setMealDayListsLoading] = useState(false);
   const [requireReviewToBookMeals, setRequireReviewToBookMeals] = useState(false);
   const [mealSettingLoading, setMealSettingLoading] = useState(true);
   const [mealSettingSaving, setMealSettingSaving] = useState(false);
@@ -239,15 +226,6 @@ export default function Admin() {
   const [lateMealSelectedUser, setLateMealSelectedUser] = useState(null);
   const [lateMealUserId, setLateMealUserId] = useState('');
   const [lateMealChoice, setLateMealChoice] = useState('veg');
-  const [lateMealBooking, setLateMealBooking] = useState(null);
-  const [lateMealPrinting, setLateMealPrinting] = useState(false);
-  const [lateMealDate, setLateMealDate] = useState(() => {
-    const date = new Date();
-    date.setDate(date.getDate() + 1);
-    while (date.getDay() === 0 || date.getDay() === 6) date.setDate(date.getDate() + 1);
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-  });
-  const isLateMealForToday = lateMealDate === getTodayISTString();
   const [cafeteriaDiscounts, setCafeteriaDiscounts] = useState(null);
   const [discountSavingId, setDiscountSavingId] = useState(null);
 
@@ -262,33 +240,6 @@ export default function Admin() {
   useEffect(() => {
     load();
   }, [load]);
-
-  useEffect(() => {
-    if (profile?.role !== 'leadership') return;
-    const today = new Date();
-    const nextDay = new Date(today);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const toDateString = (date) =>
-      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    const dates = [
-      { key: 'today', label: 'Today', date: toDateString(today) },
-      { key: 'next_day', label: 'Next Day', date: toDateString(nextDay) },
-    ];
-
-    setMealDayListsLoading(true);
-    Promise.all(
-      dates.map(async (day) => {
-        const [booked, unbooked] = await Promise.all([
-          api.listBookedUsers(day.date),
-          api.listUnbookedUsers(day.date),
-        ]);
-        return [day.key, { ...day, booked, unbooked }];
-      })
-    )
-      .then((rows) => setMealDayLists(Object.fromEntries(rows)))
-      .catch((e) => setErr(e.message))
-      .finally(() => setMealDayListsLoading(false));
-  }, [profile?.role]);
 
   useEffect(() => {
     if (!okMsg) {
@@ -488,30 +439,9 @@ export default function Admin() {
     setErr('');
     setOkMsg('');
     try {
-      const result = await api.lateMealBooking({
-        user_id: lateMealUserId,
-        choice: lateMealChoice,
-        meal_date: lateMealDate,
-      });
+      const result = await api.lateMealBooking({ user_id: lateMealUserId, choice: lateMealChoice });
       const selected = users.find((u) => u.id === lateMealUserId);
-      setLateMealBooking({
-        userId: lateMealUserId,
-        mealDate: result.meal_date,
-        name: selected?.full_name || selected?.email || 'user',
-        tokenNumber: result.booking.token_number,
-      });
-      setOkMsg(`Meal booked for ${selected?.full_name || selected?.email || 'user'}. Token: ${result.booking.token_number}.`);
-      const [booked, unbooked] = await Promise.all([
-        api.listBookedUsers(result.meal_date),
-        api.listUnbookedUsers(result.meal_date),
-      ]);
-      setMealDayLists((current) => Object.fromEntries(
-        Object.entries(current).map(([key, day]) => (
-          day.date === result.meal_date ? [key, { ...day, booked, unbooked }] : [key, day]
-        ))
-      ));
-      if (unbookedUsersOpen && unbookedUsers?.meal_date === result.meal_date) setUnbookedUsers(unbooked);
-      if (bookedUsersOpen && bookedUsers?.meal_date === result.meal_date) setBookedUsers(booked);
+      setOkMsg(`Meal booked for ${selected?.full_name || selected?.email || 'user'} and one receipt was queued for immediate printing. Token: ${result.booking.token_number}.`);
       setLateMealUserId('');
       setLateMealSearch('');
       setLateMealSearchQuery('');
@@ -521,21 +451,6 @@ export default function Admin() {
       setErr(e.message);
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function onPrintLateMeal() {
-    if (!lateMealBooking || lateMealPrinting) return;
-    setLateMealPrinting(true);
-    setErr('');
-    try {
-      await api.reprintToken({ date: lateMealBooking.mealDate, user_id: lateMealBooking.userId });
-      setOkMsg(`Print request sent for ${lateMealBooking.name}'s token.`);
-      setLateMealBooking(null);
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setLateMealPrinting(false);
     }
   }
 
@@ -572,11 +487,11 @@ export default function Admin() {
     setLateMealMatches([]);
   }
 
-  async function onShowUnbookedUsers(date) {
+  async function onShowUnbookedUsers() {
     setUnbookedUsersLoading(true);
     setErr('');
     try {
-      setUnbookedUsers(await api.listUnbookedUsers(date));
+      setUnbookedUsers(await api.listUnbookedUsers());
       setUnbookedUsersOpen(true);
     } catch (e) {
       setErr(e.message);
@@ -585,11 +500,11 @@ export default function Admin() {
     }
   }
 
-  async function onShowBookedUsers(date) {
+  async function onShowBookedUsers() {
     setBookedUsersLoading(true);
     setErr('');
     try {
-      setBookedUsers(await api.listBookedUsers(date));
+      setBookedUsers(await api.listBookedUsers());
       setBookedUsersOpen(true);
     } catch (e) {
       setErr(e.message);
@@ -761,48 +676,28 @@ export default function Admin() {
       {profile?.role === 'leadership' && (
         <div className="card">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
-            <h2 className="font-semibold">Add User / Book Meal</h2>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-            {['today', 'next_day'].map((key) => {
-              const day = mealDayLists[key];
-              return (
-                <div key={key} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-semibold text-sm text-slate-800">{day?.label || key}</span>
-                    <span className="text-xs text-slate-500">{day?.date || 'Loading…'}</span>
-                  </div>
-                  {mealDayListsLoading || !day ? (
-                    <div className="text-xs text-slate-400">Loading meal counts…</div>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-2 gap-2 mb-2">
-                        <div className="rounded-lg bg-emerald-50 p-2 text-center">
-                          <div className="text-lg font-bold text-emerald-700">{day.booked.users.length}</div>
-                          <div className="text-[11px] text-emerald-700">Booked</div>
-                        </div>
-                        <div className="rounded-lg bg-amber-50 p-2 text-center">
-                          <div className="text-lg font-bold text-amber-700">{day.unbooked.users.length}</div>
-                          <div className="text-[11px] text-amber-700">Not booked</div>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button type="button" className="btn-secondary text-xs flex-1" onClick={() => onShowBookedUsers(day.date)} disabled={bookedUsersLoading}>
-                          View booked
-                        </button>
-                        <button type="button" className="btn-secondary text-xs flex-1" onClick={() => onShowUnbookedUsers(day.date)} disabled={unbookedUsersLoading}>
-                          View not booked
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })}
+            <h2 className="font-semibold">Add User / Book Late Meal</h2>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                onClick={onShowUnbookedUsers}
+                disabled={unbookedUsersLoading}
+              >
+                {unbookedUsersLoading ? 'Loading…' : 'Show Not Booked Today'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                onClick={onShowBookedUsers}
+                disabled={bookedUsersLoading}
+              >
+                {bookedUsersLoading ? 'Loading…' : 'Show Booked Today'}
+              </button>
+            </div>
           </div>
           <p className="text-xs text-slate-500 mb-4">
-            {isLateMealForToday && 'Late meal booking is available only until 11:00 AM IST today. '}
-            Booking and printing are separate actions for the selected user.
+            Available after 10:00 AM IST. This creates today&apos;s booking and prints one receipt only for the selected user.
           </p>
           <form onSubmit={onLateMealBooking} className="grid grid-cols-1 sm:grid-cols-12 gap-3">
             <input
@@ -855,33 +750,10 @@ export default function Admin() {
               <option value="egg">Egg</option>
               <option value="non_veg">Non-vegetarian</option>
             </select>
-            <input
-              type="date"
-              className="input sm:col-span-2"
-              value={lateMealDate}
-              onChange={(e) => setLateMealDate(e.target.value)}
-              required
-              aria-label="Meal date"
-            />
             <button type="submit" className="btn-primary sm:col-span-2" disabled={busy}>
-              {busy ? 'Booking…' : 'Book Meal'}
+              {busy ? 'Booking…' : 'Book & Print'}
             </button>
           </form>
-          {lateMealBooking && (
-            <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm">
-              <span className="text-emerald-800">
-                {lateMealBooking.name} booked. Token: {lateMealBooking.tokenNumber}
-              </span>
-              <button
-                type="button"
-                className="btn-secondary text-sm"
-                onClick={onPrintLateMeal}
-                disabled={lateMealPrinting}
-              >
-                {lateMealPrinting ? 'Printing…' : 'Print Meal'}
-              </button>
-            </div>
-          )}
         </div>
       )}
 

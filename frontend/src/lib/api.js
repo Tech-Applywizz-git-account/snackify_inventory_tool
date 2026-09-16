@@ -111,8 +111,8 @@ export const api = {
   aiSummaryHistory: () => request('/api/reports/ai-summary/history'),
 
   listUsers: () => request('/api/admin/users'),
-  listUnbookedUsers: (date) => request(date ? `/api/admin/unbooked-users?date=${date}` : '/api/admin/unbooked-users'),
-  listBookedUsers: (date) => request(date ? `/api/admin/booked-users?date=${date}` : '/api/admin/booked-users'),
+  listUnbookedUsers: () => request('/api/admin/unbooked-users'),
+  listBookedUsers: () => request('/api/admin/booked-users'),
   setUserRole: (userId, role) =>
     request(`/api/admin/users/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   setUserPreferredName: (userId, preferredName) =>
@@ -203,8 +203,6 @@ export const api = {
   bookMeal: (body) => request('/api/meals/book', { method: 'POST', body: JSON.stringify(body) }),
   myMealBookings: (month) => request(`/api/meals/my-bookings?month=${month}`),
   mealSummary: (date) => request(`/api/meals/summary?date=${date}`),
-  mealSummaryToday: () => request('/api/meals/summary/today'),
-  mealSummaryNextDay: () => request('/api/meals/summary/next-day'),
   mealSettings: () => request('/api/meals/settings'),
   rateMeal: (date, body) =>
     request(`/api/meals/${date}/rate`, { method: 'POST', body: JSON.stringify(body) }),

@@ -61,24 +61,6 @@ function getMealDateDay(dateStr) {
   return d.getUTCDay(); // 0=Sun ... 6=Sat
 }
 
-function getISTDateString(dateObj = new Date()) {
-  const parts = getISTParts(dateObj);
-  return `${parts.year}-${String(parts.month + 1).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
-}
-
-function getMealCountSummary(bookings = []) {
-  const counts = { veg: 0, non_veg: 0, egg: 0, skip: 0 };
-  for (const booking of bookings) {
-    if (booking.choice in counts) counts[booking.choice] += 1;
-  }
-
-  return {
-    ...counts,
-    booked_count: counts.veg + counts.non_veg + counts.egg,
-    total_count: bookings.length,
-  };
-}
-
 function isWorkingDay(dateStr) {
   const day = getMealDateDay(dateStr);
   return day >= 1 && day <= 5;
@@ -135,7 +117,7 @@ function getNextWorkingDay(nowDate = new Date()) {
 /**
  * Booking window rules (IST):
  * Morning (lunch):
- *   - Today and the next working day are bookable (blocked dates are skipped when computing next WD)
+ *   - Only next working day is bookable (blocked dates are skipped when computing next WD)
  *   - Open 9:00 AM – 6:00 PM → can book + skip
  *   - 6:00 PM – 8:00 PM → skip only (no new bookings)
  *   - After 8:00 PM → locked
@@ -168,7 +150,7 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
 
   if (shift === 'morning') {
     const nextWD = getNextWorkingDay(mockDate || new Date());
-    if (diffDays !== 0 && mealDate !== nextWD) {
+    if (mealDate !== nextWD) {
       return {
         canBook: false,
         canSkip: false,
@@ -544,78 +526,70 @@ router.get('/my-bookings', async (req, res, next) => {
   }
 });
 
-async function getMealSummary(date) {
-  const { data: bookings, error } = await supabaseAdmin
-    .from('meal_bookings')
-    .select('choice, user_id, profiles!inner(full_name, preferred_name)')
-    .eq('meal_date', date);
-  if (error) throw error;
-
-  const settings = await getSettings();
-  const summary = { date, veg: [], non_veg: [], egg: [], skip: [] };
-  for (const booking of bookings || []) {
-    const name = booking.profiles?.preferred_name || booking.profiles?.full_name || 'Unknown';
-    if (summary[booking.choice]) summary[booking.choice].push(name);
-  }
-
-  const { count: totalEmployees } = await supabaseAdmin
-    .from('profiles')
-    .select('id', { count: 'exact', head: true });
-  const counts = getMealCountSummary(bookings || []);
-
-  return {
-    ...summary,
-    veg_count: counts.veg,
-    non_veg_count: counts.non_veg,
-    egg_count: counts.egg,
-    skip_count: counts.skip,
-    booked_count: counts.booked_count,
-    total_count: counts.total_count,
-    not_booked: (totalEmployees || 0) - counts.booked_count,
-    total_meals: counts.booked_count,
-    cost: {
-      veg: counts.veg * (settings.cost_per_veg || 80),
-      non_veg: counts.non_veg * (settings.cost_per_non_veg || 120),
-      egg: counts.egg * (settings.cost_per_egg || 100),
-      total:
-        counts.veg * (settings.cost_per_veg || 80) +
-        counts.non_veg * (settings.cost_per_non_veg || 120) +
-        counts.egg * (settings.cost_per_egg || 100),
-    },
-  };
-}
-
 // ── GET /api/meals/summary?date=2026-05-21 ───────────────────────────────────
 // FM + Finance: headcount summary for a date
-router.get('/summary', requireRole('facility_manager', 'finance', 'leadership'), async (req, res, next) => {
-  try {
-    const { date } = req.query;
-    if (!date) return res.status(400).json({ error: 'date query param required' });
-    res.json(await getMealSummary(date));
-  } catch (e) {
-    next(e);
-  }
-});
+router.get(
+  '/summary',
+  requireRole('facility_manager', 'finance', 'leadership'),
+  async (req, res, next) => {
+    try {
+      const { date } = req.query;
+      if (!date) return res.status(400).json({ error: 'date query param required' });
 
-router.get(['/summary/today', '/counts/today'], requireRole('facility_manager', 'finance', 'leadership'), async (_req, res, next) => {
-  try {
-    const date = getISTDateString();
-    res.json({ period: 'today', ...(await getMealSummary(date)) });
-  } catch (e) {
-    next(e);
-  }
-});
+      const { data: bookings, error } = await supabaseAdmin
+        .from('meal_bookings')
+        .select('choice, user_id, profiles!inner(full_name, preferred_name)')
+        .eq('meal_date', date);
 
-router.get(['/summary/next-day', '/counts/next-day'], requireRole('facility_manager', 'finance', 'leadership'), async (_req, res, next) => {
-  try {
-    const nextDay = new Date();
-    nextDay.setDate(nextDay.getDate() + 1);
-    const date = getISTDateString(nextDay);
-    res.json({ period: 'next_day', ...(await getMealSummary(date)) });
-  } catch (e) {
-    next(e);
+      if (error) throw error;
+
+      const settings = await getSettings();
+
+      const summary = {
+        date,
+        veg: [],
+        non_veg: [],
+        egg: [],
+        skip: [],
+      };
+
+      for (const b of bookings || []) {
+        const name = b.profiles?.preferred_name || b.profiles?.full_name || 'Unknown';
+        if (summary[b.choice]) {
+          summary[b.choice].push(name);
+        }
+      }
+
+      // Get total employee count for "not booked"
+      const { count: totalEmployees } = await supabaseAdmin
+        .from('profiles')
+        .select('id', { count: 'exact', head: true });
+
+      const bookedCount = (bookings || []).length;
+
+      res.json({
+        ...summary,
+        veg_count: summary.veg.length,
+        non_veg_count: summary.non_veg.length,
+        egg_count: summary.egg.length,
+        skip_count: summary.skip.length,
+        not_booked: (totalEmployees || 0) - bookedCount,
+        total_meals: summary.veg.length + summary.non_veg.length + summary.egg.length,
+        cost: {
+          veg: summary.veg.length * (settings.cost_per_veg || 80),
+          non_veg: summary.non_veg.length * (settings.cost_per_non_veg || 120),
+          egg: summary.egg.length * (settings.cost_per_egg || 100),
+          total:
+            summary.veg.length * (settings.cost_per_veg || 80) +
+            summary.non_veg.length * (settings.cost_per_non_veg || 120) +
+            summary.egg.length * (settings.cost_per_egg || 100),
+        },
+      });
+    } catch (e) {
+      next(e);
+    }
   }
-});
+);
 
 // ── GET /api/meals/settings ───────────────────────────────────────────────────
 router.get('/settings', async (_req, res, next) => {

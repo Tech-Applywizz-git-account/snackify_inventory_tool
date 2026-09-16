@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
 import { lookupEmployeeIdByEmail } from '../lib/hrms.js';
-import { applyMealTokens } from '../lib/tokens.js';
+import { applyMealTokens, refundTokens } from '../lib/tokens.js';
 import {
   getRequireReviewToBookMeals,
   setRequireReviewToBookMeals,
@@ -22,21 +22,6 @@ function getISTDateString() {
   }).formatToParts(new Date());
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}`;
-}
-
-function getNextWorkingDayString() {
-  const [year, month, day] = getISTDateString().split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day + 1));
-  while (date.getUTCDay() === 0 || date.getUTCDay() === 6) {
-    date.setUTCDate(date.getUTCDate() + 1);
-  }
-  return date.toISOString().slice(0, 10);
-}
-
-function isWorkingDayString(dateString) {
-  const date = new Date(`${dateString}T00:00:00Z`);
-  const day = date.getUTCDay();
-  return /^\d{4}-\d{2}-\d{2}$/.test(dateString) && day >= 1 && day <= 5;
 }
 
 function getISTParts() {
@@ -178,10 +163,10 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
-  // GET /api/admin/unbooked-users - active users without the target meal booking
-  router.get('/unbooked-users', async (req, res, next) => {
+  // GET /api/admin/unbooked-users - active users without today's meal booking
+  router.get('/unbooked-users', async (_req, res, next) => {
     try {
-      const mealDate = req.query.date || getNextWorkingDayString();
+      const mealDate = getISTDateString();
       const [{ data: profiles, error: profilesErr }, { data: bookings, error: bookingsErr }] = await Promise.all([
         d.supabaseAdmin
           .from('profiles')
@@ -214,10 +199,10 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
-  // GET /api/admin/booked-users - active users with the target meal booking
-  router.get('/booked-users', async (req, res, next) => {
+  // GET /api/admin/booked-users - active users with today's meal booking
+  router.get('/booked-users', async (_req, res, next) => {
     try {
-      const mealDate = req.query.date || getNextWorkingDayString();
+      const mealDate = getISTDateString();
       const [{ data: profiles, error: profilesErr }, { data: bookings, error: bookingsErr }] = await Promise.all([
         d.supabaseAdmin
           .from('profiles')
@@ -538,30 +523,23 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
-  // Admin-only late booking. Printing is handled separately through the
-  // meal-print endpoint after the booking has been created.
+  // Admin-only late booking. This creates one targeted print job and never
+  // re-runs the daily cabin batch or touches historical print jobs.
   router.post('/late-meal-booking', async (req, res, next) => {
     try {
-      const { user_id, choice, meal_date } = z.object({
+      const { user_id, choice } = z.object({
         user_id: z.string().uuid(),
         choice: lateMealChoices,
-        meal_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       }).parse(req.body);
-      const mealDate = meal_date || getNextWorkingDayString();
       const ist = getISTParts();
-      if (mealDate === getISTDateString() && ist.hour >= 11) {
-        return res.status(400).json({ error: 'Late meal booking for today is available only until 11:00 AM IST.' });
+      if (ist.hour < 10) {
+        return res.status(400).json({ error: 'Late meal booking opens after 10:00 AM IST.' });
       }
 
-      if (!isWorkingDayString(mealDate)) {
-        return res.status(400).json({ error: 'Meal booking is only available for working days.' });
-      }
-      if (mealDate < getISTDateString()) {
-        return res.status(400).json({ error: 'Meal booking date cannot be in the past.' });
-      }
+      const mealDate = getISTDateString();
       const options = mealOptionsForDate(mealDate);
       if (!options.includes(choice)) {
-        return res.status(400).json({ error: `${choice} is not available for ${mealDate}.` });
+        return res.status(400).json({ error: `${choice} is not available for today.` });
       }
 
       const { data: target, error: targetErr } = await d.supabaseAdmin
@@ -579,7 +557,7 @@ export function createAdminRouter(overrides = {}) {
         .eq('meal_date', mealDate)
         .maybeSingle();
       if (existingErr) throw existingErr;
-      if (existing) return res.status(409).json({ error: `This user already has a meal booking for ${mealDate}.` });
+      if (existing) return res.status(409).json({ error: 'This user already has a meal booking for today.' });
 
       const { data: prefs, error: prefsErr } = await d.supabaseAdmin
         .from('employee_cafeteria_preferences')
@@ -620,10 +598,31 @@ export function createAdminRouter(overrides = {}) {
         throw e;
       }
 
+      const { data: job, error: jobErr } = await d.supabaseAdmin
+        .from('meal_print_jobs')
+        .insert({
+          meal_date: mealDate,
+          cabin_name: cabinName,
+          print_type: 'reprint',
+          scheduled_for: new Date().toISOString(),
+          status: 'pending',
+          token_count: 1,
+          requested_by: req.user.id,
+          booking_user_id: user_id,
+        })
+        .select()
+        .single();
+      if (jobErr) {
+        await refundTokens({ userId: user_id, refType: 'meal_booking', refId: booking.id });
+        await d.supabaseAdmin.from('meal_bookings').delete().eq('id', booking.id);
+        throw jobErr;
+      }
+
       res.status(201).json({
         ok: true,
         meal_date: mealDate,
         booking: { ...booking, tokens_charged: spend?.tokens_charged || 0 },
+        print_job: job,
       });
     } catch (e) {
       next(e);
