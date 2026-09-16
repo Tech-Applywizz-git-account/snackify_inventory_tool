@@ -25,7 +25,6 @@ const LOCATIONS = [
   'Resume Cabin',
   'Tech Team',
   'Marketing Team',
-  'Conference Room',
 ];
 
 const CATEGORY_EMOJI = {

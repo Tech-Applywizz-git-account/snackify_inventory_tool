@@ -28,7 +28,6 @@ const LOCATIONS = [
   'Resume Cabin',
   'Tech Team',
   'Marketing Team',
-  'Conference Room',
 ];
 
 function catalogTokens(catalog, name) {
@@ -2397,7 +2396,7 @@ export default function Cafeteria() {
               <div className="pt-3 space-y-3">
                 <textarea
                   className="w-full border-2 border-slate-100 rounded-2xl p-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-brand focus:outline-none min-h-[80px] resize-none"
-                  placeholder="e.g. 2 hot coffees for a client meeting in Conference Room"
+                  placeholder="e.g. 2 hot coffees for a client meeting"
                   value={customText}
                   onChange={(e) => setCustomText(e.target.value)}
                   required

@@ -48,6 +48,7 @@ export default function Preferences() {
     notification_tone: 'Friendly',
   });
   const [shift, setShift] = useState('morning');
+  const [cabin, setCabin] = useState('');
   const [shiftSaving, setShiftSaving] = useState(false);
   const [employeeCode, setEmployeeCode] = useState('');
   const [codeSaving, setCodeSaving] = useState(false);
@@ -61,7 +62,7 @@ export default function Preferences() {
 
     supabase
       .from('employee_cafeteria_preferences')
-      .select('notification_tone, reminder_enabled, reminder_time, preferred_drink')
+      .select('notification_tone, reminder_enabled, reminder_time, preferred_drink, cabin')
       .eq('user_id', id)
       .maybeSingle()
       .then(({ data }) => {
@@ -72,6 +73,7 @@ export default function Preferences() {
             tea_coffee_reminder_enabled: data.reminder_enabled || false,
             preferred_drink: data.preferred_drink || 'Tea',
           }));
+          setCabin(data.cabin || '');
         }
       })
       .catch((e) => console.error('Failed to load preferences', e))
@@ -245,6 +247,17 @@ export default function Preferences() {
             />
           </div>
           {codeSaving && <Loader2 size={16} className="animate-spin text-brand mt-5" />}
+        </div>
+
+        <div className="flex items-center gap-3 pt-2 border-t border-slate-100">
+          <div className="flex-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+              Meal Cabin
+            </label>
+            <div className="mt-1 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-800 bg-slate-50">
+              {cabin || 'Not selected yet'}
+            </div>
+          </div>
         </div>
       </div>
 
