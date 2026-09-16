@@ -434,7 +434,8 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
     const now = new Date();
     const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const currentHour = istNow.getHours();
-    const isFinal = currentHour >= 17; // 5:15 PM is 17:15
+    const currentMinute = istNow.getMinutes();
+    const isFinal = currentHour > 17 || (currentHour === 17 && currentMinute >= 15);
 
     const istTomorrow = new Date(istNow);
     istTomorrow.setDate(istTomorrow.getDate() + 1);
@@ -469,8 +470,7 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
     const { data: bookings, error: bookingsErr } = await supabaseAdmin
       .from('meal_bookings')
       .select('user_id')
-      .eq('meal_date', tomorrowStr)
-      .neq('choice', 'skip');
+      .eq('meal_date', tomorrowStr);
 
     if (bookingsErr) throw bookingsErr;
 
@@ -500,7 +500,6 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
           .select('id')
           .eq('user_id', user.id)
           .eq('meal_date', tomorrowStr)
-          .neq('choice', 'skip')
           .maybeSingle();
 
         if (latestBookingErr) throw latestBookingErr;
