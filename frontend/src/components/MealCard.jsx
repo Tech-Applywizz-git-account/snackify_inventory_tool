@@ -155,7 +155,7 @@ export default function MealCard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {dayWiseDates.map(({ label, date }) => {
           const data = dataByDate[date];
           if (!data) return null;
