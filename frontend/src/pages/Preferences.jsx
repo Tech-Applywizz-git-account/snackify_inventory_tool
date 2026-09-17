@@ -50,7 +50,6 @@ export default function Preferences() {
   const [shift, setShift] = useState('morning');
   const [shiftSaving, setShiftSaving] = useState(false);
   const [employeeCode, setEmployeeCode] = useState('');
-  const [codeSaving, setCodeSaving] = useState(false);
   const [cardData, setCardData] = useState(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportMsg, setReportMsg] = useState('');
@@ -105,18 +104,6 @@ export default function Preferences() {
       setCardData(d);
     }).catch(() => {});
   }, [profile?.id]);
-
-  async function saveEmployeeCode() {
-    if (!employeeCode.trim()) return;
-    setCodeSaving(true);
-    try {
-      await supabase
-        .from('profiles')
-        .update({ employee_code: employeeCode.trim().toUpperCase() })
-        .eq('id', profile.id);
-    } catch (_) {}
-    setCodeSaving(false);
-  }
 
   async function saveShift(newShift) {
     setShift(newShift);
@@ -236,15 +223,12 @@ export default function Preferences() {
             <input
               type="text"
               inputMode="numeric"
-              className="w-full mt-1 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-extrabold text-slate-800 placeholder:text-slate-300 focus:border-brand focus:outline-none tracking-widest"
-              placeholder="0001"
+              className="w-full mt-1 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-extrabold text-slate-500 bg-slate-50 tracking-widest"
               value={employeeCode}
-              onChange={(e) => setEmployeeCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
-              onBlur={saveEmployeeCode}
-              maxLength={4}
+              readOnly
+              aria-label="Employee Code"
             />
           </div>
-          {codeSaving && <Loader2 size={16} className="animate-spin text-brand mt-5" />}
         </div>
       </div>
 
