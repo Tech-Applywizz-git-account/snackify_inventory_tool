@@ -13,6 +13,7 @@ const LOCATIONS = [
   'Resume Cabin',
   'Tech Team',
   'Marketing Team',
+  'Conference Room',
 ];
 
 const _SAMPLES = ['Coffee please', 'Water bottle for 2', 'Tea, no sugar'];

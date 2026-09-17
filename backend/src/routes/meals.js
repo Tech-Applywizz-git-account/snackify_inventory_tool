@@ -17,15 +17,6 @@ const DAY_OPTIONS = {
   5: ['veg', 'non_veg'], // Friday: Veg / Non-Veg
 };
 
-const CABIN_OPTIONS = [
-  'Balaji Cabin',
-  'Rama Krishna Cabin',
-  'Manisha Cabin',
-  'Tech Cabin',
-  'Marketing Cabin',
-  'Resume Cabin',
-];
-
 function getISTParts(dateObj = new Date()) {
   try {
     const formatter = new Intl.DateTimeFormat('en-US', {
@@ -286,13 +277,9 @@ router.get('/options', async (req, res, next) => {
 // Body: { date: "2026-05-21", choice: "veg" | "non_veg" | "egg" | "skip" }
 router.post('/book', async (req, res, next) => {
   try {
-    const { date, choice: rawChoice, meal_type, cabin, onion_slices } = req.body;
+    const { date, choice: rawChoice, meal_type, onion_slices } = req.body;
     const choice = rawChoice || meal_type;
     if (!date || !choice) return res.status(400).json({ error: 'date and choice required' });
-
-    if (choice !== 'skip' && !CABIN_OPTIONS.includes(cabin)) {
-      return res.status(400).json({ error: 'A valid cabin is required for meal booking.' });
-    }
 
     // Validate working day
     if (!isWorkingDay(date)) {
@@ -313,7 +300,7 @@ router.post('/book', async (req, res, next) => {
 
     const { data: prefs } = await supabaseAdmin
       .from('employee_cafeteria_preferences')
-      .select('shift, cabin')
+      .select('shift')
       .eq('user_id', req.user.id)
       .maybeSingle();
     const userShift = prefs?.shift || 'morning';
@@ -391,25 +378,9 @@ router.post('/book', async (req, res, next) => {
 
     if (existing?.id) {
       if (existing.choice === choice) {
-        let currentBooking = existing;
-        if (choice !== 'skip' && cabin) {
-          if (cabin !== existing.cabin_name) {
-            const { data: updated, error } = await supabaseAdmin
-              .from('meal_bookings')
-              .update({ cabin_name: cabin })
-              .eq('id', existing.id)
-              .select()
-              .single();
-            if (error) throw error;
-            currentBooking = updated;
-          }
-          await supabaseAdmin
-            .from('employee_cafeteria_preferences')
-            .upsert({ user_id: req.user.id, cabin }, { onConflict: 'user_id' });
-        }
         return res.json({
           ok: true,
-          booking: currentBooking,
+          booking: existing,
           tokens_charged: existing.tokens_charged || 0,
           idempotent: true,
           message: isRealMeal(choice)
@@ -429,7 +400,7 @@ router.post('/book', async (req, res, next) => {
 
       const { data: updated, error } = await supabaseAdmin
         .from('meal_bookings')
-        .update({ choice, booked_at: bookedAt, onion_slices: savedOnionSlices, ...(choice !== 'skip' ? { cabin_name: cabin } : {}) })
+        .update({ choice, booked_at: bookedAt, onion_slices: savedOnionSlices })
         .eq('id', existing.id)
         .select()
         .single();
@@ -444,7 +415,6 @@ router.post('/book', async (req, res, next) => {
           choice,
           booked_at: bookedAt,
           onion_slices: savedOnionSlices,
-          ...(choice !== 'skip' ? { cabin_name: cabin } : {}),
         })
         .select()
         .single();
@@ -463,13 +433,6 @@ router.post('/book', async (req, res, next) => {
         throw error;
       }
       data = inserted;
-    }
-
-    if (choice !== 'skip') {
-      const { error: cabinError } = await supabaseAdmin
-        .from('employee_cafeteria_preferences')
-        .upsert({ user_id: req.user.id, cabin }, { onConflict: 'user_id' });
-      if (cabinError) throw cabinError;
     }
 
 

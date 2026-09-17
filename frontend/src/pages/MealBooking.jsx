@@ -257,15 +257,6 @@ const CHOICE_UI = {
   },
 };
 
-const CABIN_OPTIONS = [
-  'Balaji Cabin',
-  'Rama Krishna Cabin',
-  'Manisha Cabin',
-  'Tech Cabin',
-  'Marketing Cabin',
-  'Resume Cabin',
-];
-
 const DAY_OPTIONS = {
   1: ['veg'], // Mon
   2: ['veg', 'egg'], // Tue
@@ -354,7 +345,7 @@ function Toast({ message, type, onDismiss }) {
 }
 
 // ── Confirmation bottom sheet ─────────────────────────────────────────────────
-function ConfirmSheet({ dateStr, choice, existingChoice, cabin, setCabin, busy, onionSlices, setOnionSlices, onConfirm, onClose, coinPrice = 0 }) {
+function ConfirmSheet({ dateStr, choice, existingChoice, busy, onionSlices, setOnionSlices, onConfirm, onClose, coinPrice = 0 }) {
   const ui = CHOICE_UI[choice];
   const existingUi = existingChoice ? CHOICE_UI[existingChoice] : null;
   const isChange = existingChoice && existingChoice !== choice;
@@ -417,29 +408,6 @@ function ConfirmSheet({ dateStr, choice, existingChoice, cabin, setCabin, busy, 
         </div>
 
         {/* Onion slices customization inside confirmation dialog */}
-        {choice !== 'skip' && !cabin && (
-          <div className="mb-6">
-            <label className="block text-xs font-bold text-slate-600 mb-2">Select your cabin</label>
-            <div className="grid grid-cols-2 gap-2">
-              {CABIN_OPTIONS.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => setCabin(option)}
-                  disabled={busy}
-                  className={`rounded-xl border-2 px-2 py-3 text-xs font-bold transition-all ${
-                    cabin === option
-                      ? 'border-brand bg-brand/10 text-brand ring-1 ring-brand'
-                      : 'border-slate-200 bg-white text-slate-600 hover:border-brand/50'
-                  }`}
-                >
-                  {option}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {isNonVegDay && choice === 'non_veg' && (() => {
           const match = onionSlices ? onionSlices.match(/^(\d+)/) : null;
           const count = match ? parseInt(match[1], 10) : 0;
@@ -533,8 +501,7 @@ export default function MealBooking() {
   const [selectedDate, setSelectedDate] = useState(null);
   const [booking, setBooking] = useState(false);
   const [_loading, setLoading] = useState(true);
-  const [userPrefs, setUserPrefs] = useState({ shift: 'morning', notification_tone: 'Friendly', cabin: '' });
-  const [selectedCabin, setSelectedCabin] = useState('');
+  const [userPrefs, setUserPrefs] = useState({ shift: 'morning', notification_tone: 'Friendly' });
   const [onionSlices, setOnionSlices] = useState('no onion');
   const [cardData, setCardData] = useState(null);
   const [mealTokenByDow, setMealTokenByDow] = useState({});
@@ -589,7 +556,7 @@ export default function MealBooking() {
     if (!profile?.id) return;
     supabase
       .from('employee_cafeteria_preferences')
-      .select('shift, notification_tone, cabin')
+      .select('shift, notification_tone')
       .eq('user_id', profile.id)
       .maybeSingle()
       .then(({ data }) => {
@@ -597,7 +564,6 @@ export default function MealBooking() {
           setUserPrefs({
             shift: data.shift || 'morning',
             notification_tone: data.notification_tone || 'Friendly',
-            cabin: data.cabin || '',
           });
         }
       })
@@ -661,7 +627,6 @@ export default function MealBooking() {
     } else {
       setOnionSlices('no onion');
     }
-    setSelectedCabin(existing?.cabin_name || userPrefs.cabin || '');
     setConfirmData({ dateStr, choice, existingChoice: existing?.choice || null });
   }
 
@@ -669,17 +634,13 @@ export default function MealBooking() {
   async function confirmBook() {
     if (!confirmData) return;
     const { dateStr, choice } = confirmData;
-    if (choice !== 'skip' && !CABIN_OPTIONS.includes(selectedCabin)) {
-      setToast({ message: 'Please select your cabin before booking.', type: 'error' });
-      return;
-    }
     const coins = choice === 'skip' ? 0 : mealCoins(dateStr);
     setBooking(true);
     setPayAmount(coins);
     setPayError('');
     setPayPhase('paying');
     try {
-      await api.bookMeal({ date: dateStr, choice, cabin: selectedCabin, onion_slices: onionSlices });
+      await api.bookMeal({ date: dateStr, choice, onion_slices: onionSlices });
       const updated = await api.myMealBookings(monthStr);
       setBookings(updated);
       setConfirmData(null);
@@ -737,8 +698,6 @@ export default function MealBooking() {
             dateStr={confirmData.dateStr}
             choice={confirmData.choice}
             existingChoice={confirmData.existingChoice}
-            cabin={selectedCabin}
-            setCabin={setSelectedCabin}
             busy={booking}
             onionSlices={onionSlices}
             setOnionSlices={setOnionSlices}

@@ -77,6 +77,8 @@ const LOCATION_OPTS = [
   { id: 'Resume Cabin', label: 'Resume Cabin' },
   { id: 'Tech Team', label: 'Tech Team' },
   { id: 'Marketing Team', label: 'Marketing Team' },
+  { id: 'Conference Room', label: 'Conference Room' },
+  { id: 'Ask Every Time', label: 'Ask me every time' },
 ];
 
 const SHIFT_OPTS = [
