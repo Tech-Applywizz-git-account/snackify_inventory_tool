@@ -199,7 +199,7 @@ router.post('/schedule-meal-print', async (req, res) => {
     // Fetch all employee cafeteria preferences to map user_id -> cabin
     const { data: prefs, error: prefsErr } = await supabaseAdmin
       .from('employee_cafeteria_preferences')
-      .select('user_id, cabin, preferred_location');
+      .select('user_id, shift, cabin, preferred_location');
 
     if (prefsErr) throw prefsErr;
 
