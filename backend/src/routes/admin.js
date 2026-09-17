@@ -4,6 +4,10 @@ import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
 import { lookupEmployeeIdByEmail } from '../lib/hrms.js';
 import { applyMealTokens, refundTokens } from '../lib/tokens.js';
+import {
+  getRequireReviewToBookMeals,
+  setRequireReviewToBookMeals,
+} from '../lib/mealReviewBookingSetting.js';
 import { getCabinName } from './cron.js';
 
 const roleEnum = z.enum(['facility_manager', 'finance', 'leadership', 'staff', 'office_boy']);
@@ -103,6 +107,26 @@ export function createAdminRouter(overrides = {}) {
 
   // Every admin route is leadership-only.
   router.use(requireRole('leadership'));
+
+  router.get('/meal-settings', async (_req, res, next) => {
+    try {
+      res.json({ require_review_to_book_meals: getRequireReviewToBookMeals() });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.patch('/meal-settings', async (req, res, next) => {
+    try {
+      const enabled = req.body?.require_review_to_book_meals;
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ error: 'require_review_to_book_meals must be a boolean' });
+      }
+      res.json({ require_review_to_book_meals: setRequireReviewToBookMeals(enabled) });
+    } catch (e) {
+      next(e);
+    }
+  });
 
   // GET /api/admin/users  - all users + their roles, joined with auth.users for email
   router.get('/users', async (_req, res, next) => {

@@ -655,7 +655,13 @@ export default function MealBooking() {
     } catch (e) {
       setPayPhase('fail');
       setPayError(e.message || 'Something went wrong');
-      setToast({ message: e.message || 'Something went wrong', type: 'error' });
+      setToast({
+        message:
+          e.code === 'MEAL_REVIEW_REQUIRED'
+            ? 'Please complete your previous meal review before booking the next meal. Open Meal Reviews to continue.'
+            : e.message || 'Something went wrong',
+        type: 'error',
+      });
     } finally {
       setBooking(false);
     }

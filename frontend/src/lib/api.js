@@ -26,6 +26,7 @@ async function request(path, opts = {}) {
       throw e;
     }
     let msg = `${res.status} ${res.statusText}`;
+    let errorCode;
     try {
       // Only parse as JSON if the response actually is JSON.
       // This prevents a confusing secondary error when Vercel returns
@@ -34,12 +35,16 @@ async function request(path, opts = {}) {
       if (contentType.includes('application/json')) {
         const body = await res.json();
         if (body?.error) msg = body.error;
+        errorCode = body?.code;
       }
     } catch {}
     if (res.status === 401 && (msg.toLowerCase().includes('token') || msg.toLowerCase().includes('jwt') || msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('session'))) {
       supabase.auth.signOut().catch(() => {});
     }
-    throw new Error(msg);
+    const error = new Error(msg);
+    error.status = res.status;
+    if (errorCode) error.code = errorCode;
+    throw error;
   }
   if (res.status === 204) return null;
   return res.json();
@@ -136,6 +141,12 @@ export const api = {
     request('/api/admin/users/invite', { method: 'POST', body: JSON.stringify(body) }),
   lateMealBooking: (body) =>
     request('/api/admin/late-meal-booking', { method: 'POST', body: JSON.stringify(body) }),
+  mealReviewBookingSetting: () => request('/api/admin/meal-settings'),
+  updateMealReviewBookingSetting: (enabled) =>
+    request('/api/admin/meal-settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ require_review_to_book_meals: enabled }),
+    }),
 
   submitRequest: (raw_text) =>
     request('/api/requests', { method: 'POST', body: JSON.stringify({ raw_text }) }),

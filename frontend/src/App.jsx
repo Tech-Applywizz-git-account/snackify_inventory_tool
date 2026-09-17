@@ -3,7 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import InactivityLock from './components/InactivityLock.jsx';
 import Layout from './components/Layout.jsx';
 import MealReviewGate from './components/MealReviewPopup.jsx';
-import { useAuth } from './hooks/useAuth.js';
+import { AuthProvider, useAuth } from './hooks/useAuth.js';
 import { supabase } from './lib/supabase.js';
 import AdminPage from './pages/Admin.jsx';
 import MfaResetPage from './pages/MfaReset.jsx';
@@ -31,11 +31,13 @@ import RequestQueuePage from './pages/RequestQueue.jsx';
 import StaffViewPage from './pages/StaffView.jsx';
 
 function Protected({ children, allow }) {
-  const { session, profile, loading, aal } = useAuth();
+  const { session, profile, profileLoading, loading, aal } = useAuth();
   if (loading) return <div className="p-8 text-slate-500">Loading...</div>;
   if (!session) return <Navigate to="/login" replace />;
+  if (profileLoading) return <div className="p-8 text-slate-500">Loading...</div>;
   // Require MFA (AAL2) — if only AAL1, send back to login for TOTP step
-  if (aal !== 'aal2') return <Navigate to="/login" replace />;
+  // Leadership can also authenticate through the server-side admin password.
+  if (aal !== 'aal2' && profile?.role !== 'leadership') return <Navigate to="/login" replace />;
   if (allow && profile && !allow.includes(profile.role)) {
     return <div className="p-8 text-rose-600">Access denied for role: {profile.role}</div>;
   }
@@ -125,7 +127,8 @@ function OnboardingGate({ children }) {
 
 export default function App() {
   return (
-    <Routes>
+    <AuthProvider>
+      <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/guest" element={<GuestPage />} />
       <Route path="/guest/track/:id" element={<LiveTrackingPage />} />
@@ -263,6 +266,7 @@ export default function App() {
           }
         />
       </Route>
-    </Routes>
+      </Routes>
+    </AuthProvider>
   );
 }

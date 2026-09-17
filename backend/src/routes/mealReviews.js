@@ -6,9 +6,9 @@ import { requireRole } from '../middleware/auth.js';
 const router = Router();
 
 const TIMEZONE = 'Asia/Kolkata';
-// Defaults: 1:00 PM – 3:00 PM IST weekdays (override with env for ops/testing)
-const WINDOW_START_HOUR = Number(process.env.MEAL_REVIEW_START_HOUR ?? 13);
-const WINDOW_END_HOUR = Number(process.env.MEAL_REVIEW_END_HOUR ?? 15);
+// Defaults: 2:00 PM – 4:00 PM IST weekdays (override with env for ops/testing)
+const WINDOW_START_HOUR = Number(process.env.MEAL_REVIEW_START_HOUR ?? 14);
+const WINDOW_END_HOUR = Number(process.env.MEAL_REVIEW_END_HOUR ?? 16);
 const REOPEN_AFTER_SECONDS = Number(process.env.MEAL_REVIEW_REOPEN_SECONDS ?? 120);
 // Set MEAL_REVIEW_FORCE_OPEN=true on the API host to always show popup (testing only)
 const FORCE_OPEN = String(process.env.MEAL_REVIEW_FORCE_OPEN || '').toLowerCase() === 'true';

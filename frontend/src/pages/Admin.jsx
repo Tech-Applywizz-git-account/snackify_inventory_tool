@@ -170,6 +170,10 @@ export default function Admin() {
   const [bookedUsers, setBookedUsers] = useState(null);
   const [bookedUsersOpen, setBookedUsersOpen] = useState(false);
   const [bookedUsersLoading, setBookedUsersLoading] = useState(false);
+  const [requireReviewToBookMeals, setRequireReviewToBookMeals] = useState(false);
+  const [mealSettingLoading, setMealSettingLoading] = useState(true);
+  const [mealSettingSaving, setMealSettingSaving] = useState(false);
+  const [okMsgVisible, setOkMsgVisible] = useState(false);
   const [lateMealSearch, setLateMealSearch] = useState('');
   const [lateMealSearchQuery, setLateMealSearchQuery] = useState('');
   const [lateMealMatches, setLateMealMatches] = useState([]);
@@ -188,6 +192,29 @@ export default function Admin() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!okMsg) {
+      setOkMsgVisible(false);
+      return undefined;
+    }
+
+    setOkMsgVisible(true);
+    const fadeTimer = setTimeout(() => setOkMsgVisible(false), 2500);
+    const clearTimer = setTimeout(() => setOkMsg(''), 3000);
+    return () => {
+      clearTimeout(fadeTimer);
+      clearTimeout(clearTimer);
+    };
+  }, [okMsg]);
+
+  useEffect(() => {
+    api
+      .mealReviewBookingSetting()
+      .then((settings) => setRequireReviewToBookMeals(Boolean(settings?.require_review_to_book_meals)))
+      .catch((e) => setErr(e.message))
+      .finally(() => setMealSettingLoading(false));
+  }, []);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -354,6 +381,23 @@ export default function Admin() {
     }
   }
 
+  async function onToggleReviewRequirement(e) {
+    const enabled = e.target.checked;
+    setRequireReviewToBookMeals(enabled);
+    setMealSettingSaving(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      await api.updateMealReviewBookingSetting(enabled);
+      setOkMsg(`Require Review to Book Meals is now ${enabled ? 'enabled' : 'disabled'}.`);
+    } catch (error) {
+      setRequireReviewToBookMeals(!enabled);
+      setErr(error.message);
+    } finally {
+      setMealSettingSaving(false);
+    }
+  }
+
   function onLateMealSearchChange(value) {
     setLateMealSearch(value);
     if (lateMealSelectedUser) {
@@ -452,9 +496,36 @@ export default function Admin() {
       </div>
 
       {okMsg && (
-        <div className="text-sm text-emerald-700 bg-emerald-50 p-3 rounded-md">{okMsg}</div>
+        <div
+          className={`text-sm text-emerald-700 bg-emerald-50 p-3 rounded-md transition-opacity duration-500 ${okMsgVisible ? 'opacity-100' : 'opacity-0'}`}
+          role="status"
+          aria-live="polite"
+        >
+          {okMsg}
+        </div>
       )}
       {err && <div className="text-sm text-rose-700 bg-rose-50 p-3 rounded-md">{err}</div>}
+
+      <div className="card">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-semibold">Meal booking rules</h2>
+            <p className="text-xs text-slate-500 mt-1 max-w-xl">
+              Require each user to review their previous meal before booking the next working day.
+            </p>
+          </div>
+          <label className="inline-flex items-center gap-2 shrink-0 text-sm font-semibold text-slate-700">
+            <input
+              type="checkbox"
+              checked={requireReviewToBookMeals}
+              disabled={mealSettingLoading || mealSettingSaving}
+              onChange={onToggleReviewRequirement}
+              className="h-4 w-4 accent-brand"
+            />
+            Require Review to Book Meals
+          </label>
+        </div>
+      </div>
 
       <div className="card">
         <h2 className="font-semibold mb-1">Add a team member</h2>
