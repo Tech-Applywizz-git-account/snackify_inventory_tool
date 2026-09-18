@@ -20,6 +20,6 @@ test('11 AM meal printing excludes night-shift bookings', () => {
 });
 
 test('assigned cabin setting takes precedence over a stale booking cabin', () => {
-  assert.equal(resolveBookingCabin('Pantry Counter', 'Tech Cabin'), 'Tech Cabin');
+  assert.equal(resolveBookingCabin('Pantry Counter', 'Anusha Cabin'), 'Anusha Cabin');
   assert.equal(resolveBookingCabin('Pantry Counter', null), 'Pantry Counter');
 });

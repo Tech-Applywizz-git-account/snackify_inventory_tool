@@ -37,7 +37,7 @@ const CABIN_OPTIONS = [
   { value: 'Balaji Cabin', label: 'Balaji Cabin' },
   { value: 'Rama Krishna Cabin', label: 'Rama Krishna Cabin' },
   { value: 'Manisha Cabin', label: 'Manisha Cabin' },
-  { value: 'Tech Cabin', label: 'Tech Cabin' },
+  { value: 'Anusha Cabin', label: 'Anusha Cabin' },
   { value: 'Marketing Cabin', label: 'Marketing Cabin' },
   { value: 'Resume Cabin', label: 'Resume Cabin' },
 ];
@@ -49,7 +49,7 @@ function getAssignedCabin(cabin, preferredLocation) {
     'RK Cabin': 'Rama Krishna Cabin',
     'Manisha Cabin': 'Manisha Cabin',
     'Resume Cabin': 'Resume Cabin',
-    'Tech Team': 'Tech Cabin',
+    'Tech Team': 'Anusha Cabin',
     'Marketing Team': 'Marketing Cabin',
   };
   return locationToCabin[preferredLocation] || preferredLocation || 'Unassigned';

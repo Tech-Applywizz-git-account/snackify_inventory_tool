@@ -17,7 +17,7 @@ const CABIN_PRINT_ORDER = [
   { name: 'Balaji Cabin', abbr: 'BALAJI', delayMinutes: 0 },
   { name: 'Rama Krishna Cabin', abbr: 'RK', delayMinutes: 2 },
   { name: 'Manisha Cabin', abbr: 'MAN', delayMinutes: 4 },
-  { name: 'Tech Cabin', abbr: 'TECH', delayMinutes: 6 },
+  { name: 'Anusha Cabin', abbr: 'ANU', delayMinutes: 6 },
   { name: 'Marketing Cabin', abbr: 'MKT', delayMinutes: 8 },
   { name: 'Resume Cabin', abbr: 'RES', delayMinutes: 10 },
 ];
@@ -32,7 +32,7 @@ export function getCabinName(bookingCabin, preferredLocation) {
     'RK Cabin': 'Rama Krishna Cabin',
     'Manisha Cabin': 'Manisha Cabin',
     'Resume Cabin': 'Resume Cabin',
-    'Tech Team': 'Tech Cabin',
+    'Tech Team': 'Anusha Cabin',
     'Marketing Team': 'Marketing Cabin',
   };
   return locationToCabin[preferredLocation] || preferredLocation || 'Unassigned';
@@ -619,27 +619,6 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
 
     if (bookingsErr) throw bookingsErr;
 
-    // Count categories
-    const counts = {
-      veg: 0,
-      non_veg: 0,
-      egg: 0,
-      skip: 0,
-    };
-    const others = {};
-
-    for (const b of bookings || []) {
-      if (b.choice in counts) {
-        counts[b.choice]++;
-      } else {
-        others[b.choice] = (others[b.choice] || 0) + 1;
-      }
-    }
-
-    // Booked count (excluding skip)
-    const bookedCount = counts.veg + counts.non_veg + counts.egg + Object.values(others).reduce((a, b) => a + b, 0);
-    const skippedCount = counts.skip;
-
     // 4. Query active profiles to calculate not booked and list unbooked names
     const { data: activeProfiles, error: profilesErr } = await supabaseAdmin
       .from('profiles')
@@ -648,10 +627,45 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
 
     if (profilesErr) throw profilesErr;
 
-    const bookedUserIds = new Set(bookings?.map((b) => b.user_id).filter(Boolean) || []);
+    const { data: shiftPreferences, error: shiftPreferencesErr } = await supabaseAdmin
+      .from('employee_cafeteria_preferences')
+      .select('user_id, shift');
+
+    if (shiftPreferencesErr) throw shiftPreferencesErr;
+
+    const dayShiftUserIds = new Set(
+      (shiftPreferences || [])
+        .filter((preference) => preference.shift !== 'night')
+        .map((preference) => preference.user_id)
+    );
+    const dayShiftProfiles = activeProfiles.filter((profile) => dayShiftUserIds.has(profile.id));
+    const dayShiftBookings = (bookings || []).filter((booking) => dayShiftUserIds.has(booking.user_id));
+
+    // Count only day-shift bookings for the catering report.
+    const counts = {
+      veg: 0,
+      non_veg: 0,
+      egg: 0,
+      skip: 0,
+    };
+    const others = {};
+
+    for (const booking of dayShiftBookings) {
+      if (booking.choice in counts) {
+        counts[booking.choice]++;
+      } else {
+        others[booking.choice] = (others[booking.choice] || 0) + 1;
+      }
+    }
+
+    // Booked count (excluding skip)
+    const bookedCount = counts.veg + counts.non_veg + counts.egg + Object.values(others).reduce((a, b) => a + b, 0);
+    const skippedCount = counts.skip;
+
+    const bookedUserIds = new Set(dayShiftBookings.map((booking) => booking.user_id).filter(Boolean));
     
     // Unbooked users are active profiles who did not book at all (no row in meal_bookings for tomorrow)
-    const unbookedUsers = activeProfiles.filter((p) => !bookedUserIds.has(p.id));
+    const unbookedUsers = dayShiftProfiles.filter((profile) => !bookedUserIds.has(profile.id));
     const notBookedCount = unbookedUsers.length;
     const unbookedNames = unbookedUsers.map((u) => u.full_name);
 

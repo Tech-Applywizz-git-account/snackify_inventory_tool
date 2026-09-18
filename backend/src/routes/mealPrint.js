@@ -35,7 +35,7 @@ function getCabinName(bookingCabin, preferredLocation) {
     'RK Cabin': 'Rama Krishna Cabin',
     'Manisha Cabin': 'Manisha Cabin',
     'Resume Cabin': 'Resume Cabin',
-    'Tech Team': 'Tech Cabin',
+    'Tech Team': 'Anusha Cabin',
     'Marketing Team': 'Marketing Cabin',
   };
   return locationToCabin[preferredLocation] || preferredLocation || 'Unassigned';
