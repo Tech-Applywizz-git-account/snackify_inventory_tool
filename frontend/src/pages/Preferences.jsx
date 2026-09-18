@@ -9,6 +9,7 @@ import {
   KeyRound,
   Loader2,
   LogOut,
+  MapPin,
   Moon,
   Save,
   ShieldCheck,
@@ -32,6 +33,28 @@ const TONES = [
   { value: 'girlfriend', label: 'Girlfriend 💖' },
 ];
 
+const CABIN_OPTIONS = [
+  { value: 'Balaji Cabin', label: 'Balaji Cabin' },
+  { value: 'Rama Krishna Cabin', label: 'Rama Krishna Cabin' },
+  { value: 'Manisha Cabin', label: 'Manisha Cabin' },
+  { value: 'Tech Cabin', label: 'Tech Cabin' },
+  { value: 'Marketing Cabin', label: 'Marketing Cabin' },
+  { value: 'Resume Cabin', label: 'Resume Cabin' },
+];
+
+function getAssignedCabin(cabin, preferredLocation) {
+  if (cabin) return cabin;
+  const locationToCabin = {
+    'Balaji Cabin': 'Balaji Cabin',
+    'RK Cabin': 'Rama Krishna Cabin',
+    'Manisha Cabin': 'Manisha Cabin',
+    'Resume Cabin': 'Resume Cabin',
+    'Tech Team': 'Tech Cabin',
+    'Marketing Team': 'Marketing Cabin',
+  };
+  return locationToCabin[preferredLocation] || preferredLocation || 'Unassigned';
+}
+
 export default function Preferences() {
   const { profile, session } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -48,7 +71,9 @@ export default function Preferences() {
     notification_tone: 'Friendly',
   });
   const [shift, setShift] = useState('morning');
+  const [assignedCabin, setAssignedCabin] = useState('');
   const [shiftSaving, setShiftSaving] = useState(false);
+  const [cabinSaving, setCabinSaving] = useState(false);
   const [employeeCode, setEmployeeCode] = useState('');
   const [cardData, setCardData] = useState(null);
   const [reportBusy, setReportBusy] = useState(false);
@@ -78,11 +103,12 @@ export default function Preferences() {
 
     supabase
       .from('employee_cafeteria_preferences')
-      .select('shift')
+      .select('shift, cabin, preferred_location')
       .eq('user_id', id)
       .maybeSingle()
       .then(({ data }) => {
         if (data?.shift) setShift(data.shift);
+        setAssignedCabin(getAssignedCabin(data?.cabin, data?.preferred_location));
       })
       .catch((e) => console.error('Failed to load shift', e));
 
@@ -116,6 +142,21 @@ export default function Preferences() {
       console.error('Failed to save shift', e);
     } finally {
       setShiftSaving(false);
+    }
+  }
+
+  async function saveCabin(newCabin) {
+    setAssignedCabin(newCabin);
+    setCabinSaving(true);
+    try {
+      const { error } = await supabase
+        .from('employee_cafeteria_preferences')
+        .upsert({ user_id: profile.id, cabin: newCabin }, { onConflict: 'user_id' });
+      if (error) throw error;
+    } catch (e) {
+      console.error('Failed to save cabin', e);
+    } finally {
+      setCabinSaving(false);
     }
   }
 
@@ -282,6 +323,57 @@ export default function Preferences() {
             Book by <strong>2 PM</strong> for same day's dinner. Cancel till <strong>5 PM</strong>.
           </p>
         )}
+      </div>
+
+      <div className="card space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold flex items-center gap-2">
+              <MapPin size={18} className="text-brand" /> Assigned Cabin
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Choose where your meal token should be delivered.
+            </p>
+          </div>
+          <span
+            className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full ${
+              assignedCabin && assignedCabin !== 'Unassigned'
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-slate-100 text-slate-500'
+            }`}
+          >
+            {assignedCabin && assignedCabin !== 'Unassigned' ? 'Selected' : 'Not set'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5" role="group" aria-label="Assigned Cabin">
+          {CABIN_OPTIONS.map((cabin) => {
+            const selected = assignedCabin === cabin.value;
+            return (
+              <button
+                key={cabin.value}
+                type="button"
+                onClick={() => saveCabin(cabin.value)}
+                disabled={cabinSaving}
+                aria-pressed={selected}
+                className={`min-h-20 p-3 rounded-xl border-2 text-left transition-all ${
+                  selected
+                    ? 'border-brand bg-brand/5 text-brand shadow-sm'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-brand/40 hover:bg-slate-50'
+                } ${cabinSaving ? 'opacity-60 cursor-wait' : ''}`}
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <MapPin size={15} className={selected ? 'text-brand' : 'text-slate-400'} />
+                  {selected && <CheckCircle2 size={15} className="text-brand" />}
+                </span>
+                <span className="block mt-2 text-xs font-bold leading-tight">{cabin.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-slate-400">
+          {cabinSaving ? 'Saving your cabin...' : 'You can change this anytime.'}
+        </p>
       </div>
 
       <div className="card space-y-8">

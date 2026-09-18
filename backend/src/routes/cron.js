@@ -38,6 +38,10 @@ export function getCabinName(bookingCabin, preferredLocation) {
   return locationToCabin[preferredLocation] || preferredLocation || 'Unassigned';
 }
 
+export function resolveBookingCabin(bookingCabin, assignedCabin) {
+  return assignedCabin || bookingCabin || 'Unassigned';
+}
+
 export function filterDayMealBookings(bookings, preferences) {
   const nightShiftUserIds = new Set(
     (preferences || [])
@@ -210,10 +214,10 @@ router.post('/schedule-meal-print', async (req, res) => {
 
     const dayMealBookings = filterDayMealBookings(bookings, prefs);
 
-    // Group day-meal bookings by cabin (preferring already set cabin_name, falling back to preference mapping)
+    // User settings are authoritative; the booking value is only a fallback for users without settings.
     const byCabin = {};
     for (const b of dayMealBookings) {
-      const cabin = b.cabin_name || cabinMap[b.user_id] || 'Unassigned';
+      const cabin = resolveBookingCabin(b.cabin_name, cabinMap[b.user_id]);
       if (!byCabin[cabin]) byCabin[cabin] = [];
       byCabin[cabin].push(b);
     }

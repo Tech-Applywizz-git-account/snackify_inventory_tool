@@ -174,7 +174,7 @@ export async function sendLowStockEmail(itemName, remaining, supabaseAdmin, isCr
     `Please arrange a restock at your earliest convenience.\n\n` +
     `— Snackify Inventory System`;
 
-  const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+  const res = await fetch('https://graph.microsoft.com/v1.0/users/noreply@applywizz.ai/sendMail', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
