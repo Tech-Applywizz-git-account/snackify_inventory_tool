@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
-import { CABIN_PRINT_ORDER } from './cron.js';
+import { CABIN_PRINT_ORDER, resolveBookingCabin } from './cron.js';
 
 const router = Router();
 
@@ -153,7 +153,7 @@ router.get(
       // Build cabin count map
       const cabinCounts = {};
       for (const b of counts || []) {
-        const cabin = b.cabin_name || cabinMap[b.user_id];
+        const cabin = resolveBookingCabin(b.cabin_name, cabinMap[b.user_id]);
         if (!cabin) continue;
         if (!cabinCounts[cabin])
           cabinCounts[cabin] = { total: 0, veg: 0, non_veg: 0, egg: 0 };
@@ -232,13 +232,45 @@ router.post(
           .json({ error: 'This cabin is currently being printed. Please wait.' });
       }
 
-      // Count bookings for this cabin
-      const { count: tokenCount } = await supabaseAdmin
+      // Resolve bookings from current user settings before a manual print.
+      const { data: bookings, error: bookingsErr } = await supabaseAdmin
         .from('meal_bookings')
-        .select('id', { count: 'exact', head: true })
+        .select('id, user_id, cabin_name')
         .eq('meal_date', mealDate)
-        .eq('cabin_name', cabin_name)
         .neq('choice', 'skip');
+      if (bookingsErr) throw bookingsErr;
+
+      const userIds = [...new Set((bookings || []).map((booking) => booking.user_id).filter(Boolean))];
+      const { data: prefs, error: prefsErr } = await supabaseAdmin
+        .from('employee_cafeteria_preferences')
+        .select('user_id, cabin, preferred_location')
+        .in('user_id', userIds);
+      if (prefsErr) throw prefsErr;
+
+      const cabinMap = {};
+      for (const preference of prefs || []) {
+        cabinMap[preference.user_id] = getCabinName(
+          preference.cabin,
+          preference.preferred_location
+        );
+      }
+
+      const cabinBookings = (bookings || []).filter(
+        (booking) => resolveBookingCabin(booking.cabin_name, cabinMap[booking.user_id]) === cabin_name
+      );
+
+      for (const booking of cabinBookings) {
+        const resolvedCabin = resolveBookingCabin(booking.cabin_name, cabinMap[booking.user_id]);
+        if (resolvedCabin !== booking.cabin_name) {
+          const { error: updateErr } = await supabaseAdmin
+            .from('meal_bookings')
+            .update({ cabin_name: resolvedCabin })
+            .eq('id', booking.id);
+          if (updateErr) throw updateErr;
+        }
+      }
+
+      const tokenCount = cabinBookings.length;
 
       if (!tokenCount || tokenCount === 0) {
         return res.status(400).json({ error: 'No bookings found for this cabin on this date' });
@@ -310,6 +342,27 @@ router.post('/reprint-token', async (req, res, next) => {
       return res
         .status(400)
         .json({ error: 'Token not assigned yet. Printing starts at 11:00 AM.' });
+
+    const { data: preference, error: preferenceErr } = await supabaseAdmin
+      .from('employee_cafeteria_preferences')
+      .select('cabin, preferred_location')
+      .eq('user_id', targetUserId)
+      .maybeSingle();
+    if (preferenceErr) throw preferenceErr;
+
+    const resolvedCabin = resolveBookingCabin(
+      booking.cabin_name,
+      preference ? getCabinName(preference.cabin, preference.preferred_location) : null
+    );
+
+    if (resolvedCabin !== booking.cabin_name) {
+      const { error: cabinUpdateErr } = await supabaseAdmin
+        .from('meal_bookings')
+        .update({ cabin_name: resolvedCabin })
+        .eq('id', booking.id);
+      if (cabinUpdateErr) throw cabinUpdateErr;
+      booking.cabin_name = resolvedCabin;
+    }
 
     // Insert a reprint job — print agent handles the actual printing
     const { data: job, error: jobErr } = await supabaseAdmin
@@ -387,7 +440,7 @@ router.get(
       }
 
       const filtered = (bookings || []).filter((b) => {
-        const c = b.cabin_name || cabinMap[b.user_id];
+        const c = resolveBookingCabin(b.cabin_name, cabinMap[b.user_id]);
         return c === cabin;
       });
 
