@@ -90,8 +90,8 @@ router.get('/my-token', async (req, res, next) => {
     const today = getISTDateString();
 
     const hour = getISTHour();
-    // If the request targets today and it's after 1:00 PM (13:00), shift to the next working day
-    if (date === today && hour >= 13) {
+    // If the request targets today and it's after 2:00 PM (14:00), shift to the next working day
+    if (date === today && hour >= 14) {
       date = getNextWorkingDay();
     }
 

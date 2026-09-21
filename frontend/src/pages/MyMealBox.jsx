@@ -32,7 +32,7 @@ export default function MyMealBox() {
   const today = getISTDate();
   const dateParam = params.get('date');
 
-  // If the active date is today and it's after 1:00 PM IST, shift to the next working day
+  // If the active date is today and it's after 2:00 PM IST, shift to the next working day
   const getNextWorkingDay = () => {
     const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const nextWD = new Date(now);
@@ -46,9 +46,9 @@ export default function MyMealBox() {
     return `${yyyy}-${mm}-${dd}`;
   };
 
-  const isAfter1PM = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours() >= 13;
+  const isAfter2PM = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours() >= 14;
   let activeDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '') ? dateParam : today;
-  if (activeDate === today && isAfter1PM) {
+  if (activeDate === today && isAfter2PM) {
     activeDate = getNextWorkingDay();
   }
 
