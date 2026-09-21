@@ -74,7 +74,7 @@ function getOpeningTimeLabel(mealDateStr, shift) {
     const dayName = formatter.format(openDate);
     return `${dayName} at 9:00 AM`;
   } else {
-    // Night shift opens at 8:00 PM on the day before (since dinner is same day and they work previous night)
+    // Night shift opens at 6:00 PM on the day before.
     openDate.setUTCDate(mealDateObj.getUTCDate() - 1); // Day before
     const formatter = new Intl.DateTimeFormat('en-IN', {
       weekday: 'long',
@@ -83,7 +83,7 @@ function getOpeningTimeLabel(mealDateStr, shift) {
       timeZone: 'Asia/Kolkata',
     });
     const dayName = formatter.format(openDate);
-    return `${dayName} at 8:00 PM`;
+    return `${dayName} at 6:00 PM`;
   }
 }
 
@@ -196,22 +196,15 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
     }
     return { canBook: true, canSkip: true, reason: 'open' };
   } else {
-    // Night Shift
+    // Night shift meals are bookable tomorrow only, from 6:00 PM to 10:00 PM.
     if (diffDays === 1) {
-      if (currentHour >= 20) {
+      if (currentHour >= 22) {
+        return { canBook: false, canSkip: false, reason: 'locked' };
+      }
+      if (currentHour >= 18) {
         return { canBook: true, canSkip: true, reason: 'open' };
       }
       return { canBook: false, canSkip: false, reason: 'not_open_yet' };
-    }
-
-    if (diffDays === 0) {
-      if (currentHour >= 17) {
-        return { canBook: false, canSkip: false, reason: 'locked' };
-      }
-      if (currentHour >= 14) {
-        return { canBook: false, canSkip: true, reason: 'skip_only' };
-      }
-      return { canBook: true, canSkip: true, reason: 'open' };
     }
 
     return { canBook: false, canSkip: false, reason: 'future_locked' };
@@ -878,6 +871,20 @@ export default function MealBooking() {
             </button>
           </div>
 
+          {userPrefs.shift === 'night' && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-sm font-bold text-amber-900">
+              Night shift: book the meal for{' '}
+              {new Date(`${selectedDate}T00:00:00+05:30`).toLocaleDateString('en-IN', {
+                weekday: 'long',
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+                timeZone: 'Asia/Kolkata',
+              })}{' '}
+              between 6:00 PM and 10:00 PM, one day before.
+            </div>
+          )}
+
           {(() => {
             const b = getBookingForDate(selectedDate);
             const dateObj = new Date(`${selectedDate}T00:00:00+05:30`);
@@ -955,11 +962,9 @@ export default function MealBooking() {
                 );
               }
               const openTimeLabel = getOpeningTimeLabel(selectedDate, userPrefs.shift);
-              const toneMsg = getToneMessage(
-                userPrefs.notification_tone,
-                userPrefs.shift,
-                openTimeLabel
-              );
+              const toneMsg = userPrefs.shift === 'night'
+                ? 'Night-shift meals must be booked one day before, between 6:00 PM and 10:00 PM.'
+                : getToneMessage(userPrefs.notification_tone, userPrefs.shift, openTimeLabel);
               return (
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center space-y-1">
                   <span className="text-lg">🔒</span>
