@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
-import { CABIN_PRINT_ORDER, resolveBookingCabin } from './cron.js';
+import { CABIN_PRINT_ORDER, getCabinName, resolveBookingCabin } from './cron.js';
 
 const router = Router();
 
@@ -26,25 +26,6 @@ function getNextWorkingDay(nowDate = getISTNow()) {
     d.setDate(d.getDate() + 1);
   }
   return d.toISOString().slice(0, 10);
-}
-
-function getCabinName(bookingCabin, preferredLocation) {
-  const cabinNames = {
-    'Rama Krishna Cabin': 'R.K Cabin',
-    'RK Cabin': 'R.K Cabin',
-    'Manisha Cabin': 'Durga Sri Manisha Cabin',
-  };
-  if (bookingCabin) return cabinNames[bookingCabin] || bookingCabin;
-  const locationToCabin = {
-    'Balaji Cabin': 'Balaji Cabin',
-    'RK Cabin': 'R.K Cabin',
-    'Rama Krishna Cabin': 'R.K Cabin',
-    'Manisha Cabin': 'Durga Sri Manisha Cabin',
-    'Resume Cabin': 'Resume Cabin',
-    'Tech Team': 'Anusha Cabin',
-    'Marketing Team': 'Marketing Cabin',
-  };
-  return locationToCabin[preferredLocation] || preferredLocation || 'Unassigned';
 }
 
 // ── Reprint time-window enforcement ──────────────────────────────────────────
@@ -100,6 +81,21 @@ router.get('/my-token', async (req, res, next) => {
       date,
       'id, meal_date, choice, token_number, cabin_name, print_count, last_printed_at, booked_at'
     );
+
+    if (booking) {
+      const { data: preference, error: preferenceError } = await supabaseAdmin
+        .from('employee_cafeteria_preferences')
+        .select('cabin, preferred_location')
+        .eq('user_id', req.user.id)
+        .maybeSingle();
+
+      if (preferenceError) throw preferenceError;
+
+      booking.cabin_name = resolveBookingCabin(
+        booking.cabin_name,
+        preference ? getCabinName(preference.cabin, preference.preferred_location) : null
+      );
+    }
 
     const canReprint = hour >= 11 && hour <= 13.5 && date === today;
 
