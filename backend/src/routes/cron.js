@@ -65,12 +65,57 @@ export function filterDayMealBookings(bookings, preferences) {
   return (bookings || []).filter((booking) => !nightShiftUserIds.has(booking.user_id));
 }
 
+export function filterNightMealBookings(bookings, preferences) {
+  const nightShiftUserIds = new Set(
+    (preferences || [])
+      .filter((preference) => preference.shift === 'night')
+      .map((preference) => preference.user_id)
+  );
+
+  return (bookings || []).filter((booking) => nightShiftUserIds.has(booking.user_id));
+}
+
+export function countMealBookings(bookings) {
+  const counts = { veg: 0, non_veg: 0, egg: 0, skip: 0 };
+  const others = {};
+
+  for (const booking of bookings || []) {
+    if (booking.choice in counts) {
+      counts[booking.choice]++;
+    } else if (booking.choice) {
+      others[booking.choice] = (others[booking.choice] || 0) + 1;
+    }
+  }
+
+  const bookedCount = counts.veg + counts.non_veg + counts.egg + Object.values(others).reduce((sum, count) => sum + count, 0);
+  return { counts, others, bookedCount, skippedCount: counts.skip };
+}
+
 // ── Helper: get IST date string "YYYY-MM-DD" ─────────────────────────────────
-function getISTDateString() {
-  const now = new Date();
-  return new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
-    .toISOString()
-    .slice(0, 10);
+export function getISTDateString(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+export function getNextWorkingMealDate(date = new Date()) {
+  const istDate = getISTDateString(date);
+  const [year, month, day] = istDate.split('-').map(Number);
+  const nextDate = new Date(Date.UTC(year, month - 1, day + 1));
+  const dayOfWeek = nextDate.getUTCDay();
+
+  if (dayOfWeek === 0 || dayOfWeek === 6) return null;
+
+  return [
+    nextDate.getUTCFullYear(),
+    String(nextDate.getUTCMonth() + 1).padStart(2, '0'),
+    String(nextDate.getUTCDate()).padStart(2, '0'),
+  ].join('-');
 }
 
 // ── Helper: check if today is a working day (Mon-Fri) ────────────────────────
@@ -447,6 +492,113 @@ async function sendWeeklyForecastDigest(items, botToken) {
     )
   );
 }
+
+// POST /api/cron/meal-booking-night-shift-report
+// Called by pg_cron at 10:15 PM IST. Reports the next working day's
+// night-shift meal bookings after today's 10:00 PM booking cutoff.
+router.post('/meal-booking-night-shift-report', async (req, res, next) => {
+  try {
+    const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
+    const cronSecret = process.env.CRON_SECRET || 'app_wizz_cron_secret_change_in_production';
+
+    if (secret !== cronSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // The report is sent today, but night bookings store tomorrow's meal_date.
+    // This runs after the 10:00 PM IST night booking cutoff.
+    const reportDate = getISTDateString();
+    const mealDate = getNextWorkingMealDate();
+    if (!mealDate) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: 'The next day is not a working day; no night-shift booking window closed today',
+        reportDate,
+      });
+    }
+
+    const [{ data: bookings, error: bookingsErr }, { data: preferences, error: preferencesErr }] = await Promise.all([
+      supabaseAdmin
+        .from('meal_bookings')
+        .select('user_id, choice')
+        .eq('meal_date', mealDate),
+      supabaseAdmin
+        .from('employee_cafeteria_preferences')
+        .select('user_id, shift'),
+    ]);
+
+    if (bookingsErr) throw bookingsErr;
+    if (preferencesErr) throw preferencesErr;
+
+    const nightShiftBookings = filterNightMealBookings(bookings, preferences);
+    const { counts, others, bookedCount, skippedCount } = countMealBookings(nightShiftBookings);
+
+    const { data: mappings, error: mapErr } = await supabaseAdmin
+      .from('telegram_user_map')
+      .select('telegram_chat_id, profiles!user_id!inner(role)')
+      .in('profiles.role', ['office_boy', 'facility_manager', 'leadership']);
+
+    if (mapErr) throw mapErr;
+
+    const chatIds = [...new Set(mappings?.map((mapping) => mapping.telegram_chat_id).filter(Boolean) || [])];
+    const dateLabel = new Date(`${mealDate}T00:00:00+05:30`).toLocaleDateString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+
+    let msg = `🌙 *Night Shift Meal Count*\n`;
+    msg += `🕙 Reported: *${reportDate} at 10:15 PM IST*\n`;
+    msg += `📅 Date: *${dateLabel}*\n\n`;
+    msg += `🟢 *Veg*: ${counts.veg}\n`;
+    msg += `🔴 *Non-Veg*: ${counts.non_veg}\n`;
+    msg += `🥚 *Egg*: ${counts.egg}\n`;
+    for (const [choice, count] of Object.entries(others)) {
+      msg += `🍱 *${choice}*: ${count}\n`;
+    }
+    msg += `\nTotal Night Shift Bookings: *${bookedCount}*`;
+    if (skippedCount > 0) msg += `\nSkipped: *${skippedCount}*`;
+
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken || chatIds.length === 0) {
+      return res.json({
+        ok: true,
+        reportDate,
+        mealDate,
+        totalBookings: bookedCount,
+        totalSkipped: skippedCount,
+        chatCount: chatIds.length,
+        sent: 0,
+        message: !botToken ? 'Telegram bot token not set' : 'No registered Telegram chats found',
+      });
+    }
+
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const results = await Promise.allSettled(
+      chatIds.map((chatId) =>
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }),
+        }).then(async (response) => {
+          if (!response.ok) throw new Error(`Telegram error ${response.status}: ${await response.text()}`);
+          return response.json();
+        })
+      )
+    );
+
+    const succeeded = results.filter((result) => result.status === 'fulfilled').length;
+    const failed = results.length - succeeded;
+    console.log(`[NightShiftReport] Report for ${mealDate} sent to ${succeeded} chats, failed to ${failed} chats.`);
+
+    res.json({ ok: failed === 0, reportDate, mealDate, totalBookings: bookedCount, totalSkipped: skippedCount, succeeded, failed });
+  } catch (e) {
+    next(e);
+  }
+});
 
 // POST /api/cron/meal-booking-reminder
 // Called by pg_cron at 3:30 PM IST everyday.
