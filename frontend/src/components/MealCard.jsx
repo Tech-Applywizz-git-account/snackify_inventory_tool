@@ -99,7 +99,7 @@ function CountdownTimer({ cutoffHour }) {
   return <span className="text-xs text-slate-400">⏰ {timeLeft}</span>;
 }
 
-export default function MealCard() {
+export default function MealCard({ userShift = 'morning' }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -172,8 +172,10 @@ export default function MealCard() {
         <div className="flex flex-col items-end gap-0.5">
           {reason === 'open' && (
             <>
-              <CountdownTimer cutoffHour={18} />
-              <span className="text-[10px] text-slate-300 font-medium">Book by 6 PM</span>
+              <CountdownTimer cutoffHour={userShift === 'night' ? 22 : 18} />
+              <span className="text-[10px] text-slate-300 font-medium">
+                Book by {userShift === 'night' ? '10 PM' : '6 PM'}
+              </span>
             </>
           )}
           {reason === 'skip_only' && (
@@ -188,6 +190,13 @@ export default function MealCard() {
           )}
         </div>
       </div>
+
+      {userShift === 'night' && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-sm font-extrabold text-amber-900">
+          Night shift: book the meal for {formatDate(targetDate)} between 6:00 PM and 10:00 PM,
+          one day before.
+        </div>
+      )}
 
       {/* Current booking display */}
       {currentChoice && currentChoice !== 'skip' && (reason === 'skip_only' || isLocked) && (
