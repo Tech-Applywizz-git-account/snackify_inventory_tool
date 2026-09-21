@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterDayMealBookings, resolveBookingCabin } from '../src/routes/cron.js';
+import {
+  countMealBookings,
+  filterDayMealBookings,
+  filterNightMealBookings,
+  getISTDateString,
+  getNextWorkingMealDate,
+  resolveBookingCabin,
+} from '../src/routes/cron.js';
 
 test('11 AM meal printing excludes night-shift bookings', () => {
   const bookings = [
@@ -22,4 +29,44 @@ test('11 AM meal printing excludes night-shift bookings', () => {
 test('assigned cabin setting takes precedence over a stale booking cabin', () => {
   assert.equal(resolveBookingCabin('Pantry Counter', 'Anusha Cabin'), 'Anusha Cabin');
   assert.equal(resolveBookingCabin('Pantry Counter', null), 'Pantry Counter');
+});
+
+test('normalizes renamed cabins for existing bookings and settings', () => {
+  assert.equal(resolveBookingCabin('Rama Krishna Cabin', null), 'R.K Cabin');
+  assert.equal(resolveBookingCabin('Manisha Cabin', null), 'Durga Sri Manisha Cabin');
+  assert.equal(resolveBookingCabin(null, 'Rama Krishna Cabin'), 'R.K Cabin');
+  assert.equal(resolveBookingCabin(null, 'Manisha Cabin'), 'Durga Sri Manisha Cabin');
+});
+
+test('night-shift report includes only explicitly booked night-shift users', () => {
+  const bookings = [
+    { user_id: 'day-user', choice: 'veg' },
+    { user_id: 'night-user', choice: 'non_veg' },
+    { user_id: 'night-skip-user', choice: 'skip' },
+  ];
+  const preferences = [
+    { user_id: 'day-user', shift: 'morning' },
+    { user_id: 'night-user', shift: 'night' },
+    { user_id: 'night-skip-user', shift: 'night' },
+  ];
+
+  const result = countMealBookings(filterNightMealBookings(bookings, preferences));
+
+  assert.deepEqual(result.counts, { veg: 0, non_veg: 1, egg: 0, skip: 1 });
+  assert.equal(result.bookedCount, 1);
+  assert.equal(result.skippedCount, 1);
+});
+
+test('night-shift report resolves the current report date in IST', () => {
+  const utcDate = new Date('2026-09-21T18:45:00.000Z');
+
+  assert.equal(getISTDateString(utcDate), '2026-09-22');
+});
+
+test('night-shift report sent today counts the next working day meal', () => {
+  const mondayNight = new Date('2026-09-21T16:45:00.000Z');
+  const fridayNight = new Date('2026-09-25T16:45:00.000Z');
+
+  assert.equal(getNextWorkingMealDate(mondayNight), '2026-09-22');
+  assert.equal(getNextWorkingMealDate(fridayNight), null);
 });

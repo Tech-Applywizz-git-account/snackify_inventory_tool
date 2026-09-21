@@ -378,6 +378,38 @@ test.describe('Meal Box System — E2E Journeys', () => {
       await expect(page.getByText('Reprint window has closed (after 1:30 PM)')).toBeVisible();
       await expect(page.getByRole('button', { name: /reprint/i })).not.toBeVisible();
     });
+
+    test('Receipt token remains visible until 2:00 PM', async ({ page }) => {
+      // Set time to 1:45 PM IST, before the Meal Box visibility cutoff
+      await setMockTime(page, `${today}T13:45:00+05:30`);
+      await loginAs(page, DAY_USER_EMAIL, 'staff', 'Tech Cabin');
+
+      await page.route(new RegExp(`\\/api\\/meal-print\\/my-token`), async (route) => {
+        await route.fulfill({
+          json: {
+            booking: {
+              id: 'b-1',
+              meal_date: today,
+              choice: 'veg',
+              token_number: `${today.slice(8,10)}MAY-TECH-001`,
+              cabin_name: 'Tech Cabin',
+              print_count: 1,
+              last_printed_at: `${today}T11:06:00.000Z`,
+              booked_at: `${today}T09:30:00.000Z`
+            },
+            canReprint: false,
+            reprintWindowMessage: 'Reprint window has closed (after 1:30 PM)'
+          }
+        });
+      });
+
+      await page.goto('/my-meal-box');
+      await page.waitForTimeout(1000);
+
+      await expect(page.getByText("Today's Meal")).toBeVisible();
+      await expect(page.getByText('MAY-TECH-001', { exact: false })).toBeVisible();
+      await expect(page.getByText('Collect from Tech Cabin Meal Box')).toBeVisible();
+    });
   });
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -395,7 +427,7 @@ test.describe('Meal Box System — E2E Journeys', () => {
             date: today,
             cabins: [
               { cabin_name: 'Balaji Cabin', scheduled_time: `${today}T11:00:00.000Z`, status: 'completed', token_count: 1, total: 1, veg: 1, non_veg: 0, egg: 0 },
-              { cabin_name: 'Rama Krishna Cabin', scheduled_time: `${today}T11:02:00.000Z`, status: 'completed', token_count: 1, total: 1, veg: 0, non_veg: 1, egg: 0 },
+              { cabin_name: 'R.K Cabin', scheduled_time: `${today}T11:02:00.000Z`, status: 'completed', token_count: 1, total: 1, veg: 0, non_veg: 1, egg: 0 },
               { cabin_name: 'Tech Cabin', scheduled_time: `${today}T11:06:00.000Z`, status: 'pending', token_count: 2, total: 2, veg: 1, non_veg: 0, egg: 1 }
             ],
             summary: { totalMeals: 4, printedCabins: 2, totalCabins: 6 }

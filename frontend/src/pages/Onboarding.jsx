@@ -72,8 +72,8 @@ const GREEN_TEA_TASTE = [
 
 const LOCATION_OPTS = [
   { id: 'Balaji Cabin', label: 'Balaji Cabin' },
-  { id: 'RK Cabin', label: 'RK Cabin' },
-  { id: 'Manisha Cabin', label: 'Manisha Cabin' },
+  { id: 'R.K Cabin', label: 'R.K Cabin' },
+  { id: 'Durga Sri Manisha Cabin', label: 'Durga Sri Manisha Cabin' },
   { id: 'Resume Cabin', label: 'Resume Cabin' },
   { id: 'Tech Team', label: 'Tech Team' },
   { id: 'Marketing Team', label: 'Marketing Team' },

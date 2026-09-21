@@ -29,11 +29,17 @@ function getNextWorkingDay(nowDate = getISTNow()) {
 }
 
 function getCabinName(bookingCabin, preferredLocation) {
-  if (bookingCabin) return bookingCabin;
+  const cabinNames = {
+    'Rama Krishna Cabin': 'R.K Cabin',
+    'RK Cabin': 'R.K Cabin',
+    'Manisha Cabin': 'Durga Sri Manisha Cabin',
+  };
+  if (bookingCabin) return cabinNames[bookingCabin] || bookingCabin;
   const locationToCabin = {
     'Balaji Cabin': 'Balaji Cabin',
-    'RK Cabin': 'Rama Krishna Cabin',
-    'Manisha Cabin': 'Manisha Cabin',
+    'RK Cabin': 'R.K Cabin',
+    'Rama Krishna Cabin': 'R.K Cabin',
+    'Manisha Cabin': 'Durga Sri Manisha Cabin',
     'Resume Cabin': 'Resume Cabin',
     'Tech Team': 'Anusha Cabin',
     'Marketing Team': 'Marketing Cabin',
@@ -84,8 +90,8 @@ router.get('/my-token', async (req, res, next) => {
     const today = getISTDateString();
 
     const hour = getISTHour();
-    // If the request targets today and it's after 1:00 PM (13:00), shift to the next working day
-    if (date === today && hour >= 13) {
+    // If the request targets today and it's after 2:00 PM (14:00), shift to the next working day
+    if (date === today && hour >= 14) {
       date = getNextWorkingDay();
     }
 
