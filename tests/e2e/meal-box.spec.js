@@ -395,7 +395,7 @@ test.describe('Meal Box System — E2E Journeys', () => {
             date: today,
             cabins: [
               { cabin_name: 'Balaji Cabin', scheduled_time: `${today}T11:00:00.000Z`, status: 'completed', token_count: 1, total: 1, veg: 1, non_veg: 0, egg: 0 },
-              { cabin_name: 'Rama Krishna Cabin', scheduled_time: `${today}T11:02:00.000Z`, status: 'completed', token_count: 1, total: 1, veg: 0, non_veg: 1, egg: 0 },
+              { cabin_name: 'R.K Cabin', scheduled_time: `${today}T11:02:00.000Z`, status: 'completed', token_count: 1, total: 1, veg: 0, non_veg: 1, egg: 0 },
               { cabin_name: 'Tech Cabin', scheduled_time: `${today}T11:06:00.000Z`, status: 'pending', token_count: 2, total: 2, veg: 1, non_veg: 0, egg: 1 }
             ],
             summary: { totalMeals: 4, printedCabins: 2, totalCabins: 6 }

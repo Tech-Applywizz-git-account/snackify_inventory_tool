@@ -35,19 +35,26 @@ const TONES = [
 
 const CABIN_OPTIONS = [
   { value: 'Balaji Cabin', label: 'Balaji Cabin' },
-  { value: 'Rama Krishna Cabin', label: 'Rama Krishna Cabin' },
-  { value: 'Manisha Cabin', label: 'Manisha Cabin' },
+  { value: 'R.K Cabin', label: 'R.K Cabin' },
+  { value: 'Durga Sri Manisha Cabin', label: 'Durga Sri Manisha Cabin' },
   { value: 'Anusha Cabin', label: 'Anusha Cabin' },
   { value: 'Marketing Cabin', label: 'Marketing Cabin' },
   { value: 'Resume Cabin', label: 'Resume Cabin' },
 ];
 
 function getAssignedCabin(cabin, preferredLocation) {
-  if (cabin) return cabin;
+  const cabinNames = {
+    'Rama Krishna Cabin': 'R.K Cabin',
+    'RK Cabin': 'R.K Cabin',
+    'Manisha Cabin': 'Durga Sri Manisha Cabin',
+  };
+  if (cabin) return cabinNames[cabin] || cabin;
   const locationToCabin = {
     'Balaji Cabin': 'Balaji Cabin',
-    'RK Cabin': 'Rama Krishna Cabin',
-    'Manisha Cabin': 'Manisha Cabin',
+    'RK Cabin': 'R.K Cabin',
+    'Rama Krishna Cabin': 'R.K Cabin',
+    'Manisha Cabin': 'Durga Sri Manisha Cabin',
+    'Durga Sri Manisha Cabin': 'Durga Sri Manisha Cabin',
     'Resume Cabin': 'Resume Cabin',
     'Tech Team': 'Anusha Cabin',
     'Marketing Team': 'Marketing Cabin',

@@ -20,8 +20,8 @@ import { supabase } from '../lib/supabase.js';
 
 const LOCATIONS = [
   'Balaji Cabin',
-  'RK Cabin',
-  'Manisha Cabin',
+  'R.K Cabin',
+  'Durga Sri Manisha Cabin',
   'Resume Cabin',
   'Tech Team',
   'Marketing Team',

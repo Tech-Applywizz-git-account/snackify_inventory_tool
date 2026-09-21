@@ -23,8 +23,8 @@ import CheckoutSuccess from '../components/CheckoutSuccess.jsx';
 
 const LOCATIONS = [
   'Balaji Cabin',
-  'RK Cabin',
-  'Manisha Cabin',
+  'R.K Cabin',
+  'Durga Sri Manisha Cabin',
   'Resume Cabin',
   'Tech Team',
   'Marketing Team',

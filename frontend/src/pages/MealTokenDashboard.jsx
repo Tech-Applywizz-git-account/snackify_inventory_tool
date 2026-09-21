@@ -759,8 +759,8 @@ export default function MealTokenDashboard() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
             {[
               { time: '11:00 AM', cabin: 'Balaji Cabin' },
-              { time: '11:02 AM', cabin: 'Rama Krishna Cabin' },
-              { time: '11:04 AM', cabin: 'Manisha Cabin' },
+              { time: '11:02 AM', cabin: 'R.K Cabin' },
+              { time: '11:04 AM', cabin: 'Durga Sri Manisha Cabin' },
               { time: '11:06 AM', cabin: 'Tech Cabin' },
               { time: '11:08 AM', cabin: 'Marketing Cabin' },
               { time: '11:10 AM', cabin: 'Resume Cabin' },

@@ -23,3 +23,10 @@ test('assigned cabin setting takes precedence over a stale booking cabin', () =>
   assert.equal(resolveBookingCabin('Pantry Counter', 'Anusha Cabin'), 'Anusha Cabin');
   assert.equal(resolveBookingCabin('Pantry Counter', null), 'Pantry Counter');
 });
+
+test('normalizes renamed cabins for existing bookings and settings', () => {
+  assert.equal(resolveBookingCabin('Rama Krishna Cabin', null), 'R.K Cabin');
+  assert.equal(resolveBookingCabin('Manisha Cabin', null), 'Durga Sri Manisha Cabin');
+  assert.equal(resolveBookingCabin(null, 'Rama Krishna Cabin'), 'R.K Cabin');
+  assert.equal(resolveBookingCabin(null, 'Manisha Cabin'), 'Durga Sri Manisha Cabin');
+});

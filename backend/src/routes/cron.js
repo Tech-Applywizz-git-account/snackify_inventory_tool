@@ -15,8 +15,8 @@ const router = Router();
 // Change order or delays here without touching any other code.
 const CABIN_PRINT_ORDER = [
   { name: 'Balaji Cabin', abbr: 'BALAJI', delayMinutes: 0 },
-  { name: 'Rama Krishna Cabin', abbr: 'RK', delayMinutes: 2 },
-  { name: 'Manisha Cabin', abbr: 'MAN', delayMinutes: 4 },
+  { name: 'R.K Cabin', abbr: 'RK', delayMinutes: 2 },
+  { name: 'Durga Sri Manisha Cabin', abbr: 'MAN', delayMinutes: 4 },
   { name: 'Anusha Cabin', abbr: 'ANU', delayMinutes: 6 },
   { name: 'Marketing Cabin', abbr: 'MKT', delayMinutes: 8 },
   { name: 'Resume Cabin', abbr: 'RES', delayMinutes: 10 },
@@ -26,11 +26,19 @@ const CABIN_PRINT_ORDER = [
 export { CABIN_PRINT_ORDER };
 
 export function getCabinName(bookingCabin, preferredLocation) {
-  if (bookingCabin) return bookingCabin;
+  const cabinNames = {
+    'Rama Krishna Cabin': 'R.K Cabin',
+    'RK Cabin': 'R.K Cabin',
+    'Manisha Cabin': 'Durga Sri Manisha Cabin',
+    'Durga Sri Manisha Cabin': 'Durga Sri Manisha Cabin',
+  };
+  if (bookingCabin) return cabinNames[bookingCabin] || bookingCabin;
   const locationToCabin = {
     'Balaji Cabin': 'Balaji Cabin',
-    'RK Cabin': 'Rama Krishna Cabin',
-    'Manisha Cabin': 'Manisha Cabin',
+    'RK Cabin': 'R.K Cabin',
+    'Rama Krishna Cabin': 'R.K Cabin',
+    'Manisha Cabin': 'Durga Sri Manisha Cabin',
+    'Durga Sri Manisha Cabin': 'Durga Sri Manisha Cabin',
     'Resume Cabin': 'Resume Cabin',
     'Tech Team': 'Anusha Cabin',
     'Marketing Team': 'Marketing Cabin',
@@ -39,7 +47,12 @@ export function getCabinName(bookingCabin, preferredLocation) {
 }
 
 export function resolveBookingCabin(bookingCabin, assignedCabin) {
-  return assignedCabin || bookingCabin || 'Unassigned';
+  const cabin = assignedCabin || bookingCabin || 'Unassigned';
+  return {
+    'Rama Krishna Cabin': 'R.K Cabin',
+    'RK Cabin': 'R.K Cabin',
+    'Manisha Cabin': 'Durga Sri Manisha Cabin',
+  }[cabin] || cabin;
 }
 
 export function filterDayMealBookings(bookings, preferences) {
