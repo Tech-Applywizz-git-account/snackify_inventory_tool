@@ -13,6 +13,7 @@ export default function MealReviewGate() {
   const { session, aal } = useAuth();
   const [status, setStatus] = useState(null);
   const [open, setOpen] = useState(false);
+  const [windowClosed, setWindowClosed] = useState(false);
   const reopenTimerRef = useRef(null);
   const submittedRef = useRef(false);
 
@@ -62,19 +63,11 @@ export default function MealReviewGate() {
 
   useEffect(() => {
     async function handleOpenReview() {
-      if (status?.already_reviewed) {
-        setOpen(true);
-        return;
-      }
-      if (status?.in_window) {
-        setOpen(true);
-        return;
-      }
-
       try {
         const data = await api.mealReviewStatus();
         setStatus(data);
-        setOpen(true);
+        setWindowClosed(!data?.in_window);
+        setOpen(Boolean(data?.in_window));
       } catch (err) {
         console.warn('[meal-review] unable to open review', err?.message || err);
       }
@@ -82,7 +75,7 @@ export default function MealReviewGate() {
 
     window.addEventListener('open-meal-review', handleOpenReview);
     return () => window.removeEventListener('open-meal-review', handleOpenReview);
-  }, [status]);
+  }, []);
 
   useEffect(() => () => clearReopenTimer(), [clearReopenTimer]);
 
@@ -98,6 +91,7 @@ export default function MealReviewGate() {
 
   function handleClose() {
     setOpen(false);
+    setWindowClosed(false);
     if (submittedRef.current) return;
     const secs = status?.reopen_after_seconds ?? 120;
     // Only schedule if still inside window per last status
@@ -136,7 +130,8 @@ export default function MealReviewGate() {
         </button>
       )}
       <MealReviewPopup
-        open={open}
+        open={open || windowClosed}
+        windowClosed={windowClosed}
         status={status}
         onClose={handleClose}
         onSubmitted={handleSubmitted}
@@ -145,7 +140,7 @@ export default function MealReviewGate() {
   );
 }
 
-export function MealReviewPopup({ open, status, onClose, onSubmitted }) {
+export function MealReviewPopup({ open, windowClosed, status, onClose, onSubmitted }) {
   const mealTypes = status?.meal_types || [
     { value: 'veg', label: 'Veg' },
     { value: 'non_veg', label: 'Non-veg' },
@@ -254,7 +249,11 @@ export function MealReviewPopup({ open, status, onClose, onSubmitted }) {
               </button>
             </div>
 
-            {alreadyReviewed ? (
+            {windowClosed ? (
+              <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 text-sm font-semibold text-slate-700">
+                Meal review is only open weekdays 14:00–16:00 IST
+              </div>
+            ) : alreadyReviewed ? (
               <div className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50/70 p-4">
                 <div className="text-sm font-bold text-emerald-700">Thank you for your feedback.</div>
                 <div className="grid grid-cols-2 gap-3 text-sm">
