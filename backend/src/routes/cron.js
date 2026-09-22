@@ -107,9 +107,10 @@ export function getNextWorkingMealDate(date = new Date()) {
   const istDate = getISTDateString(date);
   const [year, month, day] = istDate.split('-').map(Number);
   const nextDate = new Date(Date.UTC(year, month - 1, day + 1));
-  const dayOfWeek = nextDate.getUTCDay();
 
-  if (dayOfWeek === 0 || dayOfWeek === 6) return null;
+  while (nextDate.getUTCDay() === 0 || nextDate.getUTCDay() === 6) {
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+  }
 
   return [
     nextDate.getUTCFullYear(),
@@ -508,6 +509,15 @@ router.post('/meal-booking-night-shift-report', async (req, res, next) => {
     // The report is sent today, but night bookings store tomorrow's meal_date.
     // This runs after the 10:00 PM IST night booking cutoff.
     const reportDate = getISTDateString();
+    const reportDay = new Date(`${reportDate}T00:00:00Z`).getUTCDay();
+    if (reportDay === 0 || reportDay === 6) {
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: 'Weekend: the Friday night report already covers Monday; no duplicate report is sent',
+        reportDate,
+      });
+    }
     const mealDate = getNextWorkingMealDate();
     if (!mealDate) {
       return res.json({

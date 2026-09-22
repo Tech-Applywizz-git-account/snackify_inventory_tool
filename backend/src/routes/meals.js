@@ -123,9 +123,8 @@ function getNextWorkingDay(nowDate = new Date()) {
  *   - After 8:00 PM → locked
  *   - Special: Fri/Sat/Sun morning → Monday meal open all day (no 6pm cut-off)
  * Night (dinner):
- *   - Can book today OR tomorrow
- *   - Today: open till 2:00 PM
- *   - Tomorrow: open 2:00 PM – 8:00 PM
+ *   - Can book tomorrow only
+ *   - Tomorrow: open 6:00 PM – 10:00 PM the day before
  */
 function getAllowedActions(mealDate, shift = 'morning', mockDate) {
   const parts = getISTParts(mockDate || new Date());
@@ -148,8 +147,9 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
     return { canBook: false, canSkip: false, reason: 'blocked' };
   }
 
+  const nextWD = getNextWorkingDay(mockDate || new Date());
+
   if (shift === 'morning') {
-    const nextWD = getNextWorkingDay(mockDate || new Date());
     if (mealDate !== nextWD) {
       return {
         canBook: false,
@@ -185,25 +185,22 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
     }
     return { canBook: true, canSkip: true, reason: 'open' };
   } else {
-    // Night Shift (Dinner) - books for same day's dinner
-    if (diffDays === 1) {
+    // Night Shift (Dinner) - books the next working day's dinner the evening before.
+    // Friday night is the exception: Monday's meal is three calendar days away.
+    const targetIsNextWorkingDay = mealDate === nextWD;
+    const targetIsMonday = getMealDateDay(mealDate) === 1;
+    const todayIsFriday = new Date(Date.UTC(parts.year, parts.month, parts.day)).getUTCDay() === 5;
+    if (targetIsNextWorkingDay && (diffDays === 1 || (targetIsMonday && todayIsFriday))) {
       if (isBlockedMealDate(mealDate)) {
         return { canBook: false, canSkip: false, reason: 'blocked' };
       }
-      if (currentHour >= 20) {
+      if (currentHour >= 22) {
+        return { canBook: false, canSkip: false, reason: 'locked' };
+      }
+      if (currentHour >= 18) {
         return { canBook: true, canSkip: true, reason: 'open' };
       }
       return { canBook: false, canSkip: false, reason: 'not_open_yet' };
-    }
-
-    if (diffDays === 0) {
-      if (currentHour >= 17) {
-        return { canBook: false, canSkip: false, reason: 'locked' };
-      }
-      if (currentHour >= 14) {
-        return { canBook: false, canSkip: true, reason: 'skip_only' };
-      }
-      return { canBook: true, canSkip: true, reason: 'open' };
     }
 
     return { canBook: false, canSkip: false, reason: 'future_locked' };
@@ -223,14 +220,7 @@ router.get('/options', async (req, res, next) => {
       .maybeSingle();
     const userShift = prefs?.shift || 'morning';
 
-    if (!date) {
-      date = userShift === 'night'
-        ? (() => {
-            const p = getISTParts();
-            return `${p.year}-${String(p.month + 1).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
-          })()
-        : getNextWorkingDay();
-    }
+    if (!date) date = getNextWorkingDay();
 
     if (!isWorkingDay(date)) {
       return res.json({

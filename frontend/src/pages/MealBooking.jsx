@@ -159,8 +159,9 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
     return `${temp.getUTCFullYear()}-${String(temp.getUTCMonth() + 1).padStart(2, '0')}-${String(temp.getUTCDate()).padStart(2, '0')}`;
   }
 
+  const nextWD = getNextWorkingDay(parts.year, parts.month, parts.day);
+
   if (shift === 'morning') {
-    const nextWD = getNextWorkingDay(parts.year, parts.month, parts.day);
     if (dateStr !== nextWD) {
       return {
         canBook: false,
@@ -196,8 +197,11 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
     }
     return { canBook: true, canSkip: true, reason: 'open' };
   } else {
-    // Night shift meals are bookable tomorrow only, from 6:00 PM to 10:00 PM.
-    if (diffDays === 1) {
+    // Night shift meals are bookable for the next working day, from 6:00 PM to 10:00 PM.
+    // Friday night can book Monday's meal across the weekend.
+    const targetIsMonday = new Date(Date.UTC(tYear, tMonth - 1, tDay)).getUTCDay() === 1;
+    const todayIsFriday = new Date(Date.UTC(parts.year, parts.month, parts.day)).getUTCDay() === 5;
+    if (dateStr === nextWD && (diffDays === 1 || (targetIsMonday && todayIsFriday))) {
       if (currentHour >= 22) {
         return { canBook: false, canSkip: false, reason: 'locked' };
       }
@@ -495,6 +499,7 @@ export default function MealBooking() {
   const [booking, setBooking] = useState(false);
   const [_loading, setLoading] = useState(true);
   const [userPrefs, setUserPrefs] = useState({ shift: 'morning', notification_tone: 'Friendly' });
+  const [userPrefsLoading, setUserPrefsLoading] = useState(true);
   const [onionSlices, setOnionSlices] = useState('no onion');
   const [cardData, setCardData] = useState(null);
   const [mealTokenByDow, setMealTokenByDow] = useState({});
@@ -547,6 +552,7 @@ export default function MealBooking() {
 
   useEffect(() => {
     if (!profile?.id) return;
+    setUserPrefsLoading(true);
     supabase
       .from('employee_cafeteria_preferences')
       .select('shift, notification_tone')
@@ -560,7 +566,8 @@ export default function MealBooking() {
           });
         }
       })
-      .catch((e) => console.error('Failed to load user preferences', e));
+      .catch((e) => console.error('Failed to load user preferences', e))
+      .finally(() => setUserPrefsLoading(false));
   }, [profile?.id]);
 
   useEffect(() => {
@@ -808,7 +815,9 @@ export default function MealBooking() {
             const isPast = dateObj < today;
             const isToday = dateObj.getTime() === today.getTime();
             const isSelected = selectedDate === dateStr;
-            const bStatus = getBookingStatus(dateStr, userPrefs.shift, now);
+            const bStatus = userPrefsLoading
+              ? { canBook: false, canSkip: false, reason: 'loading' }
+              : getBookingStatus(dateStr, userPrefs.shift, now);
             const isBookable = bStatus.canBook || bStatus.canSkip;
             const isBlocked = bStatus.reason === 'blocked';
             const ui = b ? CHOICE_UI[b.choice] : null;
@@ -891,7 +900,9 @@ export default function MealBooking() {
             const dow = dateObj.getDay();
             const dayOpts = DAY_OPTIONS[dow] || [];
             const isPast = dateObj < today;
-            const bStatus = getBookingStatus(selectedDate, userPrefs.shift, now);
+            const bStatus = userPrefsLoading
+              ? { canBook: false, canSkip: false, reason: 'loading' }
+              : getBookingStatus(selectedDate, userPrefs.shift, now);
             const canBook = bStatus.canBook;
             const canSkip = bStatus.canSkip;
             const isBookable = canBook || canSkip;
@@ -937,6 +948,14 @@ export default function MealBooking() {
                       <span className="text-sm font-semibold text-slate-500">Not booked</span>
                     </>
                   )}
+                </div>
+              );
+            }
+
+            if (bStatus.reason === 'loading') {
+              return (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center">
+                  <div className="text-sm font-semibold text-slate-500">Loading your shift schedule...</div>
                 </div>
               );
             }

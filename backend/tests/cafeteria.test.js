@@ -18,6 +18,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { canApplyGuestFreeMode, guestFreeChargeResult } from '../src/lib/guestFreeOrders.js';
 
 // Mirrors the PostgREST filter applied by GET /api/cafeteria/items:
 //   .eq('available', true).neq('visible_to_employees', false)
@@ -62,6 +63,27 @@ const JAM_SANDWICH = {
   available: true,
   visible_to_employees: true,
 };
+
+describe('Guest-free cafeteria checkout', () => {
+  it('allows guest-free checkout for admin, leadership, and office boy roles only', () => {
+    assert.equal(canApplyGuestFreeMode('admin', true), true);
+    assert.equal(canApplyGuestFreeMode('leadership', true), true);
+    assert.equal(canApplyGuestFreeMode('office_boy', true), true);
+    assert.equal(canApplyGuestFreeMode('staff', true), false);
+    assert.equal(canApplyGuestFreeMode('leadership', false), false);
+  });
+
+  it('returns zero-charged totals for guest-free checkout without affecting the request flow', () => {
+    const result = guestFreeChargeResult({ userId: 'user-123', requestId: 'req-456' });
+    assert.deepEqual(result, {
+      tokens_charged: 0,
+      balance_after: null,
+      token_usage_id: null,
+      token_lines: [],
+      guest_free: true,
+    });
+  });
+});
 
 describe('Mix Fruit Jam — employee catalog visibility', () => {
   it('raw jam inventory row (visible_to_employees=false) is excluded from employee catalog', () => {

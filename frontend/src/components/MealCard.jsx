@@ -152,7 +152,9 @@ export default function MealCard({ userShift = 'morning' }) {
 
   const { options, canBook, canSkip, reason, booking } = data;
   const currentChoice = booking?.choice;
-  const isLocked = !canBook && !canSkip;
+  const isNightShift = userShift === 'night';
+  const waitingForNightWindow = isNightShift && reason === 'not_open_yet';
+  const isLocked = !canBook && !canSkip && !waitingForNightWindow;
 
   return (
     <motion.div
@@ -165,7 +167,9 @@ export default function MealCard({ userShift = 'morning' }) {
         <div className="flex items-center gap-2">
           <span className="text-xl">🍱</span>
           <div>
-            <div className="font-bold text-slate-800 text-sm">Tomorrow's Lunch</div>
+            <div className="font-bold text-slate-800 text-sm">
+              Tomorrow's {userShift === 'night' ? 'Meal' : 'Lunch'}
+            </div>
             <div className="text-xs text-slate-400">{formatDate(targetDate)}</div>
           </div>
         </div>
@@ -181,6 +185,11 @@ export default function MealCard({ userShift = 'morning' }) {
           {reason === 'skip_only' && (
             <span className="text-xs bg-amber-50 text-amber-600 font-bold px-2 py-1 rounded-full">
               Skip only till 8 PM
+            </span>
+          )}
+          {waitingForNightWindow && (
+            <span className="text-xs bg-amber-50 text-amber-600 font-bold px-2 py-1 rounded-full">
+              Opens at 6 PM IST
             </span>
           )}
           {isLocked && (
@@ -232,6 +241,13 @@ export default function MealCard({ userShift = 'morning' }) {
       )}
 
       {/* Locked and not booked */}
+      {waitingForNightWindow && !currentChoice && (
+        <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
+          <span className="text-lg">🌙</span>
+          <span className="font-bold text-sm text-amber-700">Night booking opens at 6:00 PM IST</span>
+        </div>
+      )}
+
       {isLocked && !currentChoice && (
         <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
           <span className="text-lg">⚠️</span>

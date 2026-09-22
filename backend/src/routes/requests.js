@@ -6,7 +6,9 @@ import { supabaseAdmin } from '../lib/supabase.js';
 import { postCancelToTeams, postOrderToTeams, postStockAlertToTeams } from '../lib/teams.js';
 import { sendLowStockEmail } from '../lib/microsoftGraph.js';
 import { sendPushToUsers } from './push.js';
-import { spendTokens, refundTokens, queuePrint, walletForUser } from '../lib/tokens.js';
+import { attachTokenPrice, loadCatalog, spendTokens, refundTokens, queuePrint, walletForUser } from '../lib/tokens.js';
+import { applyCafeteriaDiscount } from '../lib/cafeteriaDiscounts.js';
+import { canApplyGuestFreeMode, guestFreeChargeResult } from '../lib/guestFreeOrders.js';
 
 const router = Router();
 
@@ -132,6 +134,25 @@ async function refundRequestCoins(order) {
   }
 }
 
+async function applyOrderDiscounts(lines) {
+  const ids = [...new Set(lines.map((line) => line.cafeteria_item_id).filter(Boolean))];
+  if (ids.length === 0) return lines;
+  const [{ data: rows, error }, catalog] = await Promise.all([
+    supabaseAdmin.from('cafeteria_items').select('*').in('id', ids),
+    loadCatalog().catch(() => []),
+  ]);
+  if (error) throw error;
+  const byId = new Map((rows || []).map((row) => [String(row.id), attachTokenPrice(row, catalog)]));
+  return Promise.all(lines.map(async (line) => {
+    const item = byId.get(String(line.cafeteria_item_id));
+    if (!item) return line;
+    const priced = await applyCafeteriaDiscount(item);
+    return priced.discount_enabled
+      ? { ...line, tokens: priced.token_price, discounted: true }
+      : line;
+  }));
+}
+
 async function chargePlacedRequest(user, requestRow, items, clientOrderId) {
   try {
     if (clientOrderId && isUuid(clientOrderId)) {
@@ -146,7 +167,7 @@ async function chargePlacedRequest(user, requestRow, items, clientOrderId) {
       idempotencyKey: isUuid(clientOrderId) ? clientOrderId : `request:${requestRow.id}`,
       refType: 'request',
       refId: requestRow.id,
-      lines: items,
+      lines: await applyOrderDiscounts(items),
     });
     const item = itemLabelFromLines(
       spend.lines,
@@ -439,6 +460,10 @@ const VIRTUAL_DRINK_MAP = {
     { item: 'Coffee Beans', servings: 1 },
     { item: 'Milk', servings: 1 },
   ],
+  // TATA MY BISTRO drinks use the same coffee-bean stock as the machine menu.
+  'filter coffee': [{ item: 'Coffee Beans', servings: 1 }],
+  'strong coffee': [{ item: 'Coffee Beans', servings: 1 }],
+  'black coffee': [{ item: 'Coffee Beans', servings: 1 }],
   // Tea (Only 4 options)
   'assam tea': [
     { item: 'Assam tea', servings: 1 },
@@ -452,13 +477,27 @@ const VIRTUAL_DRINK_MAP = {
     { item: 'Ginger tea', servings: 1 },
     { item: 'Milk', servings: 1 },
   ],
+  'tea': [
+    { item: 'Assam tea', servings: 1 },
+    { item: 'Milk', servings: 1 },
+  ],
+  'strong tea': [
+    { item: 'Assam tea', servings: 1 },
+    { item: 'Milk', servings: 1 },
+  ],
+  'black tea': [{ item: 'Assam tea', servings: 1 }],
   'lemon tea': [{ item: 'Lemon sachets', servings: 1 }],
   // Hot Mixes
+  milk: [{ item: 'Milk', servings: 1 }],
   'hot chocolate': [
     { item: 'Hot chocolate', servings: 1 },
     { item: 'Milk', servings: 1 },
   ],
   'badam mix': [
+    { item: 'Badam Sachets', servings: 1 },
+    { item: 'Milk', servings: 1 },
+  ],
+  'badam milk': [
     { item: 'Badam Sachets', servings: 1 },
     { item: 'Milk', servings: 1 },
   ],
@@ -633,6 +672,28 @@ const createSchema = z.object({
   raw_text: z.string().min(3).max(500),
 });
 
+async function validateGuestCafeteriaItems(items) {
+  const itemIds = items.map((item) => item.cafeteria_item_id).filter(Boolean);
+  if (itemIds.length !== items.length) {
+    throw new Error('Guest mode can only be used for cafeteria items.');
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('cafeteria_items')
+    .select('id, available, visible_to_employees, orderable')
+    .in('id', itemIds);
+  if (error) throw error;
+
+  const validIds = new Set(
+    (data || [])
+      .filter((item) => item.available === true && item.visible_to_employees !== false && item.orderable !== false)
+      .map((item) => String(item.id))
+  );
+  if (itemIds.some((id) => !validIds.has(String(id)))) {
+    throw new Error('Guest mode can only be used for available cafeteria items.');
+  }
+}
+
 router.post('/', async (req, res, next) => {
   try {
     const clientOrderId = req.body.client_order_id || req.body.idempotency_key || null;
@@ -663,6 +724,20 @@ router.post('/', async (req, res, next) => {
       }
       if (!['get_it_here', 'self_pickup'].includes(deliveryMode)) {
         deliveryMode = 'get_it_here';
+      }
+
+      const guestCheckoutRequested = Boolean(
+        req.body.guest_free === true || req.body.is_guest_checkout === true
+      );
+      const guestFree = guestCheckoutRequested && canApplyGuestFreeMode(req.user?.role, true);
+      const guestReceiptNote = guestFree ? 'GUEST_BOOKED' : null;
+
+      if (guestFree) {
+        try {
+          await validateGuestCafeteriaItems(items);
+        } catch (err) {
+          return res.status(400).json({ error: err.message });
+        }
       }
 
       // 1. Check stock of all items first
@@ -718,6 +793,7 @@ router.post('/', async (req, res, next) => {
           status: 'confirming',
           delivery_mode: deliveryMode,
           parsed_employee_name: req.user.full_name || req.user.email || null,
+          notes: guestReceiptNote,
           ...clientOrderFields(clientOrderId),
         })
         .select()
@@ -738,6 +814,7 @@ router.post('/', async (req, res, next) => {
               status: 'confirming',
               delivery_mode: deliveryMode,
               parsed_employee_name: req.user.full_name || req.user.email || null,
+              notes: guestReceiptNote,
               ...clientOrderFields(clientOrderId),
             })
             .select()
@@ -748,16 +825,19 @@ router.post('/', async (req, res, next) => {
       }
       if (qErr) throw qErr;
 
-      const charged = await chargePlacedRequest(
-        req.user,
-        qData,
-        items.map((it) => ({
-          name: it.name,
-          qty: parseInt(it.qty, 10) || 1,
-          tokens: Number(it.tokens || it.coinPrice || it.token_price) || 0,
-        })),
-        clientOrderId
-      );
+      const charged = guestFree
+        ? guestFreeChargeResult()
+        : await chargePlacedRequest(
+            req.user,
+            qData,
+            items.map((it) => ({
+              name: it.name,
+              qty: parseInt(it.qty, 10) || 1,
+              tokens: Number(it.tokens || it.coinPrice || it.token_price) || 0,
+              cafeteria_item_id: it.cafeteria_item_id || null,
+            })),
+            clientOrderId
+          );
       return res.status(201).json({ needs_followup: false, request: charged });
     }
 
@@ -768,6 +848,7 @@ router.post('/', async (req, res, next) => {
       quick_quantity = 1,
       quick_instruction = '',
       quick_bread_type = '',
+      quick_cafeteria_item_id = null,
     } = req.body;
     if (quick_item) {
       const qty = parseInt(quick_quantity, 10) || 1;
@@ -791,6 +872,19 @@ router.post('/', async (req, res, next) => {
       }
       if (!['get_it_here', 'self_pickup'].includes(deliveryMode)) {
         deliveryMode = 'get_it_here';
+      }
+
+      const guestFree = canApplyGuestFreeMode(
+        req.user?.role,
+        Boolean(req.body.guest_free === true || req.body.is_guest_checkout === true)
+      );
+
+      if (guestFree) {
+        try {
+          await validateGuestCafeteriaItems([{ cafeteria_item_id: quick_cafeteria_item_id }]);
+        } catch (err) {
+          return res.status(400).json({ error: err.message });
+        }
       }
 
       const locPart =
@@ -818,6 +912,7 @@ router.post('/', async (req, res, next) => {
           status: 'confirming',
           delivery_mode: deliveryMode,
           parsed_employee_name: req.user.full_name || req.user.email || null,
+          notes: guestFree ? 'GUEST_BOOKED' : null,
         })
         .select()
         .single();
@@ -837,6 +932,7 @@ router.post('/', async (req, res, next) => {
               status: 'confirming',
               delivery_mode: deliveryMode,
               parsed_employee_name: req.user.full_name || req.user.email || null,
+              notes: guestFree ? 'GUEST_BOOKED' : null,
             })
             .select()
             .single();
@@ -846,12 +942,14 @@ router.post('/', async (req, res, next) => {
       }
       if (qErr) throw qErr;
 
-      const charged = await chargePlacedRequest(
-        req.user,
-        qData,
-        [{ name: quick_item, qty }],
-        clientOrderId
-      );
+      const charged = guestFree
+        ? guestFreeChargeResult()
+        : await chargePlacedRequest(
+            req.user,
+            qData,
+            [{ name: quick_item, qty, cafeteria_item_id: quick_cafeteria_item_id }],
+            clientOrderId
+          );
       return res.status(201).json({ needs_followup: false, request: charged });
     }
 
