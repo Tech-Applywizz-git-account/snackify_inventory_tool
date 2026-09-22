@@ -68,5 +68,5 @@ test('night-shift report sent today counts the next working day meal', () => {
   const fridayNight = new Date('2026-09-25T16:45:00.000Z');
 
   assert.equal(getNextWorkingMealDate(mondayNight), '2026-09-22');
-  assert.equal(getNextWorkingMealDate(fridayNight), null);
+  assert.equal(getNextWorkingMealDate(fridayNight), '2026-09-28');
 });

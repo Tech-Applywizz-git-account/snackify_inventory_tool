@@ -16,13 +16,13 @@ const COPY = {
     cta: 'View Order Details',
   },
   booking: {
-    kicker: 'Lunch Booking',
+    kicker: 'Meal Booking',
     payWith: 'Snackify Wallet',
     processing: 'Processing...',
-    verifyA: 'Verifying Payment',
-    verifyB: 'Secure Connection',
+    verifyA: 'Confirming Booking',
+    verifyB: 'Checking Snackify Wallet',
     success: 'Booking Successful',
-    confirmed: 'Lunch Confirmed',
+    confirmed: 'Meal Confirmed',
     thanks: 'Your printed token is ready after pantry confirms.',
     cta: 'View meal token',
   },
@@ -238,7 +238,9 @@ export default function CheckoutSuccess({
               <div className="w-[88px] h-[88px] rounded-full bg-rose-600 flex items-center justify-center">
                 <X size={40} color="#fff" />
               </div>
-              <div className="text-white text-xl font-semibold mt-5">Payment failed</div>
+              <div className="text-white text-xl font-semibold mt-5">
+                {variant === 'booking' ? 'Meal booking failed' : 'Payment failed'}
+              </div>
               <div className="text-slate-400 text-sm mt-2">{error || 'Try again'}</div>
               <button
                 type="button"

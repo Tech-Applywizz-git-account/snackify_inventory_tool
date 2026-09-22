@@ -329,6 +329,12 @@ function normalizeDependencies(dependencies) {
   return Array.isArray(dependencies) ? dependencies : [];
 }
 
+function isStockOut(item) {
+  return [item?.stock_today, item?.stock_servings].some(
+    (stock) => stock !== null && stock !== undefined && Number(stock) <= 0
+  );
+}
+
 function hasBreadDependency(item) {
   return normalizeDependencies(item?.dependencies).some(
     (dep) => String(dep).toLowerCase() === 'bread'
@@ -862,8 +868,7 @@ function BreadCustomSheet({ item, savedPref, onConfirm, onClose }) {
 // ── Jam/PB Customization Sheet (bread picker + sides) ────────────────────────
 function JamCustomSheet({ item, savedPref, onConfirm, onClose, breadItems }) {
   const availableBreads = (breadItems || []).filter((b) => {
-    const servings = b.stock_servings ?? b.stock_today;
-    return servings === null || servings > 0;
+    return !isStockOut(b);
   });
   const [selectedBread, setSelectedBread] = useState(
     savedPref?.bread_type
@@ -928,9 +933,8 @@ function JamCustomSheet({ item, savedPref, onConfirm, onClose, breadItems }) {
           </label>
           <div className="grid grid-cols-2 gap-2">
             {(breadItems || []).map((bread) => {
-              const servings = bread.stock_servings ?? bread.stock_today;
-              const isOut = servings !== null && servings <= 0;
-              const slicesLeft = servings !== null ? servings : null;
+              const isOut = isStockOut(bread);
+              const slicesLeft = bread.stock_servings ?? bread.stock_today ?? null;
               return (
                 <button
                   key={bread.id}
@@ -1207,6 +1211,9 @@ function OrderSheet({
   deliveryMode,
   onDeliveryModeChange,
   isNightShift,
+  guestCheckout,
+  onGuestCheckoutToggle,
+  canGuestCheckout,
 }) {
   // On leave days or night shift → force self-pickup
   const effectiveMode =
@@ -1236,6 +1243,7 @@ function OrderSheet({
     return sum + getCartItemCalories(item, qty, customNote);
   }, 0);
   const totalTokens = cartItems.reduce((sum, { item, qty }) => sum + qty * payableItemTokens(item), 0);
+  const effectiveTotalTokens = guestCheckout ? 0 : totalTokens;
   const totalCount = cartItems.reduce((sum, x) => sum + x.qty, 0);
 
   return (
@@ -1265,6 +1273,37 @@ function OrderSheet({
         </div>
 
         {/* Items */}
+        {canGuestCheckout && (
+          <div className="mb-5">
+            <button
+              type="button"
+              onClick={onGuestCheckoutToggle}
+              className={`w-full flex items-center justify-between rounded-2xl border-2 px-4 py-3 transition-all ${
+                guestCheckout
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800 shadow-sm'
+                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-brand/30'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-lg">👤</span>
+                <div className="text-left">
+                  <div className="text-sm font-extrabold">Guest</div>
+                  <div className="text-[10px] font-medium opacity-75">
+                    {guestCheckout ? 'Enabled for this order' : 'Disabled'}
+                  </div>
+                </div>
+              </div>
+              <span
+                className={`inline-flex items-center justify-center rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${
+                  guestCheckout ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
+                }`}
+              >
+                {guestCheckout ? 'ON' : 'OFF'}
+              </span>
+            </button>
+          </div>
+        )}
+
         <div className="space-y-2 mb-5">
           {cartItems.map(({ item, qty, customNote }) => {
             const prefKey = item.item_name?.toLowerCase();
@@ -1318,8 +1357,8 @@ function OrderSheet({
                   {!isCustomerWaterItem(item) && (
                     <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-800">
                       <SnackCoin size={12} />
-                      {qty * payableItemTokens(item)}
-                      <span className="font-medium text-slate-400">({payableItemTokens(item)} × {qty})</span>
+                      {guestCheckout ? 0 : qty * payableItemTokens(item)}
+                      <span className="font-medium text-slate-400">({guestCheckout ? 0 : payableItemTokens(item)} × {qty})</span>
                     </span>
                   )}
                 </div>
@@ -1499,20 +1538,20 @@ function OrderSheet({
             <div key={item.id} className="flex items-center justify-between gap-2">
               <span className="truncate">{getItemDisplayName(item)} × {qty}</span>
               <span className="font-bold text-slate-800 inline-flex items-center gap-1 shrink-0">
-                {!isCustomerWaterItem(item) && <><SnackCoin size={12} />{qty * payableItemTokens(item)}</>}
+                {!isCustomerWaterItem(item) && <><SnackCoin size={12} />{guestCheckout ? 0 : qty * payableItemTokens(item)}</>}
               </span>
             </div>
           ))}
           <div className="flex items-center justify-between">
             <span>Item total</span>
             <span className="font-bold text-slate-800 inline-flex items-center gap-1">
-              {totalTokens > 0 && <SnackCoin size={14} />}{totalTokens}
+              {effectiveTotalTokens > 0 && <SnackCoin size={14} />}{effectiveTotalTokens}
             </span>
           </div>
           <div className="flex items-center justify-between border-t border-slate-200 pt-2">
             <span className="font-bold text-slate-900">To pay</span>
             <span className="font-bold text-slate-900 inline-flex items-center gap-1">
-              {totalTokens > 0 && <SnackCoin size={16} />}{totalTokens}
+              {effectiveTotalTokens > 0 && <SnackCoin size={16} />}{effectiveTotalTokens}
             </span>
           </div>
           {totalCalories > 0 && (
@@ -1543,7 +1582,7 @@ function OrderSheet({
             </>
           ) : (
             <>
-              Place Order
+              {guestCheckout ? 'Place Guest Order' : 'Place Order'}
             </>
           )}
         </button>
@@ -1588,6 +1627,9 @@ export default function Cafeteria() {
   const [customLoc, setCustomLoc] = useState('');
   const [customBusy, setCustomBusy] = useState(false);
   const [queueAhead, setQueueAhead] = useState(0);
+  const [guestCheckout, setGuestCheckout] = useState(false);
+
+  const canGuestCheckout = ['leadership', 'office_boy'].includes(profile?.role);
 
   // ── Quick Order from preference chip ────────────────────────────────────────
   const [openCartOnConfirm, setOpenCartOnConfirm] = useState(false);
@@ -1606,8 +1648,7 @@ export default function Cafeteria() {
     );
   });
   const anyBreadInStock = breadItems.some((b) => {
-    const servings = b.stock_servings ?? b.stock_today;
-    return servings === null || servings > 0;
+    return !isStockOut(b);
   });
 
   // ── Virtual drink enrichment ─────────────────────────────────────────────
@@ -1703,6 +1744,7 @@ export default function Cafeteria() {
         orderable: coffeeInStock && waterInStock,
         _virtual: true,
         _backing: coffeeBeansRow.item_name,
+        _backing_id: coffeeBeansRow.id,
         _machine: true,
         token_price: catalogTokens(tokenCatalogRef.current, 'Espresso'),
       });
@@ -1720,6 +1762,7 @@ export default function Cafeteria() {
         orderable: coffeeInStock && milkInStock && waterInStock,
         _virtual: true,
         _backing: coffeeBeansRow.item_name,
+        _backing_id: coffeeBeansRow.id,
         _machine: true,
         _needs_milk: true,
         token_price: catalogTokens(tokenCatalogRef.current, 'Americano'),
@@ -1756,6 +1799,7 @@ export default function Cafeteria() {
           orderable: coffeeInStock && milkInStock && waterInStock,
           _virtual: true,
           _backing: coffeeBeansRow.item_name,
+          _backing_id: coffeeBeansRow.id,
           _machine: true,
           _needs_milk: true,
           token_price: catalogTokens(tokenCatalogRef.current, name),
@@ -1778,6 +1822,7 @@ export default function Cafeteria() {
         orderable: (sachetsAvail === null || sachetsAvail > 0) && waterInStock,
         _virtual: true,
         _backing: lemonSachetsRow.item_name,
+        _backing_id: lemonSachetsRow.id,
         _machine: false,
         token_price: catalogTokens(tokenCatalogRef.current, 'Lemon Tea'),
       });
@@ -1817,9 +1862,14 @@ export default function Cafeteria() {
   const [userTastePrefs, setUserTastePrefs] = useState([]);
 
   const [userShift, setUserShift] = useState('morning');
+  const [userShiftLoaded, setUserShiftLoaded] = useState(false);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session) {
+      setUserShiftLoaded(true);
+      return;
+    }
+    setUserShiftLoaded(false);
     supabase
       .from('employee_cafeteria_preferences')
       .select('item_prefs, preferred_location, notification_tone, drink_prefs, taste_prefs, shift')
@@ -1834,7 +1884,8 @@ export default function Cafeteria() {
         if (Array.isArray(data?.taste_prefs)) setUserTastePrefs(data.taste_prefs);
         if (data?.shift) setUserShift(data.shift);
       })
-      .catch(() => {});
+        .catch(() => {})
+        .finally(() => setUserShiftLoaded(true));
   }, [session]);
 
   useEffect(() => {
@@ -2023,7 +2074,7 @@ export default function Cafeteria() {
     setShowSheet(false);
     setOrderBusy(true);
     setErrorMsg('');
-    const total = cartItems.reduce((sum, { item, qty }) => sum + qty * payableItemTokens(item), 0);
+    const total = guestCheckout ? 0 : cartItems.reduce((sum, { item, qty }) => sum + qty * payableItemTokens(item), 0);
     setPayAmount(total);
     setPayError('');
     setPayOrderId(null);
@@ -2034,6 +2085,7 @@ export default function Cafeteria() {
         return {
           name: getOrderItemName(item),
           qty,
+          cafeteria_item_id: item._backing_id || item.cafeteria_item_id || item.id || null,
           breadType,
           customNote
         };
@@ -2045,6 +2097,7 @@ export default function Cafeteria() {
         note: note,
         delivery_mode: delivery_mode,
         fulfillmentType: delivery_mode === 'self_pickup' ? 'pickup' : 'delivery',
+        guest_free: guestCheckout,
       });
       const lastReq = r?.request;
       setCart({});
@@ -2254,6 +2307,37 @@ export default function Cafeteria() {
         <p className="text-slate-500 text-sm mt-1">What can we get you today?</p>
       </div>
 
+      {canGuestCheckout && (
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() => setGuestCheckout((v) => !v)}
+            className={`w-full flex items-center justify-between rounded-2xl border-2 px-4 py-3 shadow-sm transition-all ${
+              guestCheckout
+                ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                : 'border-slate-200 bg-white text-slate-700 hover:border-brand/30'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-lg">👤</span>
+              <div className="text-left">
+                <div className="text-sm font-extrabold">Guest Mode</div>
+                <div className="text-[10px] font-medium opacity-75">
+                  {guestCheckout ? 'Enabled until toggled off' : 'Tap to enable guest checkout'}
+                </div>
+              </div>
+            </div>
+            <span
+              className={`inline-flex items-center justify-center rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${
+                guestCheckout ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
+              }`}
+            >
+              {guestCheckout ? 'ON' : 'OFF'}
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* ── Self-Pickup Day Banner (OB on leave) ── */}
       {selfPickupDay?.is_self_pickup_day && (
         <div className="bg-orange-50 border-2 border-orange-200 rounded-2xl p-4 flex items-start gap-3">
@@ -2294,7 +2378,7 @@ export default function Cafeteria() {
       />
 
       {/* ── Meal Booking Card ── */}
-      <MealCard />
+      {userShiftLoaded && <MealCard userShift={userShift} />}
 
       {/* ── Active order banners ── */}
       {activeOrders.map((order) => (
@@ -2585,6 +2669,9 @@ export default function Cafeteria() {
             }
             onDeliveryModeChange={setDeliveryMode}
             isNightShift={userShift === 'night'}
+            guestCheckout={guestCheckout}
+            onGuestCheckoutToggle={() => setGuestCheckout((v) => !v)}
+            canGuestCheckout={canGuestCheckout}
           />
         )}
       </AnimatePresence>
