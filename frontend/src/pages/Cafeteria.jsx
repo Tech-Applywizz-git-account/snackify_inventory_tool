@@ -1231,7 +1231,7 @@ function OrderSheet({
   const [note, setNote] = useState('');
 
   const cartItems = Object.entries(cart)
-    .filter(([, qty]) => qty >= 0)
+    .filter(([, qty]) => qty > 0)
     .map(([id, qty]) => ({
       item: items.find((i) => i.id === id),
       qty,
@@ -1620,6 +1620,9 @@ export default function Cafeteria() {
   const tokenCatalogRef = useRef([]);
   const [tone, setTone] = useState('Friendly'); // AI personality tone
   const [savedLocation, setSavedLocation] = useState(''); // From onboarding preferences
+  const [activeCatalog, setActiveCatalog] = useState('ccd');
+  const [ccdImageAvailable, setCcdImageAvailable] = useState(true);
+  const [bistroImageAvailable, setBistroImageAvailable] = useState(true);
 
   // Custom text request
   const [showCustom, setShowCustom] = useState(false);
@@ -1629,7 +1632,7 @@ export default function Cafeteria() {
   const [queueAhead, setQueueAhead] = useState(0);
   const [guestCheckout, setGuestCheckout] = useState(false);
 
-  const canGuestCheckout = ['leadership', 'office_boy'].includes(profile?.role);
+  const canGuestCheckout = ['admin', 'leadership', 'office_boy'].includes(profile?.role);
 
   // ── Quick Order from preference chip ────────────────────────────────────────
   const [openCartOnConfirm, setOpenCartOnConfirm] = useState(false);
@@ -2085,6 +2088,7 @@ export default function Cafeteria() {
         return {
           name: getOrderItemName(item),
           qty,
+          tokens: payableItemTokens(item),
           cafeteria_item_id: item._backing_id || item.cafeteria_item_id || item.id || null,
           breadType,
           customNote
@@ -2287,6 +2291,210 @@ export default function Cafeteria() {
     food_pantry: 'Food / Pantry 🥪',
   };
   const sortedGroups = catOrder.filter((c) => grouped[c]?.length);
+  const primaryGroups = sortedGroups.slice(0, 3);
+  const sharedGroups = sortedGroups.slice(3);
+  const coffeeBeansRow = items.find(
+    (item) => String(item.item_name || '').toLowerCase() === 'coffee beans'
+  );
+  const assamTeaRow = items.find((item) =>
+    String(item.item_name || '').toLowerCase().includes('assam tea')
+  );
+  const lemonSachetsRow = items.find((item) =>
+    String(item.item_name || '').toLowerCase().includes('lemon sachet')
+  );
+  const bistroMilkRow = items.find((item) => {
+    const name = String(item.item_name || '').toLowerCase();
+    return name === 'milk' || name.includes('toned milk') || name.includes('milk tetra');
+  });
+  const bistroHotChocolateRow = items.find((item) =>
+    String(item.item_name || '').toLowerCase().includes('hot chocolate')
+  );
+  const bistroBadamRow = items.find((item) => {
+    const name = String(item.item_name || '').toLowerCase();
+    return name.includes('badam') && (name.includes('sachet') || name.includes('mix'));
+  });
+  const bistroCoffeeAvailable =
+    Boolean(coffeeBeansRow) &&
+    (coffeeBeansRow.stock_servings === null ||
+      coffeeBeansRow.stock_servings === undefined ||
+      coffeeBeansRow.stock_servings > 0);
+  const bistroCoffeeItems = coffeeBeansRow
+    ? [
+        ['bistro_filter_coffee', 'Filter Coffee', 'Classic filter-brewed coffee', '☕'],
+        ['bistro_strong_coffee', 'Strong Coffee', 'Bold, full-bodied coffee brew', '☕'],
+        ['bistro_black_coffee', 'Black Coffee', 'Rich coffee served without milk', '☕'],
+      ].map(([id, name, description, emoji]) => ({
+    id,
+    item_name: name,
+    display_name: name,
+    description,
+    category: 'beverage',
+    emoji,
+    token_price:
+      catalogTokens(tokenCatalogRef.current, name) ||
+      catalogTokens(tokenCatalogRef.current, 'Regular Coffee'),
+    coin_price:
+      catalogTokens(tokenCatalogRef.current, name) ||
+      catalogTokens(tokenCatalogRef.current, 'Regular Coffee'),
+    stock_servings: coffeeBeansRow?.stock_servings ?? null,
+    stock_today: null,
+    orderable: bistroCoffeeAvailable,
+    _virtual: true,
+    _backing: coffeeBeansRow?.item_name || 'Coffee Beans',
+    _backing_id: coffeeBeansRow?.id || null,
+      }))
+    : [];
+  const bistroTeaAvailable =
+    Boolean(assamTeaRow && bistroMilkRow) &&
+    (assamTeaRow.stock_servings === null ||
+      assamTeaRow.stock_servings === undefined ||
+      assamTeaRow.stock_servings > 0) &&
+    (bistroMilkRow.stock_servings === null ||
+      bistroMilkRow.stock_servings === undefined ||
+      bistroMilkRow.stock_servings > 0);
+  const bistroBlackTeaAvailable =
+    Boolean(assamTeaRow) &&
+    (assamTeaRow.stock_servings === null ||
+      assamTeaRow.stock_servings === undefined ||
+      assamTeaRow.stock_servings > 0);
+  const bistroTeaItems = assamTeaRow || lemonSachetsRow
+    ? [
+        ['Tea', 'Classic milk tea brew', '🍵', bistroTeaAvailable],
+        ['Strong Tea', 'Bold, full-bodied tea brew', '🍵', bistroTeaAvailable],
+        ['Black Tea', 'Rich tea served without milk', '🫖', bistroBlackTeaAvailable],
+        [
+          'Lemon Tea',
+          'Refreshing lemon sachet brew',
+          '🍋',
+          Boolean(lemonSachetsRow) &&
+            (lemonSachetsRow.stock_servings === null ||
+              lemonSachetsRow.stock_servings === undefined ||
+              lemonSachetsRow.stock_servings > 0),
+        ],
+      ].map(([name, description, emoji, orderable]) => ({
+        id: `bistro_${name.toLowerCase().replace(/\s+/g, '_')}`,
+        item_name: name,
+        display_name: name,
+        description,
+        category: 'beverage',
+        emoji,
+        token_price:
+          catalogTokens(tokenCatalogRef.current, name) ||
+          catalogTokens(
+            tokenCatalogRef.current,
+            name === 'Lemon Tea' ? 'Lemon Tea' : 'Assam Tea'
+          ),
+        coin_price:
+          catalogTokens(tokenCatalogRef.current, name) ||
+          catalogTokens(
+            tokenCatalogRef.current,
+            name === 'Lemon Tea' ? 'Lemon Tea' : 'Assam Tea'
+          ),
+        stock_servings:
+          name === 'Lemon Tea'
+            ? lemonSachetsRow?.stock_servings ?? lemonSachetsRow?.stock_today ?? null
+            : name === 'Black Tea'
+            ? assamTeaRow.stock_servings ?? null
+            : Math.min(assamTeaRow.stock_servings ?? Infinity, bistroMilkRow?.stock_servings ?? Infinity) === Infinity
+              ? null
+              : Math.min(assamTeaRow.stock_servings ?? 9999, bistroMilkRow?.stock_servings ?? 9999),
+        stock_today: null,
+        orderable,
+        _virtual: true,
+        _backing: name === 'Lemon Tea' ? lemonSachetsRow?.item_name : assamTeaRow?.item_name,
+        _backing_id: name === 'Lemon Tea' ? lemonSachetsRow?.id : assamTeaRow?.id,
+      }))
+    : [];
+  const bistroMilkItems = bistroMilkRow
+    ? [
+        ['Milk', 'Fresh milk served warm', '🥛', true],
+        ['Hot Chocolate', 'Rich chocolate drink with milk', '🍫', Boolean(bistroHotChocolateRow)],
+        ['Badam Milk', 'Almond drink with milk', '🥜', Boolean(bistroBadamRow)],
+      ].map(([name, description, emoji, orderable]) => ({
+        id: `bistro_${name.toLowerCase().replace(/\s+/g, '_')}`,
+        item_name: name,
+        display_name: name,
+        description,
+        category: 'beverage',
+        emoji,
+        token_price: catalogTokens(tokenCatalogRef.current, name),
+        coin_price: catalogTokens(tokenCatalogRef.current, name),
+        stock_servings:
+          name === 'Milk'
+            ? bistroMilkRow.stock_servings ?? null
+            : Math.min(
+                name === 'Hot Chocolate'
+                  ? bistroHotChocolateRow?.stock_servings ?? Infinity
+                  : bistroBadamRow?.stock_servings ?? Infinity,
+                bistroMilkRow.stock_servings ?? Infinity
+              ) === Infinity
+              ? null
+              : Math.min(
+                  name === 'Hot Chocolate'
+                    ? bistroHotChocolateRow?.stock_servings ?? 9999
+                    : bistroBadamRow?.stock_servings ?? 9999,
+                  bistroMilkRow.stock_servings ?? 9999
+                ),
+        stock_today: null,
+        orderable,
+        _virtual: true,
+        _backing:
+          name === 'Milk'
+            ? bistroMilkRow.item_name
+            : name === 'Hot Chocolate'
+              ? bistroHotChocolateRow?.item_name
+              : bistroBadamRow?.item_name,
+        _backing_id:
+          name === 'Milk'
+            ? bistroMilkRow.id
+            : name === 'Hot Chocolate'
+              ? bistroHotChocolateRow?.id
+              : bistroBadamRow?.id,
+      }))
+    : [];
+
+  const renderCategoryGroup = (cat) => (
+    <section key={cat}>
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-lg">{CATEGORY_EMOJI[cat]}</span>
+        <h2 className="font-extrabold text-slate-800 text-sm tracking-wide">
+          {catLabels[cat]}
+        </h2>
+        <div className="h-px flex-1 bg-slate-100" />
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {grouped[cat].map((item) => {
+          // stock_today = 0  → Office Boy marked it OUT for today (always OOS)
+          // stock_today = null → OB manages as unlimited/available (e.g. Water)
+          // stock_servings = 0 → servings exhausted
+          const stockToday = item.stock_today;
+          const stockServings = item.stock_servings;
+          const obMarkedOut =
+            stockToday !== null && stockToday !== undefined && stockToday <= 0;
+          const servingsOut =
+            stockServings !== null && stockServings !== undefined && stockServings <= 0;
+          const isOut = obMarkedOut || servingsOut;
+          const hasBreadDep = hasBreadDependency(item) || isSandwichSpreadItem(item);
+          // Milk-blocked: item is in stock physically but milk is OOS → show card greyed out
+          const isMilkBlocked = item._needs_milk && item.orderable === false;
+          return (
+            <ItemChip
+              key={item.id}
+              item={item}
+              qty={cart[item.id] || 0}
+              outOfStock={isOut}
+              onAdd={() => handleAdd(item)}
+              onRemove={() => removeFromCart(item.id)}
+              tone={tone}
+              needsBread={hasBreadDep}
+              breadAvailable={anyBreadInStock}
+              needsMilk={isMilkBlocked}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
 
   if (loading)
     return (
@@ -2380,15 +2588,6 @@ export default function Cafeteria() {
       {/* ── Meal Booking Card ── */}
       {userShiftLoaded && <MealCard userShift={userShift} />}
 
-      {/* ── Active order banners ── */}
-      {activeOrders.map((order) => (
-        <ActiveOrderBanner
-          key={order.id}
-          order={order}
-          onPress={() => navigate(`/track/${order.id}`)}
-        />
-      ))}
-
       {/* ── Flash messages ── */}
       <AnimatePresence>
         {successMsg && (
@@ -2404,49 +2603,203 @@ export default function Cafeteria() {
         {/* Inline error placeholder — real error shows as floating toast below */}
       </AnimatePresence>
 
-      {/* ── Items by category ── */}
-      {sortedGroups.map((cat) => (
-        <section key={cat}>
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-lg">{CATEGORY_EMOJI[cat]}</span>
-            <h2 className="font-extrabold text-slate-800 text-sm tracking-wide">
-              {catLabels[cat]}
-            </h2>
-            <div className="h-px flex-1 bg-slate-100" />
-          </div>
-          <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-            {grouped[cat].map((item) => {
-              // stock_today = 0  → Office Boy marked it OUT for today (always OOS)
-              // stock_today = null → OB manages as unlimited/available (e.g. Water)
-              // stock_servings = 0 → servings exhausted
-              const stockToday = item.stock_today;
-              const stockServings = item.stock_servings;
-              const obMarkedOut =
-                stockToday !== null && stockToday !== undefined && stockToday <= 0;
-              const servingsOut =
-                stockServings !== null && stockServings !== undefined && stockServings <= 0;
-              const isOut = obMarkedOut || servingsOut;
-              const hasBreadDep = hasBreadDependency(item) || isSandwichSpreadItem(item);
-              // Milk-blocked: item is in stock physically but milk is OOS → show card greyed out
-              const isMilkBlocked = item._needs_milk && item.orderable === false;
-              return (
-                <ItemChip
-                  key={item.id}
-                  item={item}
-                  qty={cart[item.id] || 0}
-                  outOfStock={isOut}
-                  onAdd={() => handleAdd(item)}
-                  onRemove={() => removeFromCart(item.id)}
-                  tone={tone}
-                  needsBread={hasBreadDep}
-                  breadAvailable={anyBreadInStock}
-                  needsMilk={isMilkBlocked}
-                />
-              );
-            })}
-          </div>
-        </section>
-      ))}
+      {/* ── Catalog switcher ── */}
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="grid grid-cols-2 border-b border-slate-200 bg-slate-50 p-1.5 gap-1.5" role="tablist" aria-label="Cafeteria menus">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeCatalog === 'ccd'}
+            aria-controls="ccd-catalog"
+            onClick={() => setActiveCatalog('ccd')}
+            className={`min-h-14 rounded-xl px-3 py-2 text-sm font-extrabold tracking-wide transition-all active:scale-[0.99] ${
+              activeCatalog === 'ccd'
+                ? 'bg-white text-brand shadow-sm ring-1 ring-slate-200'
+                : 'text-slate-500 hover:bg-white/70 hover:text-slate-700'
+            }`}
+          >
+            CCD
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeCatalog === 'bistro'}
+            aria-controls="tata-my-bistro"
+            onClick={() => setActiveCatalog('bistro')}
+            className={`min-h-14 rounded-xl px-3 py-2 text-sm font-extrabold tracking-wide transition-all active:scale-[0.99] ${
+              activeCatalog === 'bistro'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-500 hover:bg-white/70 hover:text-slate-700'
+            }`}
+          >
+            TATA MY BISTRO
+          </button>
+        </div>
+
+        <AnimatePresence mode="wait" initial={false}>
+          {activeCatalog === 'ccd' ? (
+            <motion.div
+              key="ccd-catalog"
+              id="ccd-catalog"
+              role="tabpanel"
+              aria-label="CCD menu"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="p-3 sm:p-5 space-y-6"
+            >
+              <div className="rounded-2xl bg-slate-950 px-5 py-10 text-center text-white sm:px-10 sm:py-14">
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-300">CCD</p>
+                <h2 className="mt-2 text-2xl font-black sm:text-3xl">COFFEE CAFE DAY MENU</h2>
+                <p className="mx-auto mt-2 max-w-md text-sm text-slate-300">Choose beverages</p>
+                <div className="mx-auto mt-6 flex aspect-[4/3] w-full max-w-2xl items-center justify-center overflow-hidden rounded-xl bg-white shadow-2xl">
+                  {ccdImageAvailable ? (
+                    <img
+                      src="/ccd.png"
+                      alt="Cafe Coffee Day coffee machine"
+                      onError={() => setCcdImageAvailable(false)}
+                      className="h-[88%] w-[88%] object-contain"
+                    />
+                  ) : (
+                    <div className="flex min-h-40 items-center justify-center px-4 text-sm font-semibold text-slate-500">
+                      Cafe Coffee Day machine image coming soon
+                    </div>
+                  )}
+                </div>
+              </div>
+              {primaryGroups.map(renderCategoryGroup)}
+            </motion.div>
+          ) : (
+            <motion.div
+              key="tata-my-bistro"
+              id="tata-my-bistro"
+              role="tabpanel"
+              aria-label="TATA MY BISTRO menu"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="p-3 sm:p-5 space-y-6"
+            >
+              <div className="rounded-2xl bg-slate-950 px-5 py-10 text-center text-white sm:px-10 sm:py-14">
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-300">TATA MY BISTRO</p>
+                <h2 className="mt-2 text-2xl font-black sm:text-3xl">TATA MY BISTRO MENU</h2>
+                <p className="mx-auto mt-2 max-w-md text-sm text-slate-300">Choose beverages</p>
+                <div className="mx-auto mt-6 flex aspect-[4/3] w-full max-w-2xl items-center justify-center overflow-hidden rounded-xl bg-white shadow-2xl">
+                  {bistroImageAvailable ? (
+                    <img
+                      src="/TataFilter-Coffee-Machine.jpg"
+                      alt="TATA My Bistro coffee machine"
+                      onError={() => setBistroImageAvailable(false)}
+                      className="h-[88%] w-[88%] object-contain brightness-[1.15]"
+                    />
+                  ) : (
+                    <div className="flex min-h-40 items-center justify-center px-4 text-sm font-semibold text-slate-500">
+                      TATA My Bistro machine image coming soon
+                    </div>
+                  )}
+                </div>
+              </div>
+              <section>
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">☕</span>
+                  <h2 className="font-extrabold tracking-wide text-slate-800">Caffeine Mix</h2>
+                  <div className="h-px flex-1 bg-slate-200" />
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {bistroCoffeeItems.map((item) => {
+                    const stockServings = item.stock_servings;
+                    const isOut =
+                      !item.orderable ||
+                      (stockServings !== null &&
+                        stockServings !== undefined &&
+                        stockServings <= 0);
+                    return (
+                      <ItemChip
+                        key={item.id}
+                        item={item}
+                        qty={cart[item.id] || 0}
+                        outOfStock={isOut}
+                        onAdd={() => handleAdd(item)}
+                        onRemove={() => removeFromCart(item.id)}
+                        tone={tone}
+                        needsBread={false}
+                        breadAvailable
+                        needsMilk={false}
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+              <section>
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">🍵</span>
+                  <h2 className="font-extrabold tracking-wide text-slate-800">Tea &amp; Sachets</h2>
+                  <div className="h-px flex-1 bg-slate-200" />
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {bistroTeaItems.map((item) => {
+                    const stockServings = item.stock_servings;
+                    const isOut =
+                      !item.orderable ||
+                      (stockServings !== null &&
+                        stockServings !== undefined &&
+                        stockServings <= 0);
+                    return (
+                      <ItemChip
+                        key={item.id}
+                        item={item}
+                        qty={cart[item.id] || 0}
+                        outOfStock={isOut}
+                        onAdd={() => handleAdd(item)}
+                        onRemove={() => removeFromCart(item.id)}
+                        tone={tone}
+                        needsBread={false}
+                        breadAvailable
+                        needsMilk={false}
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+              <section>
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">🥛</span>
+                  <h2 className="font-extrabold tracking-wide text-slate-800">Milk</h2>
+                  <div className="h-px flex-1 bg-slate-200" />
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {bistroMilkItems.map((item) => {
+                    const stockServings = item.stock_servings;
+                    const isOut =
+                      !item.orderable ||
+                      (stockServings !== null &&
+                        stockServings !== undefined &&
+                        stockServings <= 0);
+                    return (
+                      <ItemChip
+                        key={item.id}
+                        item={item}
+                        qty={cart[item.id] || 0}
+                        outOfStock={isOut}
+                        onAdd={() => handleAdd(item)}
+                        onRemove={() => removeFromCart(item.id)}
+                        tone={tone}
+                        needsBread={false}
+                        breadAvailable
+                        needsMilk={false}
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </section>
+
+      <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-5">
+        {sharedGroups.map(renderCategoryGroup)}
+      </section>
 
       {/* ── Custom AI Request ── */}
       <section>
@@ -2643,7 +2996,7 @@ export default function Cafeteria() {
           <OrderSheet
             cart={cart}
             customizations={customizations}
-            items={items}
+            items={[...items, ...bistroCoffeeItems, ...bistroTeaItems, ...bistroMilkItems]}
             onClose={() => {
               setShowSheet(false);
               setCart((c) => {

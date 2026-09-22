@@ -74,7 +74,26 @@ const EXTRA_CATALOG_FALLBACKS = [
   { sku_code: 'ESPRESSO', display_name: 'Espresso', kind: 'beverage', tokens: 10, aliases: ['espresso'], active: true },
   { sku_code: 'GREEN_TEA', display_name: 'Green Tea', kind: 'beverage', tokens: 25, aliases: ['green tea', 'green tea sachet'], active: true },
   { sku_code: 'ELAICHI_TEA', display_name: 'Elaichi Tea', kind: 'beverage', tokens: 10, aliases: ['elaichi tea', 'elaichi'], active: true },
+  { sku_code: 'BISTRO_FILTER_COFFEE', display_name: 'Filter Coffee', kind: 'beverage', tokens: 15, aliases: ['filter coffee'], active: true },
+  { sku_code: 'BISTRO_STRONG_COFFEE', display_name: 'Strong Coffee', kind: 'beverage', tokens: 20, aliases: ['strong coffee'], active: true },
+  { sku_code: 'BISTRO_BLACK_COFFEE', display_name: 'Black Coffee', kind: 'beverage', tokens: 20, aliases: ['black coffee'], active: true },
+  { sku_code: 'BISTRO_TEA', display_name: 'Tea', kind: 'beverage', tokens: 10, aliases: ['tea'], active: true },
+  { sku_code: 'BISTRO_STRONG_TEA', display_name: 'Strong Tea', kind: 'beverage', tokens: 10, aliases: ['strong tea'], active: true },
+  { sku_code: 'BISTRO_BLACK_TEA', display_name: 'Black Tea', kind: 'beverage', tokens: 10, aliases: ['black tea'], active: true },
 ];
+
+const VIRTUAL_CAFETERIA_NAMES = new Set([
+  'filter coffee',
+  'strong coffee',
+  'black coffee',
+  'tea',
+  'strong tea',
+  'black tea',
+  'lemon tea',
+  'milk',
+  'hot chocolate',
+  'badam milk',
+]);
 
 export function matchTokenItem(catalog, name) {
   const names = nameKeys(name);
@@ -272,6 +291,9 @@ export async function ensureMonthGrant(userId) {
 
 export async function spendTokens({ userId, idempotencyKey, refType, refId, lines }) {
   const payableLines = (lines || []).filter((line) => !isFreeWaterItem(line?.name));
+  const hasClientPricedVirtualLine = payableLines.some(
+    (line) => VIRTUAL_CAFETERIA_NAMES.has(norm(line?.name)) && Number(line?.tokens) > 0
+  );
   if (payableLines.length === 0) {
     const wallet = await ensureMonthGrant(userId);
     return {
@@ -282,22 +304,29 @@ export async function spendTokens({ userId, idempotencyKey, refType, refId, line
       idempotent: false,
     };
   }
-  const { data, error } = await supabaseAdmin.rpc('snackify_spend', {
-    p_user_id: userId,
-    p_idempotency_key: idempotencyKey,
-    p_ref_type: refType,
-    p_ref_id: refId,
-    p_lines: payableLines,
-  });
-  if (!error) return data;
-  if (!rpcFailedMissing(error)) throw tokenError(error);
+  if (!hasClientPricedVirtualLine && !payableLines.some((line) => line.discounted)) {
+    const { data, error } = await supabaseAdmin.rpc('snackify_spend', {
+      p_user_id: userId,
+      p_idempotency_key: idempotencyKey,
+      p_ref_type: refType,
+      p_ref_id: refId,
+      p_lines: payableLines,
+    });
+    if (!error) return data;
+    const rpcMessage = String(error?.message || error?.code || '');
+    if (!rpcFailedMissing(error) && !/UNKNOWN_TOKEN_ITEM/i.test(rpcMessage)) {
+      throw tokenError(error);
+    }
+  }
 
   const catalog = await loadCatalog();
   const priced = payableLines.map((l) => {
     const qty = Math.max(1, parseInt(l.qty, 10) || 1);
     const hit = matchTokenItem(catalog, l.name);
     const fromLine = Number(l.tokens || l.unit_tokens || l.coinPrice) || 0;
-    const unit = (hit ? Number(hit.tokens) || 0 : 0) || fromLine;
+    const unit = hasClientPricedVirtualLine && VIRTUAL_CAFETERIA_NAMES.has(norm(l.name))
+      ? fromLine
+      : (hit ? Number(hit.tokens) || 0 : 0) || fromLine;
     if (unit <= 0) {
       const err = new Error(`No coin price in catalog for ${l.name}.`);
       err.status = 400;
