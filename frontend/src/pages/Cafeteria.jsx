@@ -668,7 +668,7 @@ function ItemChip({
     <motion.div
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.97 }}
-      className={`relative rounded-2xl border-2 p-3 flex flex-col gap-2 transition-all cursor-pointer
+      className={`relative rounded-2xl border-2 p-2 sm:p-3 flex flex-col gap-1.5 sm:gap-2 transition-all cursor-pointer
         ${inCart ? 'border-brand bg-brand/5' : 'border-slate-100 bg-white hover:border-brand/30'}`}
       onClick={() => !inCart && onAdd()}
     >
@@ -2705,7 +2705,7 @@ export default function Cafeteria() {
                   <h2 className="font-extrabold tracking-wide text-slate-800">Caffeine Mix</h2>
                   <div className="h-px flex-1 bg-slate-200" />
                 </div>
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-3">
                   {bistroCoffeeItems.map((item) => {
                     const stockServings = item.stock_servings;
                     const isOut =
@@ -2736,7 +2736,7 @@ export default function Cafeteria() {
                   <h2 className="font-extrabold tracking-wide text-slate-800">Tea &amp; Sachets</h2>
                   <div className="h-px flex-1 bg-slate-200" />
                 </div>
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-3">
                   {bistroTeaItems.map((item) => {
                     const stockServings = item.stock_servings;
                     const isOut =
@@ -2767,7 +2767,7 @@ export default function Cafeteria() {
                   <h2 className="font-extrabold tracking-wide text-slate-800">Milk</h2>
                   <div className="h-px flex-1 bg-slate-200" />
                 </div>
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-3">
                   {bistroMilkItems.map((item) => {
                     const stockServings = item.stock_servings;
                     const isOut =
