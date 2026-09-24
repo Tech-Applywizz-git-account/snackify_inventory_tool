@@ -668,7 +668,7 @@ function ItemChip({
     <motion.div
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.97 }}
-      className={`relative rounded-2xl border-2 p-3 flex flex-col gap-2 transition-all cursor-pointer
+      className={`relative rounded-2xl border-2 p-2 sm:p-3 flex flex-col gap-1.5 sm:gap-2 transition-all cursor-pointer
         ${inCart ? 'border-brand bg-brand/5' : 'border-slate-100 bg-white hover:border-brand/30'}`}
       onClick={() => !inCart && onAdd()}
     >
@@ -1043,6 +1043,7 @@ function JamCustomSheet({ item, savedPref, onConfirm, onClose, breadItems }) {
 
 // ── Beverage Taste Preference Sheet ─────────────────────────────────────────
 const COFFEE_TASTES = ['Light Coffee', 'Less Sugar', 'No Sugar'];
+const STRONG_COFFEE_TASTES = ['Less Sugar', 'No Sugar'];
 const TEA_TASTES = ['Strong Tea', 'Light Tea', 'Less Sugar', 'No Sugar'];
 const LEMON_TASTES = [
   'Normal',
@@ -1068,14 +1069,17 @@ function getTastesForItem(itemName) {
   if (n.includes('water')) return WATER_TASTES; // ← fix: Water gets its own options
   if (n.includes('lemon')) return LEMON_TASTES;
   if (n.includes('green tea')) return GREEN_TEA_TASTES;
+  if (n.includes('strong tea') || n.includes('black tea')) return ['Less Sugar', 'No Sugar'];
   if (n.includes('tea') || n.includes('elaichi') || n.includes('ginger') || n.includes('assam'))
     return TEA_TASTES;
   if (n.includes('hot chocolate') || n.includes('hot choc')) return HOT_CHOC_TASTES;
+  if (n.includes('strong coffee')) return STRONG_COFFEE_TASTES;
   if (
     n.includes('coffee') ||
     n.includes('espresso') ||
     n.includes('latte') ||
     n.includes('cappuccino') ||
+    n.includes('americano') ||
     n.includes('badam')
   )
     return COFFEE_TASTES;
@@ -2705,7 +2709,7 @@ export default function Cafeteria() {
                   <h2 className="font-extrabold tracking-wide text-slate-800">Caffeine Mix</h2>
                   <div className="h-px flex-1 bg-slate-200" />
                 </div>
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-3">
                   {bistroCoffeeItems.map((item) => {
                     const stockServings = item.stock_servings;
                     const isOut =
@@ -2736,7 +2740,7 @@ export default function Cafeteria() {
                   <h2 className="font-extrabold tracking-wide text-slate-800">Tea &amp; Sachets</h2>
                   <div className="h-px flex-1 bg-slate-200" />
                 </div>
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-3">
                   {bistroTeaItems.map((item) => {
                     const stockServings = item.stock_servings;
                     const isOut =
@@ -2767,7 +2771,7 @@ export default function Cafeteria() {
                   <h2 className="font-extrabold tracking-wide text-slate-800">Milk</h2>
                   <div className="h-px flex-1 bg-slate-200" />
                 </div>
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-3">
                   {bistroMilkItems.map((item) => {
                     const stockServings = item.stock_servings;
                     const isOut =

@@ -3,12 +3,18 @@ import { z } from 'zod';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
 import { lookupEmployeeIdByEmail } from '../lib/hrms.js';
-import { applyMealTokens, refundTokens } from '../lib/tokens.js';
+import { applyMealTokens } from '../lib/tokens.js';
 import {
   getRequireReviewToBookMeals,
   setRequireReviewToBookMeals,
 } from '../lib/mealReviewBookingSetting.js';
 import { getCabinName } from './cron.js';
+import {
+  DEFAULT_RECEIPT_DESIGN,
+  normalizeReceiptDesign,
+  receiptDesignForStorage,
+  validateReceiptDesign,
+} from '../../../office-print-gateway/receiptDesign.js';
 
 const roleEnum = z.enum(['facility_manager', 'finance', 'leadership', 'staff', 'office_boy']);
 const lateMealChoices = z.enum(['veg', 'egg', 'non_veg']);
@@ -34,6 +40,28 @@ function getISTParts() {
     hour12: false,
   }).formatToParts(new Date());
   return Object.fromEntries(parts.map((part) => [part.type, Number(part.value)]));
+}
+
+function addISTDays(date, days) {
+  const [year, month, day] = date.split('-').map(Number);
+  const value = new Date(Date.UTC(year, month - 1, day + days));
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`;
+}
+
+function getAdminMealDates() {
+  const today = getISTDateString();
+  return { today, tomorrow: addISTDays(today, 1) };
+}
+
+async function getDayShiftProfiles(supabase) {
+  const [{ data: profiles, error: profilesErr }, { data: preferences, error: preferencesErr }] = await Promise.all([
+    supabase.from('profiles').select('id, full_name, preferred_name, active, created_at').eq('active', true),
+    supabase.from('employee_cafeteria_preferences').select('user_id, shift'),
+  ]);
+  if (profilesErr) throw profilesErr;
+  if (preferencesErr) throw preferencesErr;
+  const shiftByUserId = new Map((preferences || []).map((preference) => [preference.user_id, preference.shift]));
+  return (profiles || []).filter((profile) => shiftByUserId.get(profile.id) !== 'night');
 }
 
 function mealOptionsForDate(date) {
@@ -116,6 +144,37 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
+  router.get('/meal-overview', async (_req, res, next) => {
+    try {
+      const { today, tomorrow } = getAdminMealDates();
+      const profiles = await getDayShiftProfiles(d.supabaseAdmin);
+      const { data: bookings, error } = await d.supabaseAdmin
+        .from('meal_bookings')
+        .select('user_id, meal_date')
+        .in('meal_date', [today, tomorrow]);
+      if (error) throw error;
+
+      const eligibleCount = profiles.length;
+      const countForDate = (mealDate) => {
+        const bookedUserIds = new Set(
+          (bookings || [])
+            .filter((booking) => booking.meal_date === mealDate)
+            .map((booking) => booking.user_id)
+        );
+        return {
+          meal_date: mealDate,
+          booked: profiles.filter((profile) => bookedUserIds.has(profile.id)).length,
+          not_booked: eligibleCount - profiles.filter((profile) => bookedUserIds.has(profile.id)).length,
+          total: eligibleCount,
+        };
+      };
+
+      res.json({ today: countForDate(today), tomorrow: countForDate(tomorrow) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   router.patch('/meal-settings', async (req, res, next) => {
     try {
       const enabled = req.body?.require_review_to_book_meals;
@@ -123,6 +182,73 @@ export function createAdminRouter(overrides = {}) {
         return res.status(400).json({ error: 'require_review_to_book_meals must be a boolean' });
       }
       res.json({ require_review_to_book_meals: setRequireReviewToBookMeals(enabled) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.get('/receipt-design', async (_req, res, next) => {
+    try {
+      const { data, error } = await d.supabaseAdmin
+        .from('receipt_design')
+        .select('config, updated_at, updated_by')
+        .eq('id', 'default')
+        .maybeSingle();
+      if (error) throw error;
+      res.json({
+        config: normalizeReceiptDesign(data?.config || DEFAULT_RECEIPT_DESIGN),
+        updated_at: data?.updated_at || null,
+        updated_by: data?.updated_by || null,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.patch('/receipt-design', async (req, res, next) => {
+    try {
+      const errors = validateReceiptDesign(req.body);
+      if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+      const config = receiptDesignForStorage(req.body);
+      const { data, error } = await d.supabaseAdmin
+        .from('receipt_design')
+        .upsert({
+          id: 'default',
+          config,
+          updated_by: req.user.id,
+          updated_at: new Date().toISOString(),
+        })
+        .select('config, updated_at, updated_by')
+        .single();
+      if (error) throw error;
+      res.json({
+        config: normalizeReceiptDesign(data?.config || config),
+        updated_at: data?.updated_at || null,
+        updated_by: data?.updated_by || req.user.id,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post('/receipt-design/reset', async (req, res, next) => {
+    try {
+      const { data, error } = await d.supabaseAdmin
+        .from('receipt_design')
+        .upsert({
+          id: 'default',
+          config: DEFAULT_RECEIPT_DESIGN,
+          updated_by: req.user.id,
+          updated_at: new Date().toISOString(),
+        })
+        .select('config, updated_at, updated_by')
+        .single();
+      if (error) throw error;
+      res.json({
+        config: normalizeReceiptDesign(data?.config || DEFAULT_RECEIPT_DESIGN),
+        updated_at: data?.updated_at || null,
+        updated_by: data?.updated_by || req.user.id,
+      });
     } catch (e) {
       next(e);
     }
@@ -151,10 +277,24 @@ export function createAdminRouter(overrides = {}) {
       });
       if (uErr) throw uErr;
 
+      const { data: shiftPreferences, error: shiftErr } = await d.supabaseAdmin
+        .from('employee_cafeteria_preferences')
+        .select('user_id, shift, cabin, preferred_location');
+      if (shiftErr) throw shiftErr;
+
+      const shiftByUserId = new Map(
+        (shiftPreferences || []).map((preference) => [preference.user_id, preference.shift])
+      );
+      const preferenceByUserId = new Map(
+        (shiftPreferences || []).map((preference) => [preference.user_id, preference])
+      );
+
       const emailMap = new Map(usersList.users.map((u) => [u.id, u.email]));
 
       const rows = profiles.map((p) => ({
         ...p,
+        shift: shiftByUserId.get(p.id) || 'morning',
+        cabin: getCabinName(preferenceByUserId.get(p.id)?.cabin, preferenceByUserId.get(p.id)?.preferred_location),
         email: emailMap.get(p.id) || null,
       }));
       res.json(rows);
@@ -164,9 +304,13 @@ export function createAdminRouter(overrides = {}) {
   });
 
   // GET /api/admin/unbooked-users - active users without today's meal booking
-  router.get('/unbooked-users', async (_req, res, next) => {
+  router.get('/unbooked-users', async (req, res, next) => {
     try {
-      const mealDate = getISTDateString();
+      const { today, tomorrow } = getAdminMealDates();
+      const mealDate = req.query.date || today;
+      if (![today, tomorrow].includes(mealDate)) {
+        return res.status(400).json({ error: 'Only today or tomorrow can be viewed.' });
+      }
       const [{ data: profiles, error: profilesErr }, { data: bookings, error: bookingsErr }] = await Promise.all([
         d.supabaseAdmin
           .from('profiles')
@@ -181,6 +325,8 @@ export function createAdminRouter(overrides = {}) {
       if (profilesErr) throw profilesErr;
       if (bookingsErr) throw bookingsErr;
 
+      const dayShiftProfiles = await getDayShiftProfiles(d.supabaseAdmin);
+      const dayShiftIds = new Set(dayShiftProfiles.map((profile) => profile.id));
       const bookedUserIds = new Set((bookings || []).map((booking) => booking.user_id));
       const { data: usersList, error: usersErr } = await d.supabaseAdmin.auth.admin.listUsers({
         page: 1,
@@ -190,7 +336,7 @@ export function createAdminRouter(overrides = {}) {
 
       const emailMap = new Map((usersList?.users || []).map((user) => [user.id, user.email]));
       const users = (profiles || [])
-        .filter((user) => !bookedUserIds.has(user.id))
+        .filter((user) => dayShiftIds.has(user.id) && !bookedUserIds.has(user.id))
         .map((user) => ({ ...user, email: emailMap.get(user.id) || null }));
 
       res.json({ meal_date: mealDate, users });
@@ -200,9 +346,13 @@ export function createAdminRouter(overrides = {}) {
   });
 
   // GET /api/admin/booked-users - active users with today's meal booking
-  router.get('/booked-users', async (_req, res, next) => {
+  router.get('/booked-users', async (req, res, next) => {
     try {
-      const mealDate = getISTDateString();
+      const { today, tomorrow } = getAdminMealDates();
+      const mealDate = req.query.date || today;
+      if (![today, tomorrow].includes(mealDate)) {
+        return res.status(400).json({ error: 'Only today or tomorrow can be viewed.' });
+      }
       const [{ data: profiles, error: profilesErr }, { data: bookings, error: bookingsErr }] = await Promise.all([
         d.supabaseAdmin
           .from('profiles')
@@ -217,6 +367,8 @@ export function createAdminRouter(overrides = {}) {
       if (profilesErr) throw profilesErr;
       if (bookingsErr) throw bookingsErr;
 
+      const dayShiftProfiles = await getDayShiftProfiles(d.supabaseAdmin);
+      const dayShiftIds = new Set(dayShiftProfiles.map((profile) => profile.id));
       const bookingByUserId = new Map((bookings || []).map((booking) => [booking.user_id, booking]));
       const { data: usersList, error: usersErr } = await d.supabaseAdmin.auth.admin.listUsers({
         page: 1,
@@ -226,7 +378,7 @@ export function createAdminRouter(overrides = {}) {
 
       const emailMap = new Map((usersList?.users || []).map((user) => [user.id, user.email]));
       const users = (profiles || [])
-        .filter((user) => bookingByUserId.has(user.id))
+        .filter((user) => dayShiftIds.has(user.id) && bookingByUserId.has(user.id))
         .map((user) => ({
           ...user,
           email: emailMap.get(user.id) || null,
@@ -527,16 +679,19 @@ export function createAdminRouter(overrides = {}) {
   // re-runs the daily cabin batch or touches historical print jobs.
   router.post('/late-meal-booking', async (req, res, next) => {
     try {
-      const { user_id, choice } = z.object({
+      const { user_id, choice, meal_date } = z.object({
         user_id: z.string().uuid(),
         choice: lateMealChoices,
+        meal_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       }).parse(req.body);
-      const ist = getISTParts();
-      if (ist.hour < 10) {
-        return res.status(400).json({ error: 'Late meal booking opens after 10:00 AM IST.' });
+      const { today, tomorrow } = getAdminMealDates();
+      if (meal_date !== today && meal_date !== tomorrow) {
+        return res.status(400).json({ error: 'Admin booking is available only for today or tomorrow.' });
       }
-
-      const mealDate = getISTDateString();
+      if (meal_date === today && getISTParts().hour >= 11) {
+        return res.status(400).json({ error: "Today's admin meal booking closed at 11:00 AM IST." });
+      }
+      const mealDate = meal_date;
       const options = mealOptionsForDate(mealDate);
       if (!options.includes(choice)) {
         return res.status(400).json({ error: `${choice} is not available for today.` });
@@ -549,6 +704,16 @@ export function createAdminRouter(overrides = {}) {
         .maybeSingle();
       if (targetErr) throw targetErr;
       if (!target || !target.active) return res.status(404).json({ error: 'Active user not found.' });
+
+      const { data: targetPreference, error: targetPreferenceErr } = await d.supabaseAdmin
+        .from('employee_cafeteria_preferences')
+        .select('shift')
+        .eq('user_id', user_id)
+        .maybeSingle();
+      if (targetPreferenceErr) throw targetPreferenceErr;
+      if (targetPreference?.shift === 'night') {
+        return res.status(400).json({ error: 'Night shift users are excluded from day shift meal booking.' });
+      }
 
       const { data: existing, error: existingErr } = await d.supabaseAdmin
         .from('meal_bookings')
@@ -598,31 +763,10 @@ export function createAdminRouter(overrides = {}) {
         throw e;
       }
 
-      const { data: job, error: jobErr } = await d.supabaseAdmin
-        .from('meal_print_jobs')
-        .insert({
-          meal_date: mealDate,
-          cabin_name: cabinName,
-          print_type: 'reprint',
-          scheduled_for: new Date().toISOString(),
-          status: 'pending',
-          token_count: 1,
-          requested_by: req.user.id,
-          booking_user_id: user_id,
-        })
-        .select()
-        .single();
-      if (jobErr) {
-        await refundTokens({ userId: user_id, refType: 'meal_booking', refId: booking.id });
-        await d.supabaseAdmin.from('meal_bookings').delete().eq('id', booking.id);
-        throw jobErr;
-      }
-
       res.status(201).json({
         ok: true,
         meal_date: mealDate,
         booking: { ...booking, tokens_charged: spend?.tokens_charged || 0 },
-        print_job: job,
       });
     } catch (e) {
       next(e);

@@ -35,30 +35,6 @@ const STAGES = [
     ring: 'ring-blue-400',
   },
   {
-    id: 'preparing',
-    emoji: '☕',
-    label: 'Preparing',
-    sub: 'Being made with love ❤️',
-    color: 'bg-amber-50 text-amber-600',
-    ring: 'ring-amber-400',
-  },
-  {
-    id: 'ready_for_pickup',
-    emoji: '🏃',
-    label: 'Ready for Pickup!',
-    sub: 'Come collect from the pantry counter 📣',
-    color: 'bg-teal-50 text-teal-600',
-    ring: 'ring-teal-400',
-  },
-  {
-    id: 'on_the_way',
-    emoji: '🛵',
-    label: 'On the Way',
-    sub: 'Coming to you right now!',
-    color: 'bg-brand/10 text-brand',
-    ring: 'ring-brand',
-  },
-  {
     id: 'done',
     emoji: '🎉',
     label: 'Delivered!',
@@ -77,7 +53,14 @@ const CANCELLED = {
 };
 
 function stageIndex(live_status) {
-  const i = STAGES.findIndex((s) => s.id === live_status);
+  const normalized =
+    live_status === 'preparing' ||
+    live_status === 'ready_for_pickup' ||
+    live_status === 'on_the_way'
+      ? 'accepted'
+      : live_status;
+
+  const i = STAGES.findIndex((s) => s.id === normalized);
   return i >= 0 ? i : 0;
 }
 

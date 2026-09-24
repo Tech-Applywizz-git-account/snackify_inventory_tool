@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Snackify Receipt Design",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "paper_width",
+    "header",
+    "subheader",
+    "meal_header",
+    "meal_subheader",
+    "footer",
+    "custom_label",
+    "context",
+    "feed_lines",
+    "cut_mode"
+  ],
+  "properties": {
+    "paper_width": {
+      "type": "string",
+      "enum": ["58mm", "80mm"]
+    },
+    "header": {
+      "type": "string",
+      "maxLength": 40
+    },
+    "subheader": {
+      "type": "string",
+      "maxLength": 40
+    },
+    "meal_header": {
+      "type": "string",
+      "maxLength": 40
+    },
+    "meal_subheader": {
+      "type": "string",
+      "maxLength": 40
+    },
+    "footer": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "custom_label": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "text", "position", "bold"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "text": {"type": "string", "maxLength": 40},
+        "position": {
+          "type": "string",
+          "enum": ["before_header", "after_header", "before_footer"]
+        },
+        "bold": {"type": "boolean"}
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order_number",
+        "date",
+        "employee",
+        "location",
+        "item",
+        "note",
+        "tokens",
+        "guest_marker"
+      ],
+      "properties": {
+        "order_number": {"type": "boolean"},
+        "date": {"type": "boolean"},
+        "employee": {"type": "boolean"},
+        "location": {"type": "boolean"},
+        "item": {"type": "boolean"},
+        "note": {"type": "boolean"},
+        "tokens": {"type": "boolean"},
+        "guest_marker": {"type": "boolean"}
+      }
+    },
+    "feed_lines": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8
+    },
+    "cut_mode": {
+      "type": "string",
+      "enum": ["full", "partial", "none"]
+    }
+  }
+}

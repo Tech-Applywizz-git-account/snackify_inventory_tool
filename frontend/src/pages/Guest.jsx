@@ -92,6 +92,7 @@ const BREAD_ITEMS = ['bread + peanut butter', 'bread + jam'];
 const isBreadItem = (name) => BREAD_ITEMS.includes((name || '').toLowerCase());
 
 const COFFEE_TASTES = ['Light Coffee', 'Less Sugar', 'No Sugar'];
+const STRONG_COFFEE_TASTES = ['Less Sugar', 'No Sugar'];
 const TEA_TASTES = ['Strong Tea', 'Light Tea', 'Less Sugar', 'No Sugar'];
 const LEMON_TASTES = ['Normal', 'Less Sugar', 'Strong Lemon', 'Mild Lemon', 'With Honey 🍯', 'Without Honey'];
 const GREEN_TEA_TASTES = ['Plain Green Tea', 'With Honey 🍯', 'With Lemon', 'Light Brew', 'Strong Brew'];
@@ -103,14 +104,17 @@ function getTastesForItem(itemName) {
   if (n.includes('water')) return WATER_TASTES;
   if (n.includes('lemon')) return LEMON_TASTES;
   if (n.includes('green tea')) return GREEN_TEA_TASTES;
+  if (n.includes('strong tea') || n.includes('black tea')) return ['Less Sugar', 'No Sugar'];
   if (n.includes('tea') || n.includes('elaichi') || n.includes('ginger') || n.includes('assam'))
     return TEA_TASTES;
   if (n.includes('hot chocolate') || n.includes('hot choc')) return HOT_CHOC_TASTES;
+  if (n.includes('strong coffee')) return STRONG_COFFEE_TASTES;
   if (
     n.includes('coffee') ||
     n.includes('espresso') ||
     n.includes('latte') ||
     n.includes('cappuccino') ||
+    n.includes('americano') ||
     n.includes('badam')
   )
     return COFFEE_TASTES;

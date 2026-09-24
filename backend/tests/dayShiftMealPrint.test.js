@@ -57,6 +57,27 @@ test('night-shift report includes only explicitly booked night-shift users', () 
   assert.equal(result.skippedCount, 1);
 });
 
+test('night-shift count reflects unique registered users even if the same user has duplicate booking rows', () => {
+  const bookings = [
+    { user_id: 'night-user-1', choice: 'veg' },
+    { user_id: 'night-user-1', choice: 'veg' },
+    { user_id: 'night-user-2', choice: 'non_veg' },
+    { user_id: 'night-user-3', choice: 'skip' },
+    { user_id: 'night-user-3', choice: 'skip' },
+  ];
+  const preferences = [
+    { user_id: 'night-user-1', shift: 'night' },
+    { user_id: 'night-user-2', shift: 'night' },
+    { user_id: 'night-user-3', shift: 'night' },
+  ];
+
+  const result = countMealBookings(filterNightMealBookings(bookings, preferences));
+
+  assert.deepEqual(result.counts, { veg: 1, non_veg: 1, egg: 0, skip: 1 });
+  assert.equal(result.bookedCount, 2);
+  assert.equal(result.skippedCount, 1);
+});
+
 test('night-shift report resolves the current report date in IST', () => {
   const utcDate = new Date('2026-09-21T18:45:00.000Z');
 

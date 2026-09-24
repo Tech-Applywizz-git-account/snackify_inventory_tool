@@ -25,6 +25,15 @@ function RolePill({ role }) {
   return <span className={`pill ${cls}`}>{ROLE_LABEL[role] || role}</span>;
 }
 
+function ShiftPill({ shift }) {
+  const isNight = shift === 'night';
+  return (
+    <span className={`pill ${isNight ? 'bg-indigo-100 text-indigo-800' : 'bg-orange-100 text-orange-800'}`}>
+      {isNight ? 'Night shift' : 'Day shift'}
+    </span>
+  );
+}
+
 function fuzzyMatch(value, query) {
   let queryIndex = 0;
   for (const character of value.toLowerCase()) {
@@ -32,6 +41,168 @@ function fuzzyMatch(value, query) {
     if (queryIndex === query.length) return true;
   }
   return query.length === 0;
+}
+
+function getISTDateString(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+function addDays(date, days) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+const DEFAULT_RECEIPT_DESIGN = {
+  paper_width: '80mm',
+  header: 'APPLYWIZZ',
+  subheader: 'OFFICE PANTRY',
+  meal_header: 'APPLYWIZZ',
+  meal_subheader: 'MEAL TOKEN',
+  footer: 'DELIVER ASAP!',
+  custom_label: { enabled: false, text: '', position: 'after_header', bold: true },
+  context: {
+    order_number: true,
+    date: true,
+    employee: true,
+    location: true,
+    item: true,
+    note: true,
+    tokens: true,
+    guest_marker: true,
+  },
+  feed_lines: 3,
+  cut_mode: 'partial',
+};
+
+function ReceiptDesignPanel({ design, setDesign, onSave, onReset, saving }) {
+  const update = (path, value) => {
+    setDesign((current) => {
+      const next = structuredClone(current);
+      let target = next;
+      for (let index = 0; index < path.length - 1; index += 1) target = target[path[index]];
+      target[path[path.length - 1]] = value;
+      return next;
+    });
+  };
+
+  const contextLabels = {
+    order_number: 'Order number',
+    date: 'Date and time',
+    employee: 'Employee',
+    location: 'Location',
+    item: 'Items',
+    note: 'Instruction/note',
+    tokens: 'Tokens charged',
+  };
+  const previewLines = [
+    design.header,
+    design.subheader,
+    design.custom_label.enabled && design.custom_label.position === 'after_header' ? design.custom_label.text : null,
+    design.context.order_number ? 'Order  #A001' : null,
+    design.context.date ? 'Date   16 Sep 2026, 01:00 PM' : null,
+    design.context.guest_marker ? 'Type   GUEST BOOKED' : null,
+    design.context.employee ? 'Employee  Guest Name' : null,
+    design.context.location ? 'Location  Balaji Cabin' : null,
+    design.context.item ? '1x Cafeteria Meal' : null,
+    design.context.note ? 'Note: Less spicy' : null,
+    design.context.tokens ? 'Tokens  20' : null,
+    design.custom_label.enabled && design.custom_label.position === 'before_footer' ? design.custom_label.text : null,
+    design.footer,
+  ].filter(Boolean);
+
+  return (
+    <div className="card">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-1">
+        <div>
+          <h2 className="font-semibold">Receipt design</h2>
+          <p className="text-xs text-slate-500 mt-1 max-w-2xl">
+            Configure receipt context and labels. Printer connection settings stay on the office gateway.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button type="button" className="btn-secondary" onClick={onReset} disabled={saving}>Reset</button>
+          <button type="button" className="btn-primary" onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save design'}</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-4">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-sm font-medium text-slate-700">Receipt width
+              <select className="input mt-1" value={design.paper_width} onChange={(e) => update(['paper_width'], e.target.value)}>
+                <option value="58mm">58mm</option>
+                <option value="80mm">80mm</option>
+              </select>
+            </label>
+            <label className="text-sm font-medium text-slate-700">Cut mode
+              <select className="input mt-1" value={design.cut_mode} onChange={(e) => update(['cut_mode'], e.target.value)}>
+                <option value="partial">Partial cut</option>
+                <option value="full">Full cut</option>
+                <option value="none">No cut</option>
+              </select>
+            </label>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {[
+              ['header', 'Office pantry header'],
+              ['subheader', 'Office pantry subheader'],
+              ['meal_header', 'Meal token header'],
+              ['meal_subheader', 'Meal token subheader'],
+              ['footer', 'Footer'],
+            ].map(([field, label]) => (
+              <label key={field} className="text-sm font-medium text-slate-700">{label}
+                <input className="input mt-1" maxLength={field === 'footer' ? 80 : 40} value={design[field]} onChange={(e) => update([field], e.target.value)} />
+              </label>
+            ))}
+          </div>
+          <div className="rounded-md border border-slate-200 p-3 space-y-3">
+            <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <input type="checkbox" className="h-4 w-4 accent-brand" checked={design.custom_label.enabled} onChange={(e) => update(['custom_label', 'enabled'], e.target.checked)} />
+              Enable custom label
+            </label>
+            <input className="input" maxLength={40} placeholder="Example: PAID - THANK YOU" value={design.custom_label.text} onChange={(e) => update(['custom_label', 'text'], e.target.value)} disabled={!design.custom_label.enabled} />
+            <div className="grid grid-cols-2 gap-3">
+              <select className="input" value={design.custom_label.position} onChange={(e) => update(['custom_label', 'position'], e.target.value)} disabled={!design.custom_label.enabled}>
+                <option value="before_header">Before header</option>
+                <option value="after_header">After header</option>
+                <option value="before_footer">Before footer</option>
+              </select>
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" className="h-4 w-4 accent-brand" checked={design.custom_label.bold} onChange={(e) => update(['custom_label', 'bold'], e.target.checked)} disabled={!design.custom_label.enabled} />
+                Bold label
+              </label>
+            </div>
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-700 mb-2">Show context</p>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(contextLabels).map(([key, label]) => (
+                <label key={key} className="inline-flex items-center gap-2 text-sm text-slate-700">
+                  <input type="checkbox" className="h-4 w-4 accent-brand" checked={design.context[key]} onChange={(e) => update(['context', key], e.target.checked)} />
+                  {label}
+                </label>
+              ))}
+              <span className="text-sm text-slate-500">Guest marker is always printed.</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-slate-700 mb-2">Preview</p>
+          <pre className="min-h-[300px] whitespace-pre-wrap rounded-md bg-slate-950 p-4 text-sm leading-6 text-emerald-300" style={{ maxWidth: design.paper_width === '58mm' ? 260 : 340 }}>
+            {previewLines.join('\n')}
+          </pre>
+          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">Feed lines after receipt
+            <input type="number" min="0" max="8" className="input w-20" value={design.feed_lines} onChange={(e) => update(['feed_lines'], Math.max(0, Math.min(8, Number(e.target.value) || 0)))} />
+          </label>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── Predictive ordering (Feature #9) ─────────────────────────────────────────
@@ -180,6 +351,10 @@ export default function Admin() {
   const [lateMealSelectedUser, setLateMealSelectedUser] = useState(null);
   const [lateMealUserId, setLateMealUserId] = useState('');
   const [lateMealChoice, setLateMealChoice] = useState('veg');
+  const [adminMealDate, setAdminMealDate] = useState(() => getISTDateString());
+  const [mealOverview, setMealOverview] = useState(null);
+  const [receiptDesign, setReceiptDesign] = useState(DEFAULT_RECEIPT_DESIGN);
+  const [receiptDesignSaving, setReceiptDesignSaving] = useState(false);
 
   const load = useCallback(async () => {
     setErr('');
@@ -215,6 +390,53 @@ export default function Admin() {
       .catch((e) => setErr(e.message))
       .finally(() => setMealSettingLoading(false));
   }, []);
+
+  useEffect(() => {
+    api.getReceiptDesign()
+      .then((result) => setReceiptDesign(result?.config || DEFAULT_RECEIPT_DESIGN))
+      .catch((e) => setErr(e.message));
+  }, []);
+
+  async function onSaveReceiptDesign() {
+    setReceiptDesignSaving(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      const result = await api.updateReceiptDesign(receiptDesign);
+      setReceiptDesign(result.config);
+      setOkMsg('Receipt design saved. New print jobs will use it.');
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setReceiptDesignSaving(false);
+    }
+  }
+
+  async function onResetReceiptDesign() {
+    setReceiptDesignSaving(true);
+    setErr('');
+    try {
+      const result = await api.resetReceiptDesign();
+      setReceiptDesign(result.config);
+      setOkMsg('Receipt design reset to defaults.');
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setReceiptDesignSaving(false);
+    }
+  }
+
+  const loadMealOverview = useCallback(async () => {
+    try {
+      setMealOverview(await api.mealOverview());
+    } catch (e) {
+      setErr(e.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMealOverview();
+  }, [loadMealOverview]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -366,14 +588,28 @@ export default function Admin() {
     setErr('');
     setOkMsg('');
     try {
-      const result = await api.lateMealBooking({ user_id: lateMealUserId, choice: lateMealChoice });
+      const result = await api.lateMealBooking({ user_id: lateMealUserId, choice: lateMealChoice, meal_date: adminMealDate });
       const selected = users.find((u) => u.id === lateMealUserId);
-      setOkMsg(`Meal booked for ${selected?.full_name || selected?.email || 'user'} and one receipt was queued for immediate printing. Token: ${result.booking.token_number}.`);
-      setLateMealUserId('');
-      setLateMealSearch('');
-      setLateMealSearchQuery('');
-      setLateMealMatches([]);
-      setLateMealSelectedUser(null);
+      setOkMsg(`Meal booked for ${selected?.full_name || selected?.email || 'user'} for ${result.meal_date}. Token: ${result.booking.token_number}.`);
+      await loadMealOverview();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onPrintAdminToken() {
+    if (!lateMealUserId) {
+      setErr('Select a user before printing the receipt token.');
+      return;
+    }
+    setBusy(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      const result = await api.reprintToken({ user_id: lateMealUserId, date: adminMealDate });
+      setOkMsg(`Receipt token ${result.booking.token_number} queued for printing.`);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -418,7 +654,7 @@ export default function Admin() {
     setUnbookedUsersLoading(true);
     setErr('');
     try {
-      setUnbookedUsers(await api.listUnbookedUsers());
+      setUnbookedUsers(await api.listUnbookedUsers(adminMealDate));
       setUnbookedUsersOpen(true);
     } catch (e) {
       setErr(e.message);
@@ -431,7 +667,7 @@ export default function Admin() {
     setBookedUsersLoading(true);
     setErr('');
     try {
-      setBookedUsers(await api.listBookedUsers());
+      setBookedUsers(await api.listBookedUsers(adminMealDate));
       setBookedUsersOpen(true);
     } catch (e) {
       setErr(e.message);
@@ -527,6 +763,16 @@ export default function Admin() {
         </div>
       </div>
 
+      {profile?.role === 'leadership' && (
+        <ReceiptDesignPanel
+          design={receiptDesign}
+          setDesign={setReceiptDesign}
+          onSave={onSaveReceiptDesign}
+          onReset={onResetReceiptDesign}
+          saving={receiptDesignSaving}
+        />
+      )}
+
       <div className="card">
         <h2 className="font-semibold mb-1">Add a team member</h2>
         <p className="text-xs text-slate-500 mb-4">
@@ -569,7 +815,7 @@ export default function Admin() {
       {profile?.role === 'leadership' && (
         <div className="card">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
-            <h2 className="font-semibold">Add User / Book Late Meal</h2>
+            <h2 className="font-semibold">Add User / Book Meal</h2>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -577,7 +823,7 @@ export default function Admin() {
                 onClick={onShowUnbookedUsers}
                 disabled={unbookedUsersLoading}
               >
-                {unbookedUsersLoading ? 'Loading…' : 'Show Not Booked Today'}
+                {unbookedUsersLoading ? 'Loading…' : `View not booked (${adminMealDate})`}
               </button>
               <button
                 type="button"
@@ -585,13 +831,29 @@ export default function Admin() {
                 onClick={onShowBookedUsers}
                 disabled={bookedUsersLoading}
               >
-                {bookedUsersLoading ? 'Loading…' : 'Show Booked Today'}
+                {bookedUsersLoading ? 'Loading…' : `View booked (${adminMealDate})`}
               </button>
             </div>
           </div>
           <p className="text-xs text-slate-500 mb-4">
-            Available after 10:00 AM IST. This creates today&apos;s booking and prints one receipt only for the selected user.
+            Day-shift users only. Admin booking is available for the selected date until 11:00 AM IST on that date. Printing remains separate from booking.
           </p>
+          {mealOverview && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+              {[['today', 'Today'], ['tomorrow', 'Next Day']].map(([key, label]) => (
+                <div key={key} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex justify-between text-sm font-semibold">
+                    <span>{label}</span>
+                    <span className="text-xs font-normal text-slate-500">{mealOverview[key].meal_date}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-2 text-center">
+                    <div className="rounded-md bg-emerald-50 py-2 text-emerald-700"><strong className="block text-lg">{mealOverview[key].booked}</strong><span className="text-xs">Booked</span></div>
+                    <div className="rounded-md bg-amber-50 py-2 text-amber-700"><strong className="block text-lg">{mealOverview[key].not_booked}</strong><span className="text-xs">Not booked</span></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           <form onSubmit={onLateMealBooking} className="grid grid-cols-1 sm:grid-cols-12 gap-3">
             <input
               type="search"
@@ -643,8 +905,24 @@ export default function Admin() {
               <option value="egg">Egg</option>
               <option value="non_veg">Non-vegetarian</option>
             </select>
+            <input
+              type="date"
+              className="input sm:col-span-2"
+              min={getISTDateString()}
+              max={addDays(getISTDateString(), 1)}
+              value={adminMealDate}
+              onChange={(e) => setAdminMealDate(e.target.value)}
+            />
             <button type="submit" className="btn-primary sm:col-span-2" disabled={busy}>
-              {busy ? 'Booking…' : 'Book & Print'}
+              {busy ? 'Booking…' : 'Book Meal'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary sm:col-span-2"
+              disabled={busy || !lateMealUserId}
+              onClick={onPrintAdminToken}
+            >
+              {busy ? 'Working…' : 'Print Receipt Token'}
             </button>
           </form>
         </div>
@@ -685,6 +963,8 @@ export default function Admin() {
                 <th className="py-2 pr-3">Preferred Name</th>
                 <th className="py-2 pr-3">Cafeteria card</th>
                 <th className="py-2 pr-3">Email</th>
+                <th className="py-2 pr-3">Shift</th>
+                <th className="py-2 pr-3">Assigned cabin</th>
                 <th className="py-2 pr-3">Role</th>
                 <th className="py-2 pr-3">Change to</th>
                 <th className="py-2 pr-3">Actions</th>
@@ -738,6 +1018,12 @@ export default function Admin() {
                       </div>
                     </td>
                     <td className="py-2 pr-3 text-slate-700">{u.email || '-'}</td>
+                    <td className="py-2 pr-3">
+                      <ShiftPill shift={u.shift} />
+                    </td>
+                    <td className="py-2 pr-3 font-medium text-slate-700">
+                      {u.cabin || 'Unassigned'}
+                    </td>
                     <td className="py-2 pr-3">
                       <RolePill role={u.role} />
                     </td>

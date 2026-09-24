@@ -111,8 +111,13 @@ export const api = {
   aiSummaryHistory: () => request('/api/reports/ai-summary/history'),
 
   listUsers: () => request('/api/admin/users'),
-  listUnbookedUsers: () => request('/api/admin/unbooked-users'),
-  listBookedUsers: () => request('/api/admin/booked-users'),
+  getReceiptDesign: () => request('/api/admin/receipt-design'),
+  updateReceiptDesign: (config) =>
+    request('/api/admin/receipt-design', { method: 'PATCH', body: JSON.stringify(config) }),
+  resetReceiptDesign: () => request('/api/admin/receipt-design/reset', { method: 'POST' }),
+  mealOverview: () => request('/api/admin/meal-overview'),
+  listUnbookedUsers: (date) => request(`/api/admin/unbooked-users${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+  listBookedUsers: (date) => request(`/api/admin/booked-users${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   setUserRole: (userId, role) =>
     request(`/api/admin/users/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   setUserPreferredName: (userId, preferredName) =>
@@ -182,6 +187,9 @@ export const api = {
 
    // Cafeteria
    cafeteriaItems: () => request('/api/cafeteria/items'),
+   cafeteriaDiscounts: () => request('/api/cafeteria/discounts'),
+   updateCafeteriaDiscount: (id, body) =>
+     request(`/api/cafeteria/discounts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   tokensMe: () => request('/api/tokens/me'),
   tokensBootstrap: () => request('/api/tokens/bootstrap'),
    quickOrder: (body) => request('/api/requests', { method: 'POST', body: JSON.stringify(body) }),

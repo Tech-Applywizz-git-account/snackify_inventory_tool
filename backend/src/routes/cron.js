@@ -78,12 +78,21 @@ export function filterNightMealBookings(bookings, preferences) {
 export function countMealBookings(bookings) {
   const counts = { veg: 0, non_veg: 0, egg: 0, skip: 0 };
   const others = {};
+  const latestBookingByUser = new Map();
+  let anonymousIndex = 0;
 
   for (const booking of bookings || []) {
-    if (booking.choice in counts) {
-      counts[booking.choice]++;
-    } else if (booking.choice) {
-      others[booking.choice] = (others[booking.choice] || 0) + 1;
+    if (!booking || !booking.choice) continue;
+
+    const userKey = booking.user_id ?? `__anonymous__${anonymousIndex++}`;
+    latestBookingByUser.set(userKey, booking.choice);
+  }
+
+  for (const choice of latestBookingByUser.values()) {
+    if (choice in counts) {
+      counts[choice]++;
+    } else {
+      others[choice] = (others[choice] || 0) + 1;
     }
   }
 

@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../lib/supabase.js';
 import { postLeaveAlertToTeams } from '../lib/teams.js';
 import { requireRole } from '../middleware/auth.js';
 import { attachTokenPrice, loadCatalog } from '../lib/tokens.js';
+import { applyCafeteriaDiscount, applyDiscounts, updateDiscount } from '../lib/cafeteriaDiscounts.js';
 
 const router = Router();
 
@@ -19,7 +20,47 @@ router.get('/items', async (_req, res, next) => {
       .order('sort_order', { ascending: true });
     if (error) throw error;
     const catalog = await loadCatalog().catch(() => []);
-    res.json((data || []).map((row) => attachTokenPrice(row, catalog)));
+    const priced = (data || []).map((row) => attachTokenPrice(row, catalog));
+    res.json(await applyDiscounts(priced));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /api/cafeteria/discounts — staff pricing controls use the same catalog
+router.get('/discounts', requireRole('office_boy', 'facility_manager', 'leadership', 'admin'), async (_req, res, next) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('cafeteria_items')
+      .select('*')
+      .neq('visible_to_employees', false)
+      .order('sort_order', { ascending: true });
+    if (error) throw error;
+    const catalog = await loadCatalog().catch(() => []);
+    const priced = (data || []).map((row) => attachTokenPrice(row, catalog));
+    res.json(await applyDiscounts(priced));
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.patch('/discounts/:id', requireRole('facility_manager', 'leadership', 'admin'), async (req, res, next) => {
+  try {
+    const { enabled = false, discount_coins = 0 } = req.body || {};
+    const coins = Number(discount_coins);
+    if (typeof enabled !== 'boolean' || !Number.isInteger(coins) || coins < 0) {
+      return res.status(400).json({ error: 'enabled must be boolean and discount_coins must be a non-negative integer' });
+    }
+    const { data, error } = await supabaseAdmin
+      .from('cafeteria_items')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+    if (error) throw error;
+    const catalog = await loadCatalog().catch(() => []);
+    const priced = attachTokenPrice(data, catalog);
+    const discount = await updateDiscount(req.params.id, { enabled, discount_coins: coins }, priced.token_price);
+    res.json(await applyCafeteriaDiscount(priced, { items: { [req.params.id]: discount } }));
   } catch (e) {
     next(e);
   }
@@ -103,7 +144,7 @@ router.post('/items', requireRole('leadership', 'admin', 'office_boy'), async (r
 // all other fields: leadership only
 router.patch(
   '/items/:id',
-  requireRole('office_boy', 'facility_manager', 'leadership'),
+  requireRole('office_boy', 'facility_manager', 'leadership', 'admin'),
   async (req, res, next) => {
     try {
       const isLeadership = ['leadership'].includes(req.user.role);

@@ -260,7 +260,7 @@ function buildAcceptedPage(booking, alreadyAccepted) {
     <div style="font-family: 'Courier New', monospace; font-size: 12px; width: 80mm; padding: 4mm 2mm; color: #000;">
       <div style="text-align: center; font-weight: bold; font-size: 14px;">APPLYWIZZ OFFICE PANTRY</div>
       <div style="border-top: 1px dashed #000; margin: 4px 0;"></div>
-      <div style="display: flex; justify-content: space-between; padding: 1px 0;"><span>Type</span><span style="font-weight:bold;">GUEST MEAL</span></div>
+      <div style="display: flex; justify-content: space-between; padding: 1px 0;"><span>Type</span><span style="font-weight:bold;">GUEST BOOKED</span></div>
       <div style="display: flex; justify-content: space-between; padding: 1px 0;"><span>Date</span><span>${booking.meal_date}</span></div>
       <div style="border-top: 1px dashed #000; margin: 4px 0;"></div>
       <div style="display: flex; justify-content: space-between; padding: 1px 0;"><span>Guest</span><span style="font-weight:bold;">${booking.guest_name}</span></div>
