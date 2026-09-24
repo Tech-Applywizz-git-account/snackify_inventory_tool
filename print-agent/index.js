@@ -18,6 +18,14 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
+import {
+  DEFAULT_RECEIPT_DESIGN,
+  clampReceiptText,
+  loadReceiptDesign,
+  receiptLine,
+  normalizeReceiptDesign,
+} from '../office-print-gateway/receiptDesign.js';
+import { receiptBrandLines } from './receiptBrand.js';
 
 const SUPABASE_URL  = process.env.SUPABASE_URL;
 const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
@@ -31,17 +39,61 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+let receiptDesign = normalizeReceiptDesign(DEFAULT_RECEIPT_DESIGN);
+let receiptDesignLoadedAt = 0;
+
+async function getReceiptDesign() {
+  if (Date.now() - receiptDesignLoadedAt > 15000) {
+    receiptDesign = await loadReceiptDesign(supabase, receiptDesign);
+    receiptDesignLoadedAt = Date.now();
+  }
+  return receiptDesign;
+}
+
+function receiptEnding(design) {
+  const cut = design.cut_mode === 'full'
+    ? CMD.CUT
+    : design.cut_mode === 'partial'
+      ? CMD.PARTIAL_CUT
+      : '';
+  return [...Array(design.feed_lines).fill(CMD.FEED), cut];
+}
+
+function customLabelLines(design, position) {
+  if (!design.custom_label.enabled || !design.custom_label.text || design.custom_label.position !== position) return [];
+  return [
+    CMD.CENTER,
+    design.custom_label.bold ? CMD.BOLD_ON : CMD.BOLD_OFF,
+    ...clampReceiptText(design.custom_label.text, design),
+    CMD.BOLD_OFF,
+  ];
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const PRINTED_LOG = path.join(__dirname, 'printed.json');
 
 let printedIds = new Set();
+let printedOrderNumbers = new Set();
+let printingOrderNumbers = new Set();
+
 if (fs.existsSync(PRINTED_LOG)) {
   try {
     const saved = JSON.parse(fs.readFileSync(PRINTED_LOG, 'utf8'));
-    printedIds = new Set(saved);
-    console.log(`[print-agent] Loaded ${printedIds.size} previously printed orders`);
+    if (Array.isArray(saved)) {
+      for (const value of saved) {
+        const key = String(value);
+        if (key.startsWith('order:')) {
+          printedOrderNumbers.add(key.slice(6));
+        } else {
+          printedIds.add(key);
+        }
+      }
+    }
+    console.log(
+      `[print-agent] Loaded ${printedIds.size} previously printed orders + ` +
+      `${printedOrderNumbers.size} previously printed order numbers`
+    );
   } catch {
     // Ignore corrupt file.
   }
@@ -49,10 +101,42 @@ if (fs.existsSync(PRINTED_LOG)) {
 
 function savePrinted() {
   try {
-    fs.writeFileSync(PRINTED_LOG, JSON.stringify([...printedIds]), 'utf8');
+    const saved = [
+      ...printedIds,
+      ...[...printedOrderNumbers].map((orderNumber) => `order:${orderNumber}`),
+    ];
+    fs.writeFileSync(PRINTED_LOG, JSON.stringify(saved), 'utf8');
   } catch (err) {
     console.error('[print-agent] Failed to save printed.json:', err.message);
   }
+}
+
+function getOrderNumber(order) {
+  return String(
+    order?.user_order_number ||
+    order?.order_number ||
+    (order?.id || '').slice(0, 8)
+  ).trim().toUpperCase();
+}
+
+function claimOrderForPrinting(order) {
+  const orderNumber = getOrderNumber(order);
+  if (!orderNumber) return null;
+
+  if (
+    printedOrderNumbers.has(orderNumber) ||
+    printingOrderNumbers.has(orderNumber) ||
+    (order?.id && printedIds.has(order.id))
+  ) {
+    return null;
+  }
+
+  printingOrderNumbers.add(orderNumber);
+  return orderNumber;
+}
+
+function releaseOrderPrintClaim(orderNumber) {
+  if (orderNumber) printingOrderNumbers.delete(orderNumber);
 }
 
 function istDateString(date = new Date()) {
@@ -158,13 +242,25 @@ function getQuote(order) {
   return stripEmojis(list[Math.floor(Math.random() * list.length)]);
 }
 
+function isGuestBookedOrder(order) {
+  const notes = String(order?.notes || '').trim();
+  const normalized = notes.toUpperCase();
+  return normalized === 'GUEST_BOOKED' || normalized.startsWith('GUEST_BOOKED:');
+}
+
 // ── Format Receipt ───────────────────────────────────────────────────────────
-function formatReceipt(order) {
+function formatReceipt(order, design) {
+  const isGuestBooked = isGuestBookedOrder(order);
+  const line = receiptLine(design);
+  const dash = receiptLine(design, '-');
   const qty = parseInt(order.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
   const item = stripEmojis(order.parsed_item || order.raw_text || 'Unknown Item');
-  const employee = stripEmojis(order.parsed_employee_name || order.submitter_name || order.full_name || 'Unknown');
+  const employee = isGuestBooked ? 'GUEST' : stripEmojis(order.parsed_employee_name || order.submitter_name || order.full_name || 'Unknown');
   const location = stripEmojis(order.parsed_location || 'Not specified');
-  const orderId = order.user_order_number || (order.id || '').slice(0, 8).toUpperCase();
+  const baseOrderId = order.user_order_number || (order.id || '').slice(0, 8).toUpperCase();
+  const orderId = isGuestBooked
+    ? (String(baseOrderId).toUpperCase().startsWith('GUEST') ? baseOrderId : `GUEST-${baseOrderId}`)
+    : baseOrderId;
 
   // Format date in IST
   const dateStr = new Date(order.created_at || Date.now()).toLocaleString('en-IN', {
@@ -201,72 +297,80 @@ function formatReceipt(order) {
   const lines = [
     CMD.INIT,
     CMD.CENTER,
+    ...customLabelLines(design, 'before_header'),
     CMD.BOLD_ON,
     CMD.DOUBLE_ON,
-    'APPLYWIZZ',
+    design.header,
     CMD.DOUBLE_OFF,
-    'OFFICE PANTRY',
+    design.subheader,
     CMD.BOLD_OFF,
     CMD.FEED,
-    LINE,
+    line,
+    ...customLabelLines(design, 'after_header'),
     CMD.LEFT,
-    `Order  #${orderId}`,
-    `Date   ${dateStr}`,
-    DASH,
-    `${CMD.BOLD_ON}Employee${CMD.BOLD_OFF}  ${employee}`,
-    `${CMD.BOLD_ON}Location${CMD.BOLD_OFF}  ${location}`,
-    DASH,
+    design.context.order_number ? `Order  #${orderId}` : null,
+    design.context.date ? `Date   ${dateStr}` : null,
+    ...receiptBrandLines(order),
+    dash,
+    isGuestBooked && design.context.guest_marker ? `${CMD.BOLD_ON}Type     GUEST BOOKED${CMD.BOLD_OFF}` : null,
+    design.context.employee ? `${CMD.BOLD_ON}Employee${CMD.BOLD_OFF}  ${employee}` : null,
+    design.context.location ? `${CMD.BOLD_ON}Location${CMD.BOLD_OFF}  ${location}` : null,
+    dash,
     CMD.BOLD_ON,
-    ...itemLines,
+    ...(design.context.item ? itemLines : []),
     CMD.BOLD_OFF,
   ];
 
   const charged = Number(order.tokens_charged) || 0;
   if (charged > 0) {
     lines.push(
-      DASH,
-      `${CMD.BOLD_ON}Tokens${CMD.BOLD_OFF}  ${charged} (1 token = Rs 1)`,
+      dash,
+      `${CMD.BOLD_ON}Tokens${CMD.BOLD_OFF}  ${charged}`,
     );
   }
 
-  if (note) {
+  if (note && design.context.note) {
     lines.push(`  Note: ${note}`);
   }
 
-  const quote = getQuote(order);
+  const quote = isGuestBooked ? '' : getQuote(order);
   if (quote) {
     lines.push(
-      DASH,
+      dash,
       CMD.CENTER,
       quote
     );
   }
 
   lines.push(
-    DASH,
+    dash,
     CMD.CENTER,
     CMD.BOLD_ON,
-    'DELIVER ASAP!',
+    design.footer,
     CMD.BOLD_OFF,
-    LINE,
-    CMD.FEED,
-    CMD.FEED,
-    CMD.FEED,
-    CMD.PARTIAL_CUT,
+    ...customLabelLines(design, 'before_footer'),
+    line,
+    ...receiptEnding(design),
   );
 
-  return lines.join('\n');
+  return lines.filter((value) => value !== null && value !== undefined).join('\n');
 }
 
 // ── Night Shift Receipt Format ────────────────────────────────────────────────
 // Fires when an order placed after office hours (5 PM) is auto-recorded.
 // No office boy delivery — just prints for inventory/audit trail.
-function formatNightReceipt(order) {
+function formatNightReceipt(order, design) {
+  const line = receiptLine(design);
+  const dash = receiptLine(design, '-');
+  const isGuestBooked = isGuestBookedOrder(order);
   const qty      = parseInt(order.raw_text?.match(/^(\d+)x/)?.[1], 10) || 1;
   const item     = stripEmojis(order.parsed_item || order.raw_text || 'Unknown Item');
-  const employee = stripEmojis(order.parsed_employee_name || 'Unknown');
+  const employee = isGuestBooked ? 'GUEST' : stripEmojis(order.parsed_employee_name || 'Unknown');
   const location = stripEmojis(order.parsed_location || 'Not specified');
-  const orderId  = order.user_order_number || (order.id || '').slice(0, 8).toUpperCase();
+  const baseOrderId = order.user_order_number || (order.id || '').slice(0, 8).toUpperCase();
+  const orderId  = isGuestBooked
+    ? (String(baseOrderId).toUpperCase().startsWith('GUEST') ? baseOrderId : `GUEST-${baseOrderId}`)
+    : baseOrderId;
 
   const dateStr = new Date(order.created_at || Date.now()).toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
@@ -300,37 +404,41 @@ function formatNightReceipt(order) {
   const lines = [
     CMD.INIT,
     CMD.CENTER,
+    ...customLabelLines(design, 'before_header'),
     CMD.BOLD_ON,
     CMD.DOUBLE_ON,
-    'APPLYWIZZ',
+    design.header,
     CMD.DOUBLE_OFF,
-    'OFFICE PANTRY',
+    design.subheader,
     CMD.BOLD_OFF,
     CMD.FEED,
-    LINE,
+    line,
+    ...customLabelLines(design, 'after_header'),
     CMD.LEFT,
-    `Order  #${orderId}`,
-    `Date   ${dateStr}`,
-    DASH,
-    `${CMD.BOLD_ON}Employee${CMD.BOLD_OFF}  ${employee}`,
-    `${CMD.BOLD_ON}Location${CMD.BOLD_OFF}  ${location}`,
-    DASH,
+    design.context.order_number ? `Order  #${orderId}` : null,
+    design.context.date ? `Date   ${dateStr}` : null,
+    ...receiptBrandLines(order),
+    dash,
+    isGuestBooked && design.context.guest_marker ? `${CMD.BOLD_ON}Type     GUEST BOOKED${CMD.BOLD_OFF}` : null,
+    design.context.employee ? `${CMD.BOLD_ON}Employee${CMD.BOLD_OFF}  ${employee}` : null,
+    design.context.location ? `${CMD.BOLD_ON}Location${CMD.BOLD_OFF}  ${location}` : null,
+    dash,
     CMD.BOLD_ON,
-    ...itemLines,
+    ...(design.context.item ? itemLines : []),
     CMD.BOLD_OFF,
   ];
 
-  const quote = getQuote(order);
+  const quote = isGuestBooked ? '' : getQuote(order);
   if (quote) {
     lines.push(
-      DASH,
+      dash,
       CMD.CENTER,
       quote
     );
   }
 
   lines.push(
-    DASH,
+    dash,
     CMD.FEED,
     CMD.CENTER,
     CMD.BOLD_ON,
@@ -338,28 +446,30 @@ function formatNightReceipt(order) {
     'RECORDED ONLY',
     CMD.BOLD_OFF,
     'No delivery - Self Pickup',
-    'Applywizz Office Pantry',
-    LINE,
-    CMD.FEED,
-    CMD.FEED,
-    CMD.FEED,
-    CMD.PARTIAL_CUT,
+    design.footer,
+    ...customLabelLines(design, 'before_footer'),
+    line,
+    ...receiptEnding(design),
   );
 
-  return lines.join('\n');
+  return lines.filter((value) => value !== null && value !== undefined).join('\n');
 }
 
 // ── Print an order receipt ────────────────────────────────────────────────────
-function printReceipt(order) {
-  const receipt = formatReceipt(order);
+async function printReceipt(order) {
+  const receipt = formatReceipt(order, await getReceiptDesign());
   const orderId = order.user_order_number || (order.id || '').slice(0, 8);
   return sendToPrinter(receipt, `order-#${orderId}`);
 }
 
-function formatMealToken(booking, profile, isDuplicate = false) {
+function formatMealToken(booking, profile, isDuplicate = false, design) {
+  const line = receiptLine(design);
+  const dash = receiptLine(design, '-');
   const choiceLabel = { veg: 'VEG', non_veg: 'NON-VEG', egg: 'EGG' };
   const choiceEmoji = { veg: '🥬', non_veg: '🍗', egg: '🥚' };
-  const name     = stripEmojis(profile?.preferred_name || profile?.full_name || 'Employee');
+  const name     = stripEmojis(booking.is_guest && booking.guest_name
+    ? booking.guest_name
+    : profile?.full_name || 'Employee');
   const code     = stripEmojis(profile?.employee_code  || '--');
   const cabin    = stripEmojis(booking.cabin_name      || 'Unknown Cabin');
   const token    = stripEmojis(booking.token_number    || '---');
@@ -372,13 +482,15 @@ function formatMealToken(booking, profile, isDuplicate = false) {
   const lines = [
     CMD.INIT,
     CMD.CENTER,
+    ...customLabelLines(design, 'before_header'),
     CMD.BOLD_ON,
     CMD.DOUBLE_ON,
-    'APPLYWIZZ',
-    'MEAL TOKEN',
+    design.meal_header,
+    design.meal_subheader,
     CMD.DOUBLE_OFF,
     CMD.BOLD_OFF,
     CMD.FEED,
+    ...customLabelLines(design, 'after_header'),
   ];
 
   if (isDuplicate) {
@@ -393,31 +505,31 @@ function formatMealToken(booking, profile, isDuplicate = false) {
   }
 
   lines.push(
-    LINE,
+    line,
     CMD.LEFT,
-    `Token #  ${token}`,
-    `Date     ${dateStr}`,
+    design.context.order_number ? `Token #  ${token}` : null,
+    design.context.date ? `Date     ${dateStr}` : null,
     `Time     1:00 PM`,
     `Cabin    ${cabin}`,
-    DASH,
+    dash,
+    booking.is_guest ? 'GUEST BOOKED' : null,
     CMD.BOLD_ON,
     stripEmojis(`${choiceEmoji[booking.choice] || ''} ${choiceLabel[booking.choice] || booking.choice}`),
     booking.onion_slices && booking.onion_slices !== 'no onion' ? `Onion    ${booking.onion_slices.toUpperCase()}` : null,
     CMD.BOLD_OFF,
-    DASH,
-    `Name     ${name}`,
-    `Code     ${code}`,
-    booking.tokens_charged ? `Tokens   ${booking.tokens_charged}` : null,
-    DASH,
+    dash,
+    design.context.employee ? `Name     ${name}` : null,
+    design.context.employee ? `Code     ${code}` : null,
+    design.context.tokens && booking.tokens_charged ? `Tokens   ${booking.tokens_charged}` : null,
+    dash,
     CMD.CENTER,
     `Booked at ${new Date(booking.booked_at || Date.now()).toLocaleTimeString('en-IN', {
       hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
     })}`,
-    LINE,
-    CMD.FEED,
-    CMD.FEED,
-    CMD.FEED,
-    CMD.PARTIAL_CUT
+    line,
+    ...customLabelLines(design, 'before_footer'),
+    design.footer,
+    ...receiptEnding(design)
   );
 
   return lines.filter((l) => l !== null && l !== undefined).join('\n');
@@ -555,23 +667,49 @@ async function printOrderReceipt(order, { night = false, source = 'realtime' } =
     console.log(`[print-agent] Skipping historical pantry order ${order.id}`);
     return;
   }
-  if (printedIds.has(order.id)) return;
 
-  const orderId = order.user_order_number || (order.id || '').slice(0, 8);
+  // Regular cafeteria orders are printed through token_usage queue. If a token
+  // has already been marked as printed/printing, skip duplicates; otherwise allow
+  // the normal request flow to print once.
+  if (order.token_usage_id && source !== 'token_usage') {
+    try {
+      const { data: usage } = await supabase
+        .from('token_usage')
+        .select('print_status')
+        .eq('id', order.token_usage_id)
+        .maybeSingle();
+
+      if (usage && ['printed', 'printing'].includes(usage.print_status)) {
+        return;
+      }
+    } catch (err) {
+      console.error('[print-agent] Failed to check token_usage status before printing:', err.message);
+    }
+  }
+
+  const orderId = getOrderNumber(order);
+  const printClaim = claimOrderForPrinting(order);
+  if (!printClaim) {
+    console.log(`[print-agent] ⏭ Skipping duplicate/already-printing order #${orderId}`);
+    return;
+  }
+
   const label = night ? `night-#${orderId}` : `order-#${orderId}`;
 
   console.log(`[print-agent] 🔔 ${night ? 'Night shift recorded' : 'Order confirmed'} (${source}): #${orderId} — ${order.parsed_item || order.raw_text || 'order'}`);
 
   try {
     if (night) {
-      const receipt = formatNightReceipt(order);
+      const receipt = formatNightReceipt(order, await getReceiptDesign());
       await sendToPrinter(receipt, label);
     } else {
       await printReceipt(order);
     }
 
-    printedIds.add(order.id);
+    if (order.id) printedIds.add(order.id);
+    printedOrderNumbers.add(printClaim);
     savePrinted();
+    releaseOrderPrintClaim(printClaim);
     if (order.token_usage_id) {
       await supabase.from('token_usage').update({
         print_status: 'printed',
@@ -581,6 +719,7 @@ async function printOrderReceipt(order, { night = false, source = 'realtime' } =
     }
     console.log(`[print-agent] ✅ Printed ${label}`);
   } catch (err) {
+    releaseOrderPrintClaim(printClaim);
     console.error(`[print-agent] Failed to print ${label}:`, err.message);
     if (order.token_usage_id) {
       await supabase.from('token_usage').update({
@@ -590,6 +729,17 @@ async function printOrderReceipt(order, { night = false, source = 'realtime' } =
       }).eq('id', order.token_usage_id);
     }
   }
+}
+
+async function loadReceiptOrder(order) {
+  if (!order?.id || isGuestBookedOrder(order)) return order;
+  const { data, error } = await supabase
+    .from('requests')
+    .select('*')
+    .eq('id', order.id)
+    .maybeSingle();
+  if (error || !data) return order;
+  return data;
 }
 
 function startListening() {
@@ -618,7 +768,7 @@ function startListening() {
           (oldStatus === 'confirming' || oldStatus == null);
 
         if (becamePending) {
-          await printOrderReceipt(order, { source: 'realtime' });
+          await printOrderReceipt(await loadReceiptOrder(order), { source: 'realtime' });
         }
 
         const becameRecorded =
@@ -627,7 +777,7 @@ function startListening() {
           (oldStatus === 'confirming' || oldStatus == null);
 
         if (becameRecorded) {
-          await printOrderReceipt(order, { night: true, source: 'realtime' });
+          await printOrderReceipt(await loadReceiptOrder(order), { night: true, source: 'realtime' });
         }
       }
     )
@@ -671,15 +821,79 @@ function startListening() {
   return channel;
 }
 
-// ── Execute a meal print job ──────────────────────────────────────────────────
-async function executePrintJob(job) {
-  console.log(`[print-agent] ▶ Starting print job: ${job.cabin_name} (${job.print_type})`);
+// ── Meal token duplicate protection ───────────────────────────────────────────
+// Normal 11 AM batch printing is at-most-once per booking/token for a meal date.
+// We use the existing meal_bookings.print_count column as the persistent claim.
+// The claim is made BEFORE sending the receipt to the printer, which prevents a
+// second job/restart from printing the same token again after an uncertain print.
+// Explicit reprint jobs bypass this protection by design.
+async function claimMealBookingForPrint(booking) {
+  const { data: claimed, error } = await supabase
+    .from('meal_bookings')
+    .update({
+      print_count: 1,
+      last_printed_at: new Date().toISOString(),
+    })
+    .eq('id', booking.id)
+    .eq('meal_date', booking.meal_date)
+    .eq('cabin_name', booking.cabin_name)
+    .eq('print_count', 0)
+    .select('id, print_count, last_printed_at')
+    .maybeSingle();
 
-  // Mark as printing
+  if (error) {
+    console.error(`[print-agent] Failed to claim meal token ${booking.token_number || booking.id}:`, error.message);
+    return false;
+  }
+
+  if (!claimed) {
+    console.log(`[print-agent] ⏭ Skipping already printed/claimed meal token #${booking.token_number || booking.id}`);
+    return false;
+  }
+
+  return true;
+}
+
+async function rollbackMealBookingClaim(booking) {
+  // Only roll back our initial claim. If another process has already changed the
+  // count, leave it alone so we never accidentally erase a legitimate reprint.
   await supabase
+    .from('meal_bookings')
+    .update({
+      print_count: 0,
+      last_printed_at: null,
+    })
+    .eq('id', booking.id)
+    .eq('print_count', 1);
+}
+
+async function claimMealPrintJob(job) {
+  const { data: claimed, error } = await supabase
     .from('meal_print_jobs')
     .update({ status: 'printing', started_at: new Date().toISOString() })
-    .eq('id', job.id);
+    .eq('id', job.id)
+    .in('status', ['pending', 'failed'])
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[print-agent] Failed to claim meal print job ${job.id}:`, error.message);
+    return false;
+  }
+
+  if (!claimed) {
+    console.log(`[print-agent] Skipping already claimed meal print job ${job.id}`);
+    return false;
+  }
+
+  return true;
+}
+
+async function executePrintJob(job) {
+
+  console.log(`[print-agent] ▶ Starting print job: ${job.cabin_name} (${job.print_type})`);
+
+  if (!(await claimMealPrintJob(job))) return;
 
   try {
     let bookings = [];
@@ -688,7 +902,7 @@ async function executePrintJob(job) {
       // Single reprint for one employee
       const { data } = await supabase
         .from('meal_bookings')
-        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices, tokens_charged, booked_at')
+        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices, tokens_charged, booked_at, is_guest, guest_name')
         .eq('user_id', job.booking_user_id)
         .eq('meal_date', job.meal_date)
         .neq('choice', 'skip')
@@ -698,7 +912,7 @@ async function executePrintJob(job) {
       // Cabin batch (cabin_batch or manual_cabin)
       const { data } = await supabase
         .from('meal_bookings')
-        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices, tokens_charged, booked_at')
+        .select('id, user_id, choice, token_number, cabin_name, print_count, meal_date, onion_slices, tokens_charged, booked_at, is_guest, guest_name')
         .eq('meal_date', job.meal_date)
         .eq('cabin_name', job.cabin_name)
         .neq('choice', 'skip')
@@ -741,27 +955,64 @@ async function executePrintJob(job) {
     let printedCount = 0;
     const isDuplicate = job.print_type === 'reprint';
 
+    // For normal 11 AM cabin batches, de-duplicate by token number in the
+    // fetched data as an additional safety check. Reprints intentionally bypass it.
+    const seenTokens = new Set();
+
     for (const booking of bookings) {
+      const tokenKey = String(booking.token_number || booking.id || '').trim().toUpperCase();
+
+      if (!isDuplicate && tokenKey && seenTokens.has(tokenKey)) {
+        console.log(`[print-agent] ⏭ Skipping duplicate meal token #${tokenKey}`);
+        continue;
+      }
+      if (!isDuplicate && tokenKey) seenTokens.add(tokenKey);
+
+      // Explicit reprints are allowed to print even when print_count > 0.
+      // Normal 11 AM printing must successfully claim an unprinted booking first.
+      if (!isDuplicate) {
+        const claimed = await claimMealBookingForPrint(booking);
+        if (!claimed) continue;
+      }
+
       const profile = profileMap[booking.user_id] || null;
-      const receipt = formatMealToken(booking, profile, isDuplicate);
+      const receipt = formatMealToken(booking, profile, isDuplicate, await getReceiptDesign());
       const label   = `meal-token-${booking.token_number || booking.id.slice(0, 6)}`;
 
       try {
         await sendToPrinter(receipt, label);
         printedCount++;
-        await supabase
-          .from('meal_bookings')
-          .update({
-            print_count: (booking.print_count || 0) + 1,
-            last_printed_at: new Date().toISOString(),
-          })
-          .eq('id', booking.id);
+
+        // Reprints increment the existing count exactly as before.
+        if (isDuplicate) {
+          await supabase
+            .from('meal_bookings')
+            .update({
+              print_count: (booking.print_count || 0) + 1,
+              last_printed_at: new Date().toISOString(),
+            })
+            .eq('id', booking.id);
+        }
       } catch (err) {
+        // For a normal print, the claim is rolled back only when this attempt
+        // definitely failed. If the process dies after the printer accepted the
+        // data, the claim remains, preventing an accidental duplicate.
+        if (!isDuplicate) {
+          await rollbackMealBookingClaim(booking);
+        }
         console.error(`[print-agent] ❌ Failed to print ${label}:`, err.message);
       }
     }
 
-    if (printedCount < bookings.length) {
+    const expectedPrintCount = isDuplicate
+      ? bookings.length
+      : new Set(
+          bookings
+            .map((booking) => String(booking.token_number || booking.id || '').trim().toUpperCase())
+            .filter(Boolean)
+        ).size;
+
+    if (printedCount < expectedPrintCount) {
       await supabase
         .from('meal_print_jobs')
         .update({
@@ -829,21 +1080,27 @@ async function autoConfirmStuck() {
 // ── Auto-print any missed pending orders (startup & safety net) ──────────────
 async function printUnprintedPendingOrders() {
   try {
-    const { start, end } = currentIstDayBounds();
+    // Only replay recent missed orders. This prevents a restart from reprinting
+    // the entire morning queue when printed.json was deleted or the agent was down.
+    const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     const { data: pendingOrders, error } = await supabase
       .from('requests')
       .select('*')
       .eq('status', 'pending')
-      .gte('created_at', start)
-      .lt('created_at', end)
+      .gte('created_at', cutoff)
       .order('created_at', { ascending: true });
 
     if (error) throw error;
 
-    const unprinted = (pendingOrders || []).filter((order) => !printedIds.has(order.id));
+    const unprinted = (pendingOrders || []).filter((order) => {
+      const orderNumber = getOrderNumber(order);
+      return !printedIds.has(order.id) &&
+             !printedOrderNumbers.has(orderNumber) &&
+             !printingOrderNumbers.has(orderNumber);
+    });
     if (unprinted.length === 0) return;
 
-    console.log(`[print-agent] Found ${unprinted.length} unprinted pending orders for today...`);
+    console.log(`[print-agent] Found ${unprinted.length} recent unprinted pending orders...`);
     for (const order of unprinted) {
       await printOrderReceipt(order, { source: 'poll' });
     }
@@ -902,15 +1159,14 @@ let printerHealthy = true;
 
 async function drainTokenUsagePrints() {
   try {
-    const { start, end } = currentIstDayBounds();
+    const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     const { data: rows, error } = await supabase
       .from('token_usage')
       .select('*')
       .in('print_status', ['pending', 'failed'])
       .eq('print_retryable', true)
       .eq('reason', 'spend')
-      .gte('created_at', start)
-      .lt('created_at', end)
+      .gte('created_at', cutoff)
       .order('created_at', { ascending: true })
       .limit(25);
     if (error) throw error;
@@ -945,7 +1201,6 @@ async function drainTokenUsagePrints() {
       }
 
       try {
-        printedIds.delete(order.id);
         await printOrderReceipt(
           { ...order, tokens_charged: Math.abs(row.tokens_delta), token_usage_id: row.id },
           { source: 'token_usage' },

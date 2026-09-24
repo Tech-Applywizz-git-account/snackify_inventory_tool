@@ -14,6 +14,12 @@ const CATEGORY_EMOJI = {
   electronic_gadgets: '🔌',
 };
 
+function isCafeteriaItemOutOfStock(item) {
+  return [item.stock_today, item.stock_servings].some(
+    (stock) => stock !== null && stock !== undefined && Number(stock) <= 0
+  );
+}
+
 // ── OB Leave Form ─────────────────────────────────────────────────────────────
 function OBLeaveSection({ userId: _userId }) {
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -235,12 +241,15 @@ export default function StaffView() {
   const isStaff = ['office_boy', 'facility_manager', 'leadership', 'admin'].includes(profile?.role);
   const canAdd = profile?.role === 'leadership';
   const canAddPantryItem = ['leadership', 'admin', 'office_boy'].includes(profile?.role);
+  const canManageDiscounts = ['facility_manager', 'leadership', 'admin'].includes(profile?.role);
 
   const [items, setItems] = useState(null);
   const [officeSupplies, setOfficeSupplies] = useState([]);
   const [cafItems, setCafItems] = useState([]);
+  const [discountItems, setDiscountItems] = useState([]);
   const [err, setErr] = useState('');
   const [stockSaving, setStockSaving] = useState({});
+  const [discountSaving, setDiscountSaving] = useState({});
   const [activeSection, setActiveSection] = useState('pantry'); // 'pantry' | 'office_supplies'
   const [activeOfficeCat, setActiveOfficeCat] = useState('sanitary');
 
@@ -293,20 +302,49 @@ export default function StaffView() {
         .cafeteriaItems()
         .then((data) => { if (Array.isArray(data)) setCafItems(data); })
         .catch(() => {});
+      api
+        .cafeteriaDiscounts()
+        .then((data) => { if (Array.isArray(data)) setDiscountItems(data); })
+        .catch(() => {});
     }
   }, [isStaff]);
 
+  async function saveDiscount(item, changes) {
+    setDiscountSaving((state) => ({ ...state, [item.id]: true }));
+    try {
+      const updated = await api.updateCafeteriaDiscount(item.id, {
+        enabled: changes.enabled ?? item.discount_enabled,
+        discount_coins: changes.discount_coins ?? item.discount_coins,
+      });
+      setDiscountItems((current) => current.map((row) => row.id === item.id ? updated : row));
+      setCafItems((current) => current.map((row) => row.id === item.id ? updated : row));
+    } catch (error) {
+      alert(`Failed to save discount: ${error.message}`);
+    } finally {
+      setDiscountSaving((state) => ({ ...state, [item.id]: false }));
+    }
+  }
+
   // Mark an item as out of stock (stock_today = 0) or restore (stock_today = null)
   async function toggleStock(item) {
-    const isOut =
-      item.stock_today !== null && item.stock_today !== undefined && item.stock_today <= 0;
-    const newStock = isOut ? null : 0;
+    const isOut = isCafeteriaItemOutOfStock(item);
+    const update = isOut
+      ? { stock_today: null, stock_servings: null }
+      : { stock_today: 0, stock_servings: 0 };
 
     setStockSaving((s) => ({ ...s, [item.id]: true }));
     try {
-      const updated = await api.updateCafeteriaItem(item.id, { stock_today: newStock });
+      const updated = await api.updateCafeteriaItem(item.id, update);
       setCafItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, stock_today: updated.stock_today } : i))
+        prev.map((i) =>
+          i.id === item.id
+            ? {
+                ...i,
+                stock_today: updated.stock_today,
+                stock_servings: updated.stock_servings,
+              }
+            : i
+        )
       );
     } catch (e) {
       alert(`Failed: ${e.message}`);
@@ -318,11 +356,15 @@ export default function StaffView() {
   // Reset all items' stock to available
   async function resetAllStock() {
     if (!confirm('Mark all items as available again?')) return;
-    const outItems = (Array.isArray(cafItems) ? cafItems : []).filter((i) => i.stock_today !== null && i.stock_today <= 0);
+    const outItems = (Array.isArray(cafItems) ? cafItems : []).filter(isCafeteriaItemOutOfStock);
     for (const item of outItems) {
-      await api.updateCafeteriaItem(item.id, { stock_today: null }).catch(() => {});
+      await api
+        .updateCafeteriaItem(item.id, { stock_today: null, stock_servings: null })
+        .catch(() => {});
     }
-    setCafItems((prev) => prev.map((i) => ({ ...i, stock_today: null })));
+    setCafItems((prev) =>
+      prev.map((i) => ({ ...i, stock_today: null, stock_servings: null }))
+    );
   }
 
   async function handleAddItemSubmit(e) {
@@ -457,9 +499,7 @@ export default function StaffView() {
   }, {});
   const cafCats = ['beverage', 'food', 'snack', 'other'].filter((c) => cafGrouped[c]?.length);
 
-  const outOfStockCount = safeCafItems.filter(
-    (i) => i.stock_today !== null && i.stock_today !== undefined && i.stock_today <= 0
-  ).length;
+  const outOfStockCount = safeCafItems.filter(isCafeteriaItemOutOfStock).length;
 
   // Categories lists
   const pantryCats = ['consumables', 'coffee_materials', 'beverages', 'washroom', 'other'];
@@ -513,6 +553,67 @@ export default function StaffView() {
           {/* ── OB Leave Section ── */}
           {profile?.role === 'office_boy' && <OBLeaveSection userId={profile.id} />}
 
+          {discountItems.length > 0 && (
+            <div className="card overflow-hidden">
+              <div className="mb-4">
+                <h2 className="font-bold text-slate-900">Cafeteria coin discounts</h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Enabled discounts are subtracted for each unit when the customer has the required coin balance.
+                </p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[680px] text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-xs font-bold text-slate-500">
+                      <th className="px-2 py-2">Product</th>
+                      <th className="px-2 py-2 text-center">Enabled</th>
+                      <th className="px-2 py-2">Discount %</th>
+                      <th className="px-2 py-2">Discount coins</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {discountItems.map((item) => {
+                      const saving = discountSaving[item.id];
+                      return (
+                        <tr key={item.id} className="border-b border-slate-100 last:border-0">
+                          <td className="px-2 py-3 font-medium text-slate-800">
+                            {item.frontend_name || item.display_name || item.item_name}
+                            <span className="text-xs text-slate-400 ml-1">({item.original_token_price})</span>
+                          </td>
+                          <td className="px-2 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(item.discount_enabled)}
+                              disabled={!canManageDiscounts || saving}
+                              onChange={(event) => saveDiscount(item, { enabled: event.target.checked })}
+                              className="h-4 w-4 accent-emerald-600"
+                            />
+                          </td>
+                          <td className="px-2 py-3 font-bold text-emerald-700">{item.discount_percent || 0}%</td>
+                          <td className="px-2 py-3">
+                            <input
+                              type="number"
+                              min="0"
+                              max={item.original_token_price || 0}
+                              defaultValue={item.discount_coins || 0}
+                              disabled={!canManageDiscounts || saving}
+                              onBlur={(event) => {
+                                const value = Math.max(0, parseInt(event.target.value, 10) || 0);
+                                if (value !== Number(item.discount_coins || 0)) saveDiscount(item, { discount_coins: value });
+                              }}
+                              className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm focus:border-brand focus:outline-none disabled:bg-slate-50"
+                            />
+                            {saving && <span className="ml-2 text-xs text-slate-400">Saving...</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* ── Today's Cafeteria Stock (office boy controls) ── */}
           {isStaff && safeCafItems.length > 0 && (
             <div className="card space-y-4">
@@ -558,10 +659,7 @@ export default function StaffView() {
                   </div>
                   <div className="space-y-2">
                     {cafGrouped[cat].map((item) => {
-                      const isOut =
-                        item.stock_today !== null &&
-                        item.stock_today !== undefined &&
-                        item.stock_today <= 0;
+                      const isOut = isCafeteriaItemOutOfStock(item);
                       const saving = stockSaving[item.id];
                       return (
                         <div

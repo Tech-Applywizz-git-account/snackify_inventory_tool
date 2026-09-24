@@ -57,6 +57,7 @@ const navByRole = {
     '/settings',
   ],
   staff: ['/request', '/meals', '/my-meal-box', '/orders', '/settings'],
+  admin: ['/available', '/request', '/orders', '/settings'],
   office_boy: [
     '/request',
     '/meals',
@@ -98,6 +99,7 @@ const roleDisplay = {
   facility_manager: 'Facility Manager',
   finance: 'Accounts',
   office_boy: 'Office Boy',
+  admin: 'Admin',
   staff: 'Applywizzian',
 };
 

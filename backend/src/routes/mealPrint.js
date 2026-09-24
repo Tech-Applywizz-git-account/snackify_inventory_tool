@@ -366,6 +366,32 @@ router.post('/reprint-token', async (req, res, next) => {
       booking.cabin_name = resolvedCabin;
     }
 
+    // Repeated requests while a reprint is being handled are the same request.
+    // A completed reprint remains eligible for a later deliberate reprint.
+    const { data: existingJob, error: existingJobErr } = await supabaseAdmin
+      .from('meal_print_jobs')
+      .select('*')
+      .eq('meal_date', mealDate)
+      .eq('print_type', 'reprint')
+      .eq('booking_user_id', targetUserId)
+      .in('status', ['pending', 'printing'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingJobErr) throw existingJobErr;
+    if (existingJob) {
+      return res.json({
+        ok: true,
+        job: existingJob,
+        alreadyQueued: true,
+        booking: {
+          ...booking,
+          is_duplicate: (booking.print_count || 0) > 0,
+        },
+      });
+    }
+
     // Insert a reprint job — print agent handles the actual printing
     const { data: job, error: jobErr } = await supabaseAdmin
       .from('meal_print_jobs')

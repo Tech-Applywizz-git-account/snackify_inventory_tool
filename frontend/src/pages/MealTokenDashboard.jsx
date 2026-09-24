@@ -47,6 +47,7 @@ function CabinCard({ cabin, date, onTrigger, onReprint }) {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [triggering, setTriggering] = useState(false);
+  const [reprintingUserId, setReprintingUserId] = useState(null);
 
   const statusConf = STATUS_CONFIG[cabin.status] || STATUS_CONFIG.not_scheduled;
   const StatusIcon = statusConf.icon;
@@ -347,14 +348,24 @@ function CabinCard({ cabin, date, onTrigger, onReprint }) {
                         )}
                       </div>
                       <button
-                        onClick={() => onReprint(b.user_id, cabin.cabin_name)}
+                        onClick={async () => {
+                          if (reprintingUserId) return;
+                          setReprintingUserId(b.user_id);
+                          try {
+                            await onReprint(b.user_id, cabin.cabin_name);
+                          } finally {
+                            setReprintingUserId(null);
+                          }
+                        }}
+                        disabled={reprintingUserId === b.user_id}
                         title="Reprint this employee's token"
                         style={{
                           padding: '4px 8px',
                           borderRadius: 6,
                           border: '1.5px solid #E2E8F0',
                           background: 'white',
-                          cursor: 'pointer',
+                          cursor: reprintingUserId === b.user_id ? 'not-allowed' : 'pointer',
+                          opacity: reprintingUserId === b.user_id ? 0.6 : 1,
                           fontSize: 10,
                           color: '#64748B',
                           display: 'flex',
@@ -362,7 +373,7 @@ function CabinCard({ cabin, date, onTrigger, onReprint }) {
                           gap: 4,
                         }}
                       >
-                        <Printer size={10} /> Reprint
+                        <Printer size={10} /> {reprintingUserId === b.user_id ? 'Sending...' : 'Reprint'}
                       </button>
                     </div>
                   );

@@ -69,7 +69,11 @@ function formatReceiptDate(iso) {
 }
 
 function getOrderNumber(order) {
-  return order.user_order_number || (order.id || '').slice(0, 8).toUpperCase();
+  const baseOrderNumber = order.user_order_number || (order.id || '').slice(0, 8).toUpperCase();
+  if (!isGuestBookedOrder(order)) return baseOrderNumber;
+  return String(baseOrderNumber).toUpperCase().startsWith('GUEST')
+    ? baseOrderNumber
+    : `GUEST-${baseOrderNumber}`;
 }
 
 function getQty(order) {
@@ -145,6 +149,10 @@ function getQuote(order) {
   return stripEmojis(list[Math.floor(Math.random() * list.length)]);
 }
 
+function isGuestBookedOrder(order) {
+  return String(order?.notes || '').trim().toUpperCase().includes('GUEST_BOOKED');
+}
+
 // -- Print one order receipt ----------------------------------
 async function printReceipt(order) {
   const printer = new ThermalPrinter({
@@ -160,11 +168,11 @@ async function printReceipt(order) {
   const orderId = getOrderNumber(order);
   const qty = getQty(order);
   const item = stripEmojis(order.parsed_item || order.raw_text || 'Unknown Item');
-  const employee = getEmployeeName(order);
+  const employee = isGuestBookedOrder(order) ? 'GUEST' : getEmployeeName(order);
   const location = stripEmojis(order.parsed_location || 'Not specified');
   const dateStr = formatReceiptDate(order.created_at);
   const note = stripEmojis(order.instruction || '');
-  const quote = getQuote(order);
+  const quote = isGuestBookedOrder(order) ? '' : getQuote(order);
 
   // Header
   printer.alignCenter();
@@ -182,6 +190,11 @@ async function printReceipt(order) {
   printer.println(`Order  #${orderId}`);
   printer.println(`Date   ${dateStr}`);
   printer.drawLine();
+  if (isGuestBookedOrder(order)) {
+    printer.bold(true);
+    printer.println('Type      GUEST BOOKED');
+    printer.bold(false);
+  }
   printer.println(`Employee  ${employee}`);
   printer.println(`Location  ${location}`);
   printer.drawLine();

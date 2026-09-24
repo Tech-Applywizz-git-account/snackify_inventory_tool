@@ -1,0 +1,14 @@
+{
+  "name": "snackify-office-print-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Office LAN gateway for the unchanged Snackify print agent",
+  "scripts": {
+    "install-agent": "npm --prefix ../print-agent install --omit=dev",
+    "start": "node gateway.js",
+    "test-print": "node test-print.js",
+    "test-design": "node --test receiptDesign.test.js",
+    "validate-design": "node --input-type=module -e \"import('./receiptDesign.js').then(({normalizeReceiptDesign}) => console.log(JSON.stringify(normalizeReceiptDesign({paper_width:'58mm', custom_label:{enabled:true,text:'TEST'}}), null, 2)))\""
+  }
+}
