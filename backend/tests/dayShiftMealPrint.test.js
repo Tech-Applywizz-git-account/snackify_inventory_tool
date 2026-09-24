@@ -7,6 +7,7 @@ import {
   filterNightMealBookings,
   getISTDateString,
   getNextWorkingMealDate,
+  getReportRecipientEmails,
   resolveBookingCabin,
 } from '../src/routes/cron.js';
 
@@ -100,6 +101,17 @@ test('night-shift report payload excludes day-shift users and includes email-rea
   assert.equal(result.skippedCount, 1);
   assert.equal(result.totalNotBooked, 0);
   assert.equal(result.unbookedNames.length, 0);
+});
+
+test('meal report recipients include admin accounts so Jagan can receive the report', () => {
+  const profiles = [
+    { id: 'lead', email: 'lead@company.com', role: 'leadership' },
+    { id: 'admin', email: 'jagan@company.com', role: 'admin' },
+    { id: 'staff', email: 'user@company.com', role: 'staff' },
+    { id: 'facility', email: null, role: 'facility_manager' },
+  ];
+
+  assert.deepEqual(getReportRecipientEmails(profiles), ['lead@company.com', 'jagan@company.com']);
 });
 
 test('night-shift report resolves the current report date in IST', () => {

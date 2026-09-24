@@ -143,6 +143,16 @@ export function getNextWorkingMealDate(date = new Date()) {
   ].join('-');
 }
 
+export function getReportRecipientEmails(activeProfiles) {
+  const allowedRoles = new Set(['leadership', 'office_boy', 'facility_manager', 'admin']);
+
+  return [...new Set(
+    (activeProfiles || [])
+      .filter((profile) => profile.email && allowedRoles.has(profile.role))
+      .map((profile) => profile.email)
+  )];
+}
+
 // ── Helper: check if today is a working day (Mon-Fri) ────────────────────────
 function isWorkingDayToday() {
   const now = new Date();
@@ -583,10 +593,7 @@ router.post('/meal-booking-night-shift-report', async (req, res, next) => {
 
     if (profilesErr) throw profilesErr;
 
-    const reportRecipients = activeProfiles
-      .filter((profile) => profile.email && ['leadership', 'office_boy', 'facility_manager'].includes(profile.role))
-      .map((profile) => profile.email);
-    const uniqueReportRecipients = [...new Set(reportRecipients)];
+    const uniqueReportRecipients = getReportRecipientEmails(activeProfiles);
 
     if (uniqueReportRecipients.length > 0) {
       sendMealNightReportEmail(uniqueReportRecipients, {
@@ -605,7 +612,7 @@ router.post('/meal-booking-night-shift-report', async (req, res, next) => {
     const { data: mappings, error: mapErr } = await supabaseAdmin
       .from('telegram_user_map')
       .select('telegram_chat_id, profiles!user_id!inner(role)')
-      .in('profiles.role', ['office_boy', 'facility_manager', 'leadership']);
+      .in('profiles.role', ['office_boy', 'facility_manager', 'leadership', 'admin']);
 
     if (mapErr) throw mapErr;
 
@@ -910,10 +917,7 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
     if (req.query.testEmail || req.body?.testEmail) {
       uniqueReportRecipients = [req.query.testEmail || req.body.testEmail];
     } else {
-      const reportRecipients = activeProfiles
-        .filter((p) => p.email && ['leadership', 'office_boy', 'facility_manager'].includes(p.role))
-        .map((p) => p.email);
-      uniqueReportRecipients = [...new Set(reportRecipients)];
+      uniqueReportRecipients = getReportRecipientEmails(activeProfiles);
     }
 
     if (uniqueReportRecipients.length > 0) {
@@ -934,11 +938,11 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
     // Telegram stats exclude skips
     const telegramTotal = bookedCount;
 
-    // Fetch mappings for office_boy, facility_manager, and leadership
+    // Fetch mappings for office_boy, facility_manager, leadership, and admin
     const { data: mappings, error: mapErr } = await supabaseAdmin
       .from('telegram_user_map')
       .select('telegram_chat_id, profiles!user_id!inner(role)')
-      .in('profiles.role', ['office_boy', 'facility_manager', 'leadership']);
+      .in('profiles.role', ['office_boy', 'facility_manager', 'leadership', 'admin']);
 
     if (mapErr) throw mapErr;
 
