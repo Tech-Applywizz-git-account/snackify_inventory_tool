@@ -100,6 +100,21 @@ export function countMealBookings(bookings) {
   return { counts, others, bookedCount, skippedCount: counts.skip };
 }
 
+export function buildNightShiftReportData(bookings, preferences, dateLabel) {
+  const nightShiftBookings = filterNightMealBookings(bookings, preferences);
+  const { counts, others, bookedCount, skippedCount } = countMealBookings(nightShiftBookings);
+
+  return {
+    counts,
+    others,
+    bookedCount,
+    skippedCount,
+    totalNotBooked: 0,
+    unbookedNames: [],
+    dateLabel,
+  };
+}
+
 // ── Helper: get IST date string "YYYY-MM-DD" ─────────────────────────────────
 export function getISTDateString(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -550,8 +565,42 @@ router.post('/meal-booking-night-shift-report', async (req, res, next) => {
     if (bookingsErr) throw bookingsErr;
     if (preferencesErr) throw preferencesErr;
 
-    const nightShiftBookings = filterNightMealBookings(bookings, preferences);
-    const { counts, others, bookedCount, skippedCount } = countMealBookings(nightShiftBookings);
+    const dateLabel = new Date(`${mealDate}T00:00:00+05:30`).toLocaleDateString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+
+    const reportData = buildNightShiftReportData(bookings, preferences, dateLabel);
+    const { counts, others, bookedCount, skippedCount } = reportData;
+
+    const { data: activeProfiles, error: profilesErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email, role')
+      .eq('active', true);
+
+    if (profilesErr) throw profilesErr;
+
+    const reportRecipients = activeProfiles
+      .filter((profile) => profile.email && ['leadership', 'office_boy', 'facility_manager'].includes(profile.role))
+      .map((profile) => profile.email);
+    const uniqueReportRecipients = [...new Set(reportRecipients)];
+
+    if (uniqueReportRecipients.length > 0) {
+      sendMealNightReportEmail(uniqueReportRecipients, {
+        mealDate: dateLabel,
+        totalBooked: bookedCount,
+        totalSkipped: skippedCount,
+        totalNotBooked: 0,
+        vegCount: counts.veg,
+        nonVegCount: counts.non_veg,
+        eggCount: counts.egg,
+        others,
+        unbookedNames: [],
+      }).catch((e) => console.error('[MealNightReport] Email sending failed:', e.message));
+    }
 
     const { data: mappings, error: mapErr } = await supabaseAdmin
       .from('telegram_user_map')
@@ -561,13 +610,6 @@ router.post('/meal-booking-night-shift-report', async (req, res, next) => {
     if (mapErr) throw mapErr;
 
     const chatIds = [...new Set(mappings?.map((mapping) => mapping.telegram_chat_id).filter(Boolean) || [])];
-    const dateLabel = new Date(`${mealDate}T00:00:00+05:30`).toLocaleDateString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
 
     let msg = `🌙 *Night Shift Meal Count*\n`;
     msg += `🕙 Reported: *${reportDate} at 10:15 PM IST*\n`;
