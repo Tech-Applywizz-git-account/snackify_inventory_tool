@@ -66,8 +66,9 @@ export default function MealReviewGate() {
       try {
         const data = await api.mealReviewStatus();
         setStatus(data);
-        setWindowClosed(!data?.in_window);
-        setOpen(Boolean(data?.in_window));
+        const canOpen = Boolean(data?.can_review ?? (data?.in_window && data?.has_booked_meal));
+        setWindowClosed(!data?.in_window || !data?.has_booked_meal);
+        setOpen(canOpen);
       } catch (err) {
         console.warn('[meal-review] unable to open review', err?.message || err);
       }
@@ -116,7 +117,8 @@ export default function MealReviewGate() {
     );
   }
 
-  const canReview = status?.in_window && !status?.already_reviewed;
+  const canReview =
+    status?.can_review ?? (status?.in_window && status?.has_booked_meal && !status?.already_reviewed);
 
   return (
     <>
