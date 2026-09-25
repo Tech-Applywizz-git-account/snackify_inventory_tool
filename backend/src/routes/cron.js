@@ -684,7 +684,10 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
     const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const currentHour = istNow.getHours();
     const currentMinute = istNow.getMinutes();
-    const isFinal = currentHour > 17 || (currentHour === 17 && currentMinute >= 15);
+    const isNightShiftReminderWindow = [18, 19, 20, 21, 22].includes(currentHour);
+    const isFinal = currentHour === 22;
+    const isDayShiftFinal = currentHour > 17 || (currentHour === 17 && currentMinute >= 15);
+    const isFinalReminder = isNightShiftReminderWindow ? isFinal : isDayShiftFinal;
 
     const istTomorrow = new Date(istNow);
     istTomorrow.setDate(istTomorrow.getDate() + 1);
@@ -706,7 +709,7 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
       });
     }
 
-    // 3. Query active profiles with emails
+    // 3. Query active profiles with emails and their shift preferences.
     const { data: profiles, error: profilesErr } = await supabaseAdmin
       .from('profiles')
       .select('id, email, full_name')
@@ -715,23 +718,86 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
 
     if (profilesErr) throw profilesErr;
 
-    // 4. Query meal bookings for tomorrow
+    const { data: shiftPreferences, error: shiftPreferencesErr } = await supabaseAdmin
+      .from('employee_cafeteria_preferences')
+      .select('user_id, shift');
+
+    if (shiftPreferencesErr) throw shiftPreferencesErr;
+
+    const shiftByUserId = new Map(
+      (shiftPreferences || [])
+        .filter((preference) => preference && preference.user_id)
+        .map((preference) => [preference.user_id, preference.shift || 'morning'])
+    );
+
+    const nightShiftUserIds = new Set(
+      [...shiftByUserId.entries()]
+        .filter(([, shift]) => shift === 'night')
+        .map(([userId]) => userId)
+    );
+
+    const targetProfiles = isNightShiftReminderWindow
+      ? profiles.filter((profile) => nightShiftUserIds.has(profile.id))
+      : profiles.filter((profile) => !nightShiftUserIds.has(profile.id));
+
+    if (targetProfiles.length === 0) {
+      return res.json({
+        ok: true,
+        message: isNightShiftReminderWindow
+          ? 'No active night-shift users are pending for tomorrow.'
+          : 'All active day-shift users have already booked their meals for tomorrow.',
+        emailsSent: 0,
+      });
+    }
+
+    // 4. Query meal bookings for tomorrow, including exact booking timestamps so
+    // late-evening bookings can suppress later reminder sends for the same user.
     const { data: bookings, error: bookingsErr } = await supabaseAdmin
       .from('meal_bookings')
-      .select('user_id')
+      .select('user_id, booked_at')
       .eq('meal_date', tomorrowStr);
 
     if (bookingsErr) throw bookingsErr;
 
-    const bookedUserIds = new Set(bookings.map((b) => b.user_id));
+    const bookedUserIds = new Set((bookings || []).filter((booking) => booking?.user_id).map((booking) => booking.user_id));
 
-    // 5. Filter users who haven't booked
-    const nonBookedUsers = profiles.filter((p) => !bookedUserIds.has(p.id));
+    const bookingByUser = new Map();
+    for (const booking of bookings || []) {
+      if (!booking?.user_id || !booking?.booked_at) continue;
+      const existingBooking = bookingByUser.get(booking.user_id);
+      if (!existingBooking || new Date(booking.booked_at) > new Date(existingBooking.booked_at)) {
+        bookingByUser.set(booking.user_id, booking);
+      }
+    }
+
+    function isLateNightBookingAfterCurrentTime(booking) {
+      if (!booking?.booked_at || !isNightShiftReminderWindow) return false;
+
+      const bookedAt = new Date(booking.booked_at);
+      const istBookedAt = new Date(bookedAt.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const bookedHour = istBookedAt.getHours();
+      const bookedMinute = istBookedAt.getMinutes();
+      const bookedAfterSixPM = bookedHour >= 18;
+
+      if (!bookedAfterSixPM) return false;
+
+      return currentHour > bookedHour || (currentHour === bookedHour && currentMinute >= bookedMinute);
+    }
+
+    // 5. Filter users who haven't booked, while respecting the strict time-based
+    // night-shift rule: a booking after 6 PM suppresses any later reminder run.
+    const nonBookedUsers = targetProfiles.filter((p) => {
+      if (bookedUserIds.has(p.id)) return false;
+      if (!isNightShiftReminderWindow) return true;
+      return !isLateNightBookingAfterCurrentTime(bookingByUser.get(p.id));
+    });
 
     if (nonBookedUsers.length === 0) {
       return res.json({
         ok: true,
-        message: 'All active users have already booked their meals for tomorrow.',
+        message: isNightShiftReminderWindow
+          ? 'All active night-shift users have already booked their meals for tomorrow.'
+          : 'All active day-shift users have already booked their meals for tomorrow.',
         emailsSent: 0,
       });
     }
@@ -746,13 +812,29 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
         // worker is processing the earlier recipients.
         const { data: latestBooking, error: latestBookingErr } = await supabaseAdmin
           .from('meal_bookings')
-          .select('id')
+          .select('id, booked_at')
           .eq('user_id', user.id)
           .eq('meal_date', tomorrowStr)
           .maybeSingle();
 
         if (latestBookingErr) throw latestBookingErr;
         if (latestBooking) {
+          const isLateNightBookingAfterCurrentTime = (() => {
+            if (!isNightShiftReminderWindow) return false;
+            const latestBookedAt = new Date(latestBooking.booked_at);
+            const istBookedAt = new Date(latestBookedAt.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+            const bookedHour = istBookedAt.getHours();
+            const bookedMinute = istBookedAt.getMinutes();
+            const bookedAfterSixPM = bookedHour >= 18;
+            if (!bookedAfterSixPM) return false;
+            return currentHour > bookedHour || (currentHour === bookedHour && currentMinute >= bookedMinute);
+          })();
+
+          if (isLateNightBookingAfterCurrentTime) {
+            console.log(`[MealReminder] Skipping ${user.email}; late night booking after 6 PM already exists for ${tomorrowStr}`);
+            continue;
+          }
+
           console.log(`[MealReminder] Skipping ${user.email}; meal already booked for ${tomorrowStr}`);
           continue;
         }
@@ -760,7 +842,7 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
         let lastError;
         for (let attempt = 1; attempt <= 3; attempt += 1) {
           try {
-            await sendMealBookingReminderEmail(user.email, tomorrowStr, isFinal);
+            await sendMealBookingReminderEmail(user.email, tomorrowStr, isFinalReminder);
             lastError = null;
             break;
           } catch (e) {

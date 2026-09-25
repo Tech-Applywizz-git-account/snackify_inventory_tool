@@ -23,6 +23,9 @@ describe('Meal Booking Reminder Cron Endpoint', () => {
     fetchCalls = [];
     dbQueries = [];
     originalDate = globalThis.Date;
+    process.env.MICROSOFT_TENANT_ID = 'tenant';
+    process.env.MICROSOFT_CLIENT_ID = 'client';
+    process.env.MICROSOFT_CLIENT_SECRET = 'secret';
 
     // Mock fetch for token exchange and email sending
     globalThis.fetch = async (url, options = {}) => {
@@ -405,6 +408,185 @@ describe('Meal Booking Reminder Cron Endpoint', () => {
       dbQueries.push(table);
       if (table === 'profiles') {
         return makeMockChain(mockProfiles);
+      }
+      if (table === 'meal_bookings') {
+        return makeMockChain((filters) => {
+          const userFilter = filters.find((filter) => filter[0] === 'eq' && filter[1] === 'user_id');
+          return userFilter
+            ? mockBookings.filter((booking) => booking.user_id === userFilter[2])
+            : mockBookings;
+        });
+      }
+      return makeMockChain([]);
+    };
+
+    const res = await postToApp(
+      app,
+      '/api/cron/meal-booking-reminder',
+      {},
+      { 'x-cron-secret': 'app_wizz_cron_secret_change_in_production' }
+    );
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.emailsSent, 0);
+
+    const sendMailCalls = fetchCalls.filter((c) => c.url.includes('sendMail'));
+    assert.equal(sendMailCalls.length, 0);
+  });
+
+  it('sends night-shift reminders at the configured evening times and uses the no-reply sender', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/cron', cronRouter);
+
+    globalThis.Date = class extends originalDate {
+      constructor(...args) {
+        if (args.length === 0) {
+          return new originalDate('2026-07-07T18:00:00+05:30');
+        }
+        return new originalDate(...args);
+      }
+    };
+
+    const mockProfiles = [
+      { id: 'night-user', email: 'night.user@applywizz.ai', full_name: 'Night User' },
+      { id: 'day-user', email: 'day.user@applywizz.ai', full_name: 'Day User' },
+    ];
+    const mockBookings = [];
+    const mockPreferences = [
+      { user_id: 'night-user', shift: 'night' },
+      { user_id: 'day-user', shift: 'morning' },
+    ];
+
+    supabaseAdmin.from = (table) => {
+      dbQueries.push(table);
+      if (table === 'profiles') {
+        return makeMockChain(mockProfiles);
+      }
+      if (table === 'employee_cafeteria_preferences') {
+        return makeMockChain(mockPreferences);
+      }
+      if (table === 'meal_bookings') {
+        return makeMockChain((filters) => {
+          const userFilter = filters.find((filter) => filter[0] === 'eq' && filter[1] === 'user_id');
+          return userFilter
+            ? mockBookings.filter((booking) => booking.user_id === userFilter[2])
+            : mockBookings;
+        });
+      }
+      return makeMockChain([]);
+    };
+
+    const res = await postToApp(
+      app,
+      '/api/cron/meal-booking-reminder',
+      {},
+      { 'x-cron-secret': 'app_wizz_cron_secret_change_in_production' }
+    );
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.queuedCount, 1);
+    assert.equal(res.body.emailsSent, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const sendMailCalls = fetchCalls.filter((c) => c.url.includes('sendMail'));
+    assert.equal(sendMailCalls.length, 1);
+    assert.ok(sendMailCalls[0].url.includes('support@applywizz.ai'));
+    assert.ok(JSON.parse(sendMailCalls[0].options.body).message.toRecipients[0].emailAddress.address === 'night.user@applywizz.ai');
+  });
+
+  it('does not resend night-shift reminders after a booking is made after 6pm', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/cron', cronRouter);
+
+    globalThis.Date = class extends originalDate {
+      constructor(...args) {
+        if (args.length === 0) {
+          return new originalDate('2026-07-07T19:00:00+05:30');
+        }
+        return new originalDate(...args);
+      }
+    };
+
+    const mockProfiles = [
+      { id: 'night-user', email: 'night.user@applywizz.ai', full_name: 'Night User' },
+    ];
+    const mockBookings = [
+      { id: 'booking-1', user_id: 'night-user', choice: 'veg', booked_at: '2026-07-07T18:08:00+05:30' },
+    ];
+    const mockPreferences = [
+      { user_id: 'night-user', shift: 'night' },
+    ];
+
+    supabaseAdmin.from = (table) => {
+      dbQueries.push(table);
+      if (table === 'profiles') {
+        return makeMockChain(mockProfiles);
+      }
+      if (table === 'employee_cafeteria_preferences') {
+        return makeMockChain(mockPreferences);
+      }
+      if (table === 'meal_bookings') {
+        return makeMockChain((filters) => {
+          const userFilter = filters.find((filter) => filter[0] === 'eq' && filter[1] === 'user_id');
+          return userFilter
+            ? mockBookings.filter((booking) => booking.user_id === userFilter[2])
+            : mockBookings;
+        });
+      }
+      return makeMockChain([]);
+    };
+
+    const res = await postToApp(
+      app,
+      '/api/cron/meal-booking-reminder',
+      {},
+      { 'x-cron-secret': 'app_wizz_cron_secret_change_in_production' }
+    );
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.emailsSent, 0);
+
+    const sendMailCalls = fetchCalls.filter((c) => c.url.includes('sendMail'));
+    assert.equal(sendMailCalls.length, 0);
+  });
+
+  it('does not send 9pm and 10pm reminders when a user books at 8pm', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/cron', cronRouter);
+
+    globalThis.Date = class extends originalDate {
+      constructor(...args) {
+        if (args.length === 0) {
+          return new originalDate('2026-07-07T21:00:00+05:30');
+        }
+        return new originalDate(...args);
+      }
+    };
+
+    const mockProfiles = [
+      { id: 'night-user', email: 'night.user@applywizz.ai', full_name: 'Night User' },
+    ];
+    const mockBookings = [
+      { id: 'booking-1', user_id: 'night-user', choice: 'veg', booked_at: '2026-07-07T20:15:00+05:30' },
+    ];
+    const mockPreferences = [
+      { user_id: 'night-user', shift: 'night' },
+    ];
+
+    supabaseAdmin.from = (table) => {
+      dbQueries.push(table);
+      if (table === 'profiles') {
+        return makeMockChain(mockProfiles);
+      }
+      if (table === 'employee_cafeteria_preferences') {
+        return makeMockChain(mockPreferences);
       }
       if (table === 'meal_bookings') {
         return makeMockChain((filters) => {

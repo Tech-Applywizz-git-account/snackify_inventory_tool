@@ -10,9 +10,13 @@
  * from the environment (never hard-coded, never sent to the browser).
  */
 
-const TENANT_ID = process.env.MICROSOFT_TENANT_ID;
-const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
-const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
+function getGraphCredentials() {
+  return {
+    tenantId: process.env.MICROSOFT_TENANT_ID,
+    clientId: process.env.MICROSOFT_CLIENT_ID,
+    clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
+  };
+}
 
 // Simple in-memory token cache so we don't fetch a new token on every login.
 let cachedToken = null;
@@ -20,18 +24,20 @@ let cachedExpiry = 0; // epoch ms
 
 /** True when Graph credentials are configured. */
 export function isGraphConfigured() {
-  return Boolean(TENANT_ID && CLIENT_ID && CLIENT_SECRET);
+  const { tenantId, clientId, clientSecret } = getGraphCredentials();
+  return Boolean(tenantId && clientId && clientSecret);
 }
 
 /** Get (and cache) an app-only access token for Microsoft Graph. */
 async function getGraphToken() {
+  const { tenantId, clientId, clientSecret } = getGraphCredentials();
   const now = Date.now();
   if (cachedToken && now < cachedExpiry) return cachedToken;
 
-  const url = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`;
+  const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
   const body = new URLSearchParams({
-    client_id: CLIENT_ID,
-    client_secret: CLIENT_SECRET,
+    client_id: clientId,
+    client_secret: clientSecret,
     scope: 'https://graph.microsoft.com/.default',
     grant_type: 'client_credentials',
   });
@@ -758,7 +764,7 @@ export async function sendMealBookingConfirmationEmail(email, name, choice, meal
     </div>
   `;
 
-  const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+  const res = await fetch('https://graph.microsoft.com/v1.0/users/noreply@applywizz.ai/sendMail', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
