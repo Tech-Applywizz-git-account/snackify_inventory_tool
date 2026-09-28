@@ -36,7 +36,7 @@ function Protected({ children, allow }) {
   if (!session) return <Navigate to="/login" replace />;
   if (profileLoading) return <div className="p-8 text-slate-500">Loading...</div>;
   // Require MFA (AAL2) — if only AAL1, send back to login for TOTP step
-  // Leadership can also authenticate through the server-side admin password.
+  // Leadership can also sign in with their Supabase Auth account password.
   if (aal !== 'aal2' && profile?.role !== 'leadership') return <Navigate to="/login" replace />;
   if (allow && profile && !allow.includes(profile.role)) {
     return <div className="p-8 text-rose-600">Access denied for role: {profile.role}</div>;
