@@ -103,6 +103,35 @@ test('night-shift report payload excludes day-shift users and includes email-rea
   assert.equal(result.unbookedNames.length, 0);
 });
 
+test('night-shift report lists active night users who have not booked', () => {
+  const bookings = [
+    { user_id: 'night-user-1', choice: 'veg' },
+  ];
+  const preferences = [
+    { user_id: 'day-user', shift: 'morning' },
+    { user_id: 'night-user-1', shift: 'night' },
+    { user_id: 'night-user-2', shift: 'night' },
+    { user_id: 'night-user-3', shift: 'night' },
+  ];
+  const activeProfiles = [
+    { id: 'day-user', full_name: 'Day Person' },
+    { id: 'night-user-1', full_name: 'Night One' },
+    { id: 'night-user-2', full_name: 'Night Two' },
+    { id: 'night-user-3', full_name: 'Night Three' },
+  ];
+
+  const result = buildNightShiftReportData(
+    bookings,
+    preferences,
+    'Monday, 28 September 2026',
+    activeProfiles
+  );
+
+  assert.equal(result.bookedCount, 1);
+  assert.equal(result.totalNotBooked, 2);
+  assert.deepEqual(result.unbookedNames, ['Night Three', 'Night Two']);
+});
+
 test('meal report recipients include admin accounts so Jagan can receive the report', () => {
   const profiles = [
     { id: 'lead', email: 'lead@company.com', role: 'leadership' },

@@ -94,15 +94,23 @@ function buildApp({ user, supabaseAdmin }) {
   return app;
 }
 
-async function request(app, method, path) {
+async function request(app, method, path, body) {
+  const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   const req = new Readable({
     read() {
+      if (payload) this.push(payload);
       this.push(null);
     },
   });
   req.url = path;
   req.method = method;
-  req.headers = {};
+  req.headers =
+    body === undefined
+      ? {}
+      : {
+          'content-type': 'application/json',
+          'content-length': String(payload.length),
+        };
   req.header = (name) => req.headers[name.toLowerCase()];
   const socket = new PassThrough();
   req.connection = socket;
@@ -310,5 +318,80 @@ describe('POST /api/admin/users/:userId/reset-authenticator', () => {
     assert.equal(response.status, 403);
     assert.deepEqual(supabaseAdmin.getDeleteFactorCalls(), []);
     assert.equal(supabaseAdmin.getAuditLogRows().length, 0);
+  });
+});
+
+describe('PATCH /api/admin/users/:id/active', () => {
+  const leadershipUser = {
+    id: 'leader-1',
+    email: 'leader@applywizz.ai',
+    role: 'leadership',
+  };
+
+  function makeSupabaseAdminForActive({ existing = { id: 'user-1', full_name: 'Alex', role: 'staff', active: true } } = {}) {
+    const auditLogRows = [];
+    let updatedActive = existing.active;
+
+    return {
+      auth: { admin: { listUsers: async () => ({ data: { users: [] }, error: null }) } },
+      from: (table) => {
+        if (table === 'audit_logs') {
+          return {
+            insert: (payload) => {
+              auditLogRows.push(payload);
+              return makeChain({});
+            },
+          };
+        }
+        if (table === 'profiles') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: { ...existing, active: updatedActive }, error: null }),
+              }),
+            }),
+            update: (payload) => {
+              updatedActive = payload.active;
+              return {
+                eq: () => ({
+                  select: () => ({
+                    single: async () => ({
+                      data: { ...existing, active: updatedActive },
+                      error: null,
+                    }),
+                  }),
+                }),
+              };
+            },
+          };
+        }
+        return makeChain();
+      },
+      getAuditLogRows: () => auditLogRows,
+    };
+  }
+
+  it('deactivates a user and writes an audit log', async () => {
+    const supabaseAdmin = makeSupabaseAdminForActive();
+    const app = buildApp({ user: leadershipUser, supabaseAdmin });
+
+    const response = await request(app, 'PATCH', '/api/admin/users/user-1/active', { active: false });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body?.active, false);
+    assert.equal(supabaseAdmin.getAuditLogRows().length, 1);
+    assert.equal(supabaseAdmin.getAuditLogRows()[0].action, 'USER_DEACTIVATED');
+  });
+
+  it('blocks self-deactivation', async () => {
+    const supabaseAdmin = makeSupabaseAdminForActive({
+      existing: { id: 'leader-1', full_name: 'Leader', role: 'leadership', active: true },
+    });
+    const app = buildApp({ user: leadershipUser, supabaseAdmin });
+
+    const response = await request(app, 'PATCH', '/api/admin/users/leader-1/active', { active: false });
+
+    assert.equal(response.status, 400);
+    assert.match(response.body?.error || '', /own account/i);
   });
 });

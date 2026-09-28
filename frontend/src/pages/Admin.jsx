@@ -355,6 +355,20 @@ export default function Admin() {
   const [mealOverview, setMealOverview] = useState(null);
   const [receiptDesign, setReceiptDesign] = useState(DEFAULT_RECEIPT_DESIGN);
   const [receiptDesignSaving, setReceiptDesignSaving] = useState(false);
+  const [reportSendDate, setReportSendDate] = useState('tomorrow');
+  const [reportSendShift, setReportSendShift] = useState('day');
+  const [reportSending, setReportSending] = useState(false);
+  const [mailRecipients, setMailRecipients] = useState([]);
+  const [mailTypeLabels, setMailTypeLabels] = useState({});
+  const [mailTypes, setMailTypes] = useState([]);
+  const [mailFilterType, setMailFilterType] = useState('meal_report');
+  const [mailForm, setMailForm] = useState({
+    email: '',
+    mail_type: 'meal_report',
+    recipient_kind: 'to',
+    display_name: '',
+  });
+  const [mailBusy, setMailBusy] = useState(false);
 
   const load = useCallback(async () => {
     setErr('');
@@ -438,6 +452,21 @@ export default function Admin() {
     loadMealOverview();
   }, [loadMealOverview]);
 
+  const loadMailRecipients = useCallback(async () => {
+    try {
+      const data = await api.listMailRecipients();
+      setMailRecipients(data.recipients || []);
+      setMailTypes(data.mail_types || []);
+      setMailTypeLabels(data.labels || {});
+    } catch (e) {
+      console.warn(e.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMailRecipients();
+  }, [loadMailRecipients]);
+
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       const query = lateMealSearch.trim().toLowerCase();
@@ -449,6 +478,7 @@ export default function Admin() {
 
       setLateMealMatches(
         (users || [])
+          .filter((user) => user.active !== false)
           .filter((user) => {
             const name = user.full_name || '';
             const email = user.email || '';
@@ -478,6 +508,114 @@ export default function Admin() {
       setErr(e.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onToggleActive(user) {
+    const nextActive = user.active === false;
+    const label = user.full_name || user.email || 'this user';
+    const confirmed = window.confirm(
+      nextActive
+        ? `Reactivate ${label}? They will count as an employee again and can sign in.`
+        : `Deactivate ${label}? They will no longer count in meal reports, reminders, or headcount, and cannot sign in.`
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      await api.setUserActive(user.id, nextActive);
+      setOkMsg(nextActive ? `${label} reactivated.` : `${label} deactivated.`);
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSendMealReport() {
+    setReportSending(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      const result = await api.sendMealReport({
+        date: reportSendDate,
+        shift: reportSendShift,
+      });
+      setOkMsg(
+        `${reportSendShift === 'night' ? 'Night' : 'Day'} shift report sent for ${result.dateLabel || result.mealDate} (email TO: ${result.emailsTo}, CC: ${result.emailsCc}, Telegram: ${result.telegram?.succeeded || 0}).`
+      );
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setReportSending(false);
+    }
+  }
+
+  async function onAddMailRecipient(e) {
+    e.preventDefault();
+    setMailBusy(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      await api.addMailRecipient({
+        email: mailForm.email.trim(),
+        mail_type: mailForm.mail_type,
+        recipient_kind: mailForm.recipient_kind,
+        display_name: mailForm.display_name.trim() || null,
+      });
+      setOkMsg(`Added ${mailForm.email.trim()} as ${mailForm.recipient_kind.toUpperCase()} for ${mailTypeLabels[mailForm.mail_type] || mailForm.mail_type}.`);
+      setMailForm((prev) => ({ ...prev, email: '', display_name: '' }));
+      await loadMailRecipients();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setMailBusy(false);
+    }
+  }
+
+  async function onToggleMailRecipientKind(row) {
+    setMailBusy(true);
+    setErr('');
+    try {
+      await api.updateMailRecipient(row.id, {
+        recipient_kind: row.recipient_kind === 'to' ? 'cc' : 'to',
+      });
+      await loadMailRecipients();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setMailBusy(false);
+    }
+  }
+
+  async function onToggleMailRecipientActive(row) {
+    setMailBusy(true);
+    setErr('');
+    try {
+      await api.updateMailRecipient(row.id, { active: !row.active });
+      await loadMailRecipients();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setMailBusy(false);
+    }
+  }
+
+  async function onDeleteMailRecipient(row) {
+    if (!window.confirm(`Remove ${row.email} from ${mailTypeLabels[row.mail_type] || row.mail_type}?`)) return;
+    setMailBusy(true);
+    setErr('');
+    try {
+      await api.deleteMailRecipient(row.id);
+      setOkMsg(`Removed ${row.email}.`);
+      await loadMailRecipients();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setMailBusy(false);
     }
   }
 
@@ -854,6 +992,48 @@ export default function Admin() {
               ))}
             </div>
           )}
+
+          <div className="rounded-lg border border-slate-200 bg-white p-3 mb-4">
+            <h3 className="text-sm font-semibold text-slate-800 mb-2">Send meal bookings report</h3>
+            <p className="text-xs text-slate-500 mb-3">
+              Sends the same email + Telegram report as the nightly cron, for the date and shift you pick.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+              <label className="text-xs text-slate-600 flex-1">
+                Date
+                <select
+                  className="input mt-1 w-full"
+                  value={reportSendDate}
+                  onChange={(e) => setReportSendDate(e.target.value)}
+                  disabled={reportSending}
+                >
+                  <option value="today">Today{mealOverview?.today?.meal_date ? ` (${mealOverview.today.meal_date})` : ''}</option>
+                  <option value="tomorrow">Tomorrow{mealOverview?.tomorrow?.meal_date ? ` (${mealOverview.tomorrow.meal_date})` : ''}</option>
+                </select>
+              </label>
+              <label className="text-xs text-slate-600 flex-1">
+                Shift
+                <select
+                  className="input mt-1 w-full"
+                  value={reportSendShift}
+                  onChange={(e) => setReportSendShift(e.target.value)}
+                  disabled={reportSending}
+                >
+                  <option value="day">Day shift</option>
+                  <option value="night">Night shift</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn-primary whitespace-nowrap"
+                disabled={reportSending}
+                onClick={onSendMealReport}
+              >
+                {reportSending ? 'Sending…' : 'Send report'}
+              </button>
+            </div>
+          </div>
+
           <form onSubmit={onLateMealBooking} className="grid grid-cols-1 sm:grid-cols-12 gap-3">
             <input
               type="search"
@@ -954,7 +1134,150 @@ export default function Admin() {
       </div>
 
       <div className="card">
-        <h2 className="font-semibold mb-3">Existing users ({users.length})</h2>
+        <h2 className="font-semibold mb-1">Ops email TO / CC recipients</h2>
+        <p className="text-xs text-slate-500 mb-4">
+          Manage who receives meal reports, daily consumption, low-stock, guest-meal, and support-ticket emails.
+          If TO is empty for a type, the old role-based fallback is used.
+        </p>
+        <form onSubmit={onAddMailRecipient} className="grid grid-cols-1 sm:grid-cols-12 gap-3 mb-4">
+          <input
+            type="email"
+            required
+            placeholder="name@applywizz.ai"
+            className="input sm:col-span-3"
+            value={mailForm.email}
+            onChange={(e) => setMailForm((prev) => ({ ...prev, email: e.target.value }))}
+          />
+          <input
+            type="text"
+            placeholder="Display name (optional)"
+            className="input sm:col-span-2"
+            value={mailForm.display_name}
+            onChange={(e) => setMailForm((prev) => ({ ...prev, display_name: e.target.value }))}
+          />
+          <select
+            className="input sm:col-span-3"
+            value={mailForm.mail_type}
+            onChange={(e) => setMailForm((prev) => ({ ...prev, mail_type: e.target.value }))}
+          >
+            {(mailTypes.length ? mailTypes : ['meal_report', 'daily_consumption', 'low_stock', 'guest_meal', 'support_ticket']).map((type) => (
+              <option key={type} value={type}>
+                {mailTypeLabels[type] || type}
+              </option>
+            ))}
+          </select>
+          <select
+            className="input sm:col-span-2"
+            value={mailForm.recipient_kind}
+            onChange={(e) => setMailForm((prev) => ({ ...prev, recipient_kind: e.target.value }))}
+          >
+            <option value="to">TO</option>
+            <option value="cc">CC</option>
+          </select>
+          <button type="submit" className="btn-primary sm:col-span-2" disabled={mailBusy}>
+            {mailBusy ? 'Saving…' : 'Add / update'}
+          </button>
+        </form>
+
+        <div className="flex flex-wrap gap-2 mb-3">
+          <button
+            type="button"
+            className={`text-xs px-3 py-1.5 rounded-lg border ${mailFilterType === 'all' ? 'border-slate-800 bg-slate-900 text-white' : 'border-slate-200'}`}
+            onClick={() => setMailFilterType('all')}
+          >
+            All
+          </button>
+          {(mailTypes.length ? mailTypes : ['meal_report', 'daily_consumption', 'low_stock', 'guest_meal', 'support_ticket']).map((type) => (
+            <button
+              key={type}
+              type="button"
+              className={`text-xs px-3 py-1.5 rounded-lg border ${mailFilterType === type ? 'border-slate-800 bg-slate-900 text-white' : 'border-slate-200'}`}
+              onClick={() => setMailFilterType(type)}
+            >
+              {mailTypeLabels[type] || type}
+            </button>
+          ))}
+        </div>
+
+        <div className="overflow-x-auto -mx-2 sm:mx-0">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500 border-b">
+                <th className="py-2 pr-3">Email</th>
+                <th className="py-2 pr-3">Mail type</th>
+                <th className="py-2 pr-3">Kind</th>
+                <th className="py-2 pr-3">Status</th>
+                <th className="py-2 pr-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mailRecipients
+                .filter((row) => mailFilterType === 'all' || row.mail_type === mailFilterType)
+                .map((row) => (
+                  <tr key={row.id} className="border-b last:border-0">
+                    <td className="py-2 pr-3">
+                      <div className="font-medium text-slate-900">{row.email}</div>
+                      {row.display_name && <div className="text-xs text-slate-500">{row.display_name}</div>}
+                    </td>
+                    <td className="py-2 pr-3">{mailTypeLabels[row.mail_type] || row.mail_type}</td>
+                    <td className="py-2 pr-3 uppercase font-semibold text-xs">{row.recipient_kind}</td>
+                    <td className="py-2 pr-3">
+                      {row.active ? (
+                        <span className="text-emerald-700 text-xs font-semibold">Active</span>
+                      ) : (
+                        <span className="text-slate-400 text-xs font-semibold">Inactive</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          className="btn-secondary text-[11px] px-2 py-1"
+                          disabled={mailBusy}
+                          onClick={() => onToggleMailRecipientKind(row)}
+                        >
+                          Make {row.recipient_kind === 'to' ? 'CC' : 'TO'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary text-[11px] px-2 py-1"
+                          disabled={mailBusy}
+                          onClick={() => onToggleMailRecipientActive(row)}
+                        >
+                          {row.active ? 'Disable' : 'Enable'}
+                        </button>
+                        <button
+                          type="button"
+                          className="text-[11px] px-2 py-1 rounded-lg border border-rose-200 bg-rose-50 text-rose-800"
+                          disabled={mailBusy}
+                          onClick={() => onDeleteMailRecipient(row)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              {mailRecipients.filter((row) => mailFilterType === 'all' || row.mail_type === mailFilterType).length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-4 text-sm text-slate-500">
+                    No recipients configured yet for this filter.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2 className="font-semibold mb-3">
+          Existing users ({users.filter((u) => u.active !== false).length} active
+          {users.some((u) => u.active === false)
+            ? ` · ${users.filter((u) => u.active === false).length} deactivated`
+            : ''}
+          )
+        </h2>
         <div className="overflow-x-auto -mx-2 sm:mx-0">
           <table className="min-w-full text-sm">
             <thead>
@@ -966,6 +1289,7 @@ export default function Admin() {
                 <th className="py-2 pr-3">Shift</th>
                 <th className="py-2 pr-3">Assigned cabin</th>
                 <th className="py-2 pr-3">Role</th>
+                <th className="py-2 pr-3">Status</th>
                 <th className="py-2 pr-3">Change to</th>
                 <th className="py-2 pr-3">Actions</th>
                 <th className="py-2 pr-3">Joined</th>
@@ -974,10 +1298,13 @@ export default function Admin() {
             <tbody>
               {users.map((u) => {
                 const isMe = u.id === profile?.id;
+                const isInactive = u.active === false;
                 return (
-                  <tr key={u.id} className="border-b last:border-0">
+                  <tr key={u.id} className={`border-b last:border-0 ${isInactive ? 'bg-slate-50 text-slate-400' : ''}`}>
                     <td className="py-2 pr-3 font-medium text-slate-900">
-                      {u.full_name || '-'}
+                      <span className={isInactive ? 'text-slate-400 line-through' : ''}>
+                        {u.full_name || '-'}
+                      </span>
                       {isMe && <span className="ml-2 text-xs text-slate-400">(you)</span>}
                     </td>
                     <td className="py-2 pr-3">
@@ -985,7 +1312,7 @@ export default function Admin() {
                         type="text"
                         className="input py-1 px-2 text-xs w-28"
                         defaultValue={u.preferred_name || ''}
-                        disabled={busy}
+                        disabled={busy || isInactive}
                         onBlur={(e) => onChangePreferredName(u, e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') e.currentTarget.blur();
@@ -1001,7 +1328,7 @@ export default function Admin() {
                           className="input py-1 px-2 text-xs w-40 font-mono tracking-wide"
                           defaultValue={u.cafeteria_card_number || ''}
                           key={`${u.id}-${u.cafeteria_card_number || 'none'}`}
-                          disabled={busy}
+                          disabled={busy || isInactive}
                           onBlur={(e) => onChangeCafeteriaCard(u, e.target.value)}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') e.currentTarget.blur();
@@ -1010,7 +1337,7 @@ export default function Admin() {
                         <button
                           type="button"
                           className="btn-secondary text-[10px] px-2 py-1 disabled:opacity-50"
-                          disabled={busy}
+                          disabled={busy || isInactive}
                           onClick={() => onFillCardFromHrms(u)}
                         >
                           HRMS
@@ -1028,10 +1355,21 @@ export default function Admin() {
                       <RolePill role={u.role} />
                     </td>
                     <td className="py-2 pr-3">
+                      {isInactive ? (
+                        <span className="inline-flex items-center rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                          Inactive
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                          Active
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3">
                       <select
                         className="input min-w-[140px] py-1 text-xs"
                         value={u.role}
-                        disabled={busy || (isMe && u.role === 'leadership')}
+                        disabled={busy || isInactive || (isMe && u.role === 'leadership')}
                         onChange={(e) => onChangeRole(u.id, e.target.value)}
                       >
                         {ROLE_OPTIONS.map((r) => (
@@ -1042,18 +1380,33 @@ export default function Admin() {
                       </select>
                     </td>
                     <td className="py-2 pr-3">
-                      <button
-                        type="button"
-                        className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
-                        disabled={busy}
-                        onClick={() => {
-                          setErr('');
-                          setOkMsg('');
-                          setResetTarget(u);
-                        }}
-                      >
-                        Reset Authenticator
-                      </button>
+                      <div className="flex flex-col gap-1.5">
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
+                          disabled={busy || isInactive}
+                          onClick={() => {
+                            setErr('');
+                            setOkMsg('');
+                            setResetTarget(u);
+                          }}
+                        >
+                          Reset Authenticator
+                        </button>
+                        <button
+                          type="button"
+                          className={`text-xs px-3 py-1.5 rounded-lg border disabled:opacity-50 ${
+                            isInactive
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                              : 'border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100'
+                          }`}
+                          disabled={busy || isMe}
+                          onClick={() => onToggleActive(u)}
+                          title={isMe ? 'You cannot deactivate your own account' : undefined}
+                        >
+                          {isInactive ? 'Reactivate' : 'Deactivate'}
+                        </button>
+                      </div>
                     </td>
                     <td className="py-2 pr-3 text-slate-500 text-xs">
                       {u.created_at ? new Date(u.created_at).toLocaleDateString() : '-'}
