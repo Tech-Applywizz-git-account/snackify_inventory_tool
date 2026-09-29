@@ -104,13 +104,6 @@ function buildTelegramMessage(payload, reportDate = getISTDateString()) {
   msg += `\nTotal ${isNight ? 'Night' : 'Day'} Shift Bookings: *${payload.totalBooked}*`;
   if (payload.totalSkipped > 0) msg += `\nSkipped: *${payload.totalSkipped}*`;
   msg += `\nNot Booked: *${payload.totalNotBooked}*`;
-  if ((payload.unbookedNames || []).length > 0) {
-    const preview = payload.unbookedNames.slice(0, 25);
-    msg += `\n\n⚠️ *Not booked:*\n${preview.map((name) => `• ${name}`).join('\n')}`;
-    if (payload.unbookedNames.length > preview.length) {
-      msg += `\n_…and ${payload.unbookedNames.length - preview.length} more_`;
-    }
-  }
   return msg;
 }
 

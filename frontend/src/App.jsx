@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import InactivityLock from './components/InactivityLock.jsx';
 import Layout from './components/Layout.jsx';
 import MealReviewGate from './components/MealReviewPopup.jsx';
+import NightMealBookingGate from './components/NightMealBookingPopup.jsx';
 import { AuthProvider, useAuth } from './hooks/useAuth.js';
 import { supabase } from './lib/supabase.js';
 import AdminPage from './pages/Admin.jsx';
@@ -138,6 +139,7 @@ export default function App() {
             <OnboardingGate>
               <InactivityLock>
                 <MealReviewGate />
+                <NightMealBookingGate />
                 <Layout />
               </InactivityLock>
             </OnboardingGate>

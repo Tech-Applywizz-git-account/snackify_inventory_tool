@@ -13,6 +13,7 @@ import {
   countMealBookings,
   filterDayMealBookings,
   filterNightMealBookings,
+  getEveningReportMealDate,
   getISTDateString,
   getNextWorkingMealDate,
   getReportRecipientEmails,
@@ -40,6 +41,7 @@ export {
   countMealBookings,
   filterDayMealBookings,
   filterNightMealBookings,
+  getEveningReportMealDate,
   getISTDateString,
   getNextWorkingMealDate,
   getReportRecipientEmails,
@@ -451,8 +453,8 @@ async function sendWeeklyForecastDigest(items, botToken) {
 }
 
 // POST /api/cron/meal-booking-night-shift-report
-// Called by pg_cron at 10:15 PM IST. Reports the next working day's
-// night-shift meal bookings after today's 10:00 PM booking cutoff.
+// Called by pg_cron at 10:15 PM IST. Reports next working day's night-shift
+// bookings. Monday meals are reported on Sunday (bookings stay open Fri–Sun).
 router.post('/meal-booking-night-shift-report', async (req, res, next) => {
   try {
     const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
@@ -463,21 +465,13 @@ router.post('/meal-booking-night-shift-report', async (req, res, next) => {
     }
 
     const reportDate = getISTDateString();
-    const reportDay = new Date(`${reportDate}T00:00:00Z`).getUTCDay();
-    if (reportDay === 0 || reportDay === 6) {
-      return res.json({
-        ok: true,
-        skipped: true,
-        reason: 'Weekend: the Friday night report already covers Monday; no duplicate report is sent',
-        reportDate,
-      });
-    }
-    const mealDate = getNextWorkingMealDate();
+    const mealDate = getEveningReportMealDate();
     if (!mealDate) {
       return res.json({
         ok: true,
         skipped: true,
-        reason: 'The next day is not a working day; no night-shift booking window closed today',
+        reason:
+          'Friday/Saturday: Monday night-shift report waits until Sunday 10:15 PM IST (bookings stay open through the weekend).',
         reportDate,
       });
     }
@@ -616,7 +610,8 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
 });
 
 // POST /api/cron/meal-booking-night-report
-// Called by pg_cron at 8:30 PM IST everyday (15:00 UTC). Day-shift meal bookings summary.
+// Called by pg_cron at 8:30 PM IST. Day-shift meal bookings summary.
+// Monday meals are reported on Sunday (bookings stay open Fri–Sun).
 router.post('/meal-booking-night-report', async (req, res, next) => {
   try {
     const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
@@ -626,43 +621,26 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const now = new Date();
-    const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const todayDay = istNow.getDay();
     const isTest = !!(req.query.testEmail || req.body?.testEmail);
+    const mealDate = isTest
+      ? getNextWorkingMealDate()
+      : getEveningReportMealDate();
 
-    if ((todayDay === 0 || todayDay === 6) && !isTest) {
+    if (!mealDate) {
       return res.json({
         ok: true,
         skipped: true,
-        reason: 'Today is a weekend. Day-shift reports are only sent on working days (Monday-Friday).',
-      });
-    }
-
-    const isFriday = todayDay === 5;
-    const daysToAdd = isFriday ? 3 : 1;
-    const istTomorrow = new Date(istNow);
-    istTomorrow.setDate(istTomorrow.getDate() + daysToAdd);
-    const yyyy = istTomorrow.getFullYear();
-    const mm = String(istTomorrow.getMonth() + 1).padStart(2, '0');
-    const dd = String(istTomorrow.getDate()).padStart(2, '0');
-    const tomorrowStr = `${yyyy}-${mm}-${dd}`;
-
-    const tomorrowDay = istTomorrow.getDay();
-    if (!(tomorrowDay >= 1 && tomorrowDay <= 5) && !isTest) {
-      return res.json({
-        ok: true,
-        skipped: true,
-        reason: `Tomorrow (${tomorrowStr}) is not a working day. Day-shift reports are only sent for working days.`,
+        reason:
+          'Friday/Saturday: Monday day-shift report waits until Sunday 8:30 PM IST (bookings stay open through the weekend).',
       });
     }
 
     const result = await sendMealShiftReport({
-      mealDate: tomorrowStr,
+      mealDate,
       shift: 'day',
       testEmail: req.query.testEmail || req.body?.testEmail || undefined,
     });
-    res.json({ ...result, tomorrow: tomorrowStr });
+    res.json({ ...result, tomorrow: mealDate });
   } catch (e) {
     next(e);
   }

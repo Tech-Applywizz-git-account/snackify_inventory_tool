@@ -217,6 +217,7 @@ export const api = {
 
   // Meals
   mealOptions: (date) => request(`/api/meals/options?date=${date}`),
+  mealBookingPrompt: () => request('/api/meals/booking-prompt'),
   bookMeal: (body) => request('/api/meals/book', { method: 'POST', body: JSON.stringify(body) }),
   myMealBookings: (month) => request(`/api/meals/my-bookings?month=${month}`),
   mealSummary: (date) => request(`/api/meals/summary?date=${date}`),

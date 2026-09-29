@@ -5,6 +5,7 @@ import {
   countMealBookings,
   filterDayMealBookings,
   filterNightMealBookings,
+  getEveningReportMealDate,
   getISTDateString,
   getNextWorkingMealDate,
   getReportRecipientEmails,
@@ -155,4 +156,16 @@ test('night-shift report sent today counts the next working day meal', () => {
 
   assert.equal(getNextWorkingMealDate(mondayNight), '2026-09-22');
   assert.equal(getNextWorkingMealDate(fridayNight), '2026-09-28');
+});
+test('evening meal reports wait until Sunday for Monday bookings', () => {
+  // Thursday evening → Friday meal
+  assert.equal(getEveningReportMealDate(new Date('2026-09-24T16:45:00.000Z')), '2026-09-25');
+  // Friday evening → skip (Monday bookings still open Sat–Sun)
+  assert.equal(getEveningReportMealDate(new Date('2026-09-25T16:45:00.000Z')), null);
+  // Saturday evening → skip
+  assert.equal(getEveningReportMealDate(new Date('2026-09-26T16:45:00.000Z')), null);
+  // Sunday evening → Monday meal
+  assert.equal(getEveningReportMealDate(new Date('2026-09-27T16:45:00.000Z')), '2026-09-28');
+  // Monday evening → Tuesday meal
+  assert.equal(getEveningReportMealDate(new Date('2026-09-28T16:45:00.000Z')), '2026-09-29');
 });

@@ -111,3 +111,29 @@ export function getReportRecipientEmails(activeProfiles) {
     ),
   ];
 }
+
+/**
+ * Meal date covered by the evening day/night report when run "now" (IST).
+ *
+ * Unchanged for Tue–Fri meals (previous evening):
+ *   Mon–Thu evening → tomorrow
+ *
+ * Only Monday meals changed:
+ *   Old: Friday evening reported Monday
+ *   New: Sunday evening reports Monday (bookings stay open Fri–Sun)
+ *   Fri + Sat evenings → skip (do not send Monday early)
+ */
+export function getEveningReportMealDate(date = new Date()) {
+  const istDate = getISTDateString(date);
+  const [year, month, day] = istDate.split('-').map(Number);
+  // Use noon UTC on the IST calendar day so weekday is stable.
+  const istWeekday = new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).getUTCDay();
+
+  // Friday/Saturday: Monday report waits for Sunday only.
+  if (istWeekday === 5 || istWeekday === 6) {
+    return null;
+  }
+
+  // Sunday → Monday; Mon–Thu → tomorrow (same as before for Tue–Fri meals).
+  return getNextWorkingMealDate(date);
+}
