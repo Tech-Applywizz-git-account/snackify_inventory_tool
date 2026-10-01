@@ -164,13 +164,12 @@ export function MealReviewPopup({ open, windowClosed, status, onClose, onSubmitt
       setMealType(status?.my_review?.meal_type || '');
       setRating(status?.my_review?.rating || 0);
       setHoverStar(0);
-      setVibe(status?.my_review?.vibe || vibes[0]?.key || '');
+      setVibe(status?.my_review?.vibe || '');
       setComment(status?.my_review?.comment || '');
       setError('');
       setBusy(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when opened
-  }, [open, status, vibes]);
+  }, [open, status]);
 
   async function submit() {
     setError('');
@@ -183,7 +182,7 @@ export function MealReviewPopup({ open, windowClosed, status, onClose, onSubmitt
       return;
     }
     if (!vibe) {
-      setError('Pick a vibe.');
+      setError('Select a review.');
       return;
     }
 
@@ -354,7 +353,13 @@ export function MealReviewPopup({ open, windowClosed, status, onClose, onSubmitt
                 onChange={(e) => setVibe(e.target.value)}
                 className="w-full border-2 border-slate-100 rounded-xl px-3 py-2.5 text-sm font-medium focus:border-brand focus:outline-none bg-white"
               >
-                {vibes.length === 0 && <option value="">Loading vibes…</option>}
+                {vibes.length === 0 ? (
+                  <option value="">Loading reviews…</option>
+                ) : (
+                  <option value="" disabled>
+                    Select a review
+                  </option>
+                )}
                 {vibes.map((v) => (
                   <option key={v.key} value={v.key}>
                     {v.label}
