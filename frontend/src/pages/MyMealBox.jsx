@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
+import MealQrPanel from '../features/mealCheckin/MealQrPanel.jsx';
 
 // ── IST date helper ───────────────────────────────────────────────────────────
 function getISTDate() {
@@ -380,6 +381,7 @@ export default function MyMealBox() {
 
                 {/* Token Details */}
                 <div style={{ padding: '20px 24px' }}>
+                  {choice && <MealQrPanel mealDate={selectedDate} />}
                   <div
                     style={{
                       display: 'grid',

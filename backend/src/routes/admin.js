@@ -16,7 +16,7 @@ import {
   validateReceiptDesign,
 } from '../../../office-print-gateway/receiptDesign.js';
 
-const roleEnum = z.enum(['facility_manager', 'finance', 'leadership', 'staff', 'office_boy']);
+const roleEnum = z.enum(['facility_manager', 'finance', 'leadership', 'staff', 'office_boy', 'vendor']);
 const lateMealChoices = z.enum(['veg', 'egg', 'non_veg']);
 
 function getISTDateString() {
@@ -504,6 +504,7 @@ export function createAdminRouter(overrides = {}) {
         email,
         password: pw,
         email_confirm: true,
+        app_metadata: { role },
         user_metadata: { full_name },
       });
 

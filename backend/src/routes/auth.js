@@ -218,8 +218,14 @@ export function createAuthRouter(overrides = {}) {
       const schema = z.object({ email: z.string().email() });
       const email = d.normalizeEmail(schema.parse(req.body).email);
 
-      if (!email.endsWith(`@${ALLOWED_DOMAIN}`)) {
-        return res.status(403).json({ error: 'Login not available for this email.' });
+      const isCompanyEmail = email.endsWith(`@${ALLOWED_DOMAIN}`);
+      let existingUser = null;
+      if (!isCompanyEmail) {
+        existingUser = await findUserByEmail(email);
+        const profile = existingUser ? await findProfileById(existingUser.id) : null;
+        if (profile?.role !== 'vendor' || !profile.active) {
+          return res.status(403).json({ error: 'Login not available for this email.' });
+        }
       }
 
       if (!d.isSendMailConfigured()) {
@@ -231,7 +237,7 @@ export function createAuthRouter(overrides = {}) {
 
       // If user already exists, check whether they already have a verified TOTP factor.
       // Attempting to re-enroll an already-enrolled user is a 409, not a silent ok.
-      const existingUser = await findUserByEmail(email);
+      if (!existingUser) existingUser = await findUserByEmail(email);
       if (existingUser) {
         const verifiedFactor = await findVerifiedTotpFactor(existingUser.id);
         if (verifiedFactor) {
@@ -467,16 +473,19 @@ export function createAuthRouter(overrides = {}) {
       const schema = z.object({ email: z.string().email() });
       const email = d.normalizeEmail(schema.parse(req.body).email);
 
-      if (!email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+      const existingUser = await findUserByEmail(email);
+      const profile = existingUser ? await findProfileById(existingUser.id) : null;
+      if (
+        !email.endsWith(`@${ALLOWED_DOMAIN}`) &&
+        (profile?.role !== 'vendor' || !profile.active)
+      ) {
         return res.status(403).json({ error: 'Login not available for this email.' });
       }
 
-      const existingUser = await findUserByEmail(email);
       if (!existingUser) {
         return res.json({ nextStep: 'otp' });
       }
 
-      const profile = await findProfileById(existingUser.id);
       if (!profile || !profile.active) {
         return res.json({ nextStep: 'otp' }); // don't reveal inactive status
       }

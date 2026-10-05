@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import InactivityLock from './components/InactivityLock.jsx';
 import Layout from './components/Layout.jsx';
@@ -29,6 +29,8 @@ import OrderHistoryPage from './pages/OrderHistory.jsx';
 import PreferencesPage from './pages/Preferences.jsx';
 import RequestQueuePage from './pages/RequestQueue.jsx';
 import StaffViewPage from './pages/StaffView.jsx';
+
+const VendorMealCheckinPage = lazy(() => import('./features/mealCheckin/VendorMealCheckinPage.jsx'));
 
 function Protected({ children, allow }) {
   const { session, profile, profileLoading, loading, aal } = useAuth();
@@ -72,6 +74,7 @@ function RoleHome() {
     facility_manager: '/dashboard',
     office_boy: '/queue',
     staff: '/request',
+    vendor: '/vendor/meal-check-in',
   };
   return <Navigate to={roleHome[profile.role] || '/request'} replace />;
 }
@@ -82,12 +85,16 @@ function RoleHome() {
  * If not, shows the onboarding flow before rendering children.
  */
 function OnboardingGate({ children }) {
-  const { session, loading: authLoading } = useAuth();
+  const { session, profile, loading: authLoading } = useAuth();
   const [checking, setChecking] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
-    if (authLoading || !session) return;
+    if (authLoading || !session || profile?.role === 'vendor') {
+      setChecking(false);
+      setNeedsSetup(false);
+      return;
+    }
 
     async function check() {
       try {
@@ -108,7 +115,7 @@ function OnboardingGate({ children }) {
     }
 
     check();
-  }, [session, authLoading]);
+  }, [session, profile?.role, authLoading]);
 
   if (authLoading || checking) {
     return (
@@ -132,6 +139,16 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/guest" element={<GuestPage />} />
       <Route path="/guest/track/:id" element={<LiveTrackingPage />} />
+      <Route
+        path="/vendor/meal-check-in"
+        element={
+          <Protected allow={['leadership', 'office_boy', 'admin', 'vendor']}>
+            <Suspense fallback={<div className="p-8 text-slate-500">Loading vendor check-in...</div>}>
+              <VendorMealCheckinPage />
+            </Suspense>
+          </Protected>
+        }
+      />
       <Route
         element={
           <Protected>

@@ -4,8 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { supabase } from '../lib/supabase.js';
 
-const ALLOWED_DOMAIN = 'applywizz.ai';
-
 const fade = (delay = 0) => ({
   initial: { opacity: 0, y: 20 },
   animate: { opacity: 1, y: 0, transition: { duration: 0.5, delay, ease: 'easeOut' } },
@@ -66,12 +64,6 @@ export default function Login() {
     submitting.current = true;
     setErr('');
     const trimmed = email.trim().toLowerCase();
-
-    if (!trimmed.endsWith(`@${ALLOWED_DOMAIN}`)) {
-      setErr(`Only @${ALLOWED_DOMAIN} accounts are allowed.`);
-      submitting.current = false;
-      return;
-    }
 
     setEmail(trimmed);
     setBusy(true);
@@ -414,7 +406,9 @@ export default function Login() {
                           >
                             Sign in to Pantry
                           </h2>
-                          <p className="text-white/30 text-sm">Use your @applywizz.ai work email</p>
+                          <p className="text-white/30 text-sm">
+                            Use your work email or registered vendor email
+                          </p>
                         </div>
 
                         <form onSubmit={submitEmail} className="space-y-3">
@@ -429,7 +423,7 @@ export default function Login() {
                               type="email"
                               required
                               autoComplete="email"
-                              placeholder={`you@${ALLOWED_DOMAIN}`}
+                              placeholder="Work or registered vendor email"
                               value={email}
                               onChange={(e) => setEmail(e.target.value)}
                               className="w-full rounded-2xl px-4 py-3.5 text-sm text-white placeholder-white/20 focus:outline-none transition-all"

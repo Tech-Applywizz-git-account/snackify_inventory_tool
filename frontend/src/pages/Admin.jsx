@@ -10,6 +10,7 @@ const ROLE_OPTIONS = [
   { value: 'office_boy', label: 'Office Boy' },
   { value: 'finance', label: 'Accounts' },
   { value: 'staff', label: 'Applywizzian' },
+  { value: 'vendor', label: 'Vendor' },
 ];
 const ROLE_LABEL = Object.fromEntries(ROLE_OPTIONS.map((r) => [r.value, r.label]));
 
@@ -21,6 +22,7 @@ function RolePill({ role }) {
       office_boy: 'bg-amber-100 text-amber-800',
       finance: 'bg-blue-100 text-blue-800',
       staff: 'bg-slate-100 text-slate-700',
+      vendor: 'bg-cyan-100 text-cyan-800',
     }[role] || 'bg-slate-100 text-slate-700';
   return <span className={`pill ${cls}`}>{ROLE_LABEL[role] || role}</span>;
 }

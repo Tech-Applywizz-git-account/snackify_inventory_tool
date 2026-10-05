@@ -225,6 +225,11 @@ export const api = {
 
   // Meal Box System
   myMealToken: (date) => request(`/api/meal-print/my-token?date=${date}`),
+  mealCheckinQr: (date) => request(`/api/meal-checkin/my-qr?date=${encodeURIComponent(date)}`),
+  mealCheckinScan: (body) =>
+    request('/api/meal-checkin/scan', { method: 'POST', body: JSON.stringify(body) }),
+  mealCheckinSummary: (date, shift = 'all') =>
+    request(`/api/meal-checkin/summary?date=${encodeURIComponent(date)}&shift=${encodeURIComponent(shift)}`),
   mealPrintStatus: (date) => request(`/api/meal-print/status?date=${date}`),
   triggerCabinPrint: (body) =>
     request('/api/meal-print/trigger-cabin', { method: 'POST', body: JSON.stringify(body) }),
