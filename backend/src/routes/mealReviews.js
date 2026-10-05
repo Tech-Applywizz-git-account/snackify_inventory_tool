@@ -129,18 +129,6 @@ async function findReview(userId, mealDate) {
   return data || null;
 }
 
-export async function hasBookedMealForDate(userId, mealDate, client = supabaseAdmin) {
-  const { data, error } = await client
-    .from('meal_bookings')
-    .select('id, choice')
-    .eq('user_id', userId)
-    .eq('meal_date', mealDate)
-    .maybeSingle();
-
-  if (error) throw error;
-  return Boolean(data && data.choice !== 'skip');
-}
-
 function shapeMyReview(row) {
   if (!row) return null;
   return {
@@ -160,16 +148,12 @@ router.get('/status', async (req, res, next) => {
   try {
     const window = getWindowMeta();
     const existing = await findReview(req.user.id, window.meal_date);
-    const hasBookedMeal = await hasBookedMealForDate(req.user.id, window.meal_date);
     const alreadyReviewed = Boolean(existing);
-    const canReview = hasBookedMeal && window.in_window && !alreadyReviewed;
 
     res.json({
       ...window,
-      has_booked_meal: hasBookedMeal,
-      can_review: canReview,
       already_reviewed: alreadyReviewed,
-      show_popup: canReview,
+      show_popup: window.in_window && !alreadyReviewed,
       ...catalogPayload(),
       my_review: shapeMyReview(existing),
     });
@@ -217,17 +201,6 @@ router.post('/', async (req, res, next) => {
     if (!window.in_window) {
       return res.status(400).json({
         error: `Meal review is only open weekdays ${WINDOW_START_HOUR}:00–${WINDOW_END_HOUR}:00 IST`,
-        ...window,
-      });
-    }
-
-    const hasBookedMeal = await hasBookedMealForDate(req.user.id, window.meal_date);
-    if (!hasBookedMeal) {
-      return res.status(403).json({
-        error: 'You can only review a meal you booked for this day.',
-        has_booked_meal: false,
-        can_review: false,
-        already_reviewed: false,
         ...window,
       });
     }
