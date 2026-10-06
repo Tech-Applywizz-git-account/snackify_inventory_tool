@@ -130,6 +130,11 @@ export function createAdminRouter(overrides = {}) {
   const router = Router();
 
   async function findUserById(userId) {
+    if (typeof d.supabaseAdmin.auth.admin.getUserById === 'function') {
+      const { data, error } = await d.supabaseAdmin.auth.admin.getUserById(userId);
+      if (error) throw error;
+      return data?.user || null;
+    }
     const { data, error } = await d.supabaseAdmin.auth.admin.listUsers({
       page: 1,
       perPage: 500,
@@ -146,51 +151,78 @@ export function createAdminRouter(overrides = {}) {
     ) || null;
   }
 
-  async function createVendorAccount(email, full_name, password = VENDOR_INITIAL_PASSWORD) {
-    let userId;
-    let stage = 'creating the vendor account';
+  async function createVendorInvitation(email, full_name, password = VENDOR_INITIAL_PASSWORD) {
+    let stage = 'checking existing vendor accounts';
+    let createdUserId = null;
     try {
+      const { data: users, error: usersError } = await d.supabaseAdmin.auth.admin.listUsers({
+        page: 1,
+        perPage: 500,
+      });
+      if (usersError) throw usersError;
+      if (users?.users?.some((user) => user.email?.toLowerCase() === email)) {
+        const duplicateError = new Error('An account already exists for that email.');
+        duplicateError.status = 409;
+        duplicateError.publicMessage = duplicateError.message;
+        throw duplicateError;
+      }
+
+      const { data: existingVendors, error: vendorListError } = await d.supabaseAdmin
+        .from('profiles')
+        .select('id')
+        .eq('role', 'vendor');
+      if (vendorListError) throw vendorListError;
+      if ((existingVendors || []).length >= 3) {
+        const limitError = new Error('The maximum of 3 vendor accounts has been reached.');
+        limitError.status = 409;
+        limitError.publicMessage = limitError.message;
+        throw limitError;
+      }
+
+      stage = 'creating the vendor Auth account';
       const { data: created, error: createError } = await d.supabaseAdmin.auth.admin.createUser({
         email,
         password,
         email_confirm: false,
-        app_metadata: { role: 'vendor' },
+        app_metadata: { role: 'vendor', vendor_invitation_pending: true },
         user_metadata: { full_name },
       });
-      if (createError) {
-        if (String(createError.message).toLowerCase().includes('already')) {
-          const duplicateError = new Error('An account already exists for that email.');
-          duplicateError.status = 409;
-          duplicateError.publicMessage = duplicateError.message;
-          throw duplicateError;
-        }
-        throw createError;
-      }
-      userId = created?.user?.id;
-      if (!userId) throw new Error('Supabase did not return the created vendor account.');
+      if (createError) throw createError;
+      createdUserId = created?.user?.id;
+      if (!createdUserId) throw new Error('Supabase did not return the new vendor account.');
 
-      stage = 'saving the vendor profile';
+      stage = 'creating the inactive vendor profile';
       const { data: profile, error: profileError } = await d.supabaseAdmin
         .from('profiles')
-        .upsert({ id: userId, full_name, email, role: 'vendor', active: true }, { onConflict: 'id' })
-        .select()
+        .upsert({
+          id: createdUserId,
+          full_name,
+          email,
+          role: 'vendor',
+          active: false,
+        }, { onConflict: 'id' })
+        .select('id')
         .single();
       if (profileError) throw profileError;
+      if (!profile) throw new Error('Supabase did not create the vendor profile.');
 
       stage = 'generating the confirmation link';
-      const redirectTo = `${(process.env.APP_PUBLIC_URL || 'http://localhost:5173').replace(/\/$/, '')}/login?vendor_confirmed=1`;
+      const loginUrl = new URL('/login', process.env.APP_PUBLIC_URL || 'http://localhost:5173');
+      loginUrl.searchParams.set('vendor_confirmation', '1');
       const { data: linkData, error: linkError } = await d.supabaseAdmin.auth.admin.generateLink({
         type: 'magiclink',
         email,
-        options: { redirectTo },
+        options: {
+          redirectTo: loginUrl.toString(),
+        },
       });
       if (linkError) throw linkError;
-      const confirmationLink = linkData?.properties?.action_link;
-      if (!confirmationLink) throw new Error('Supabase did not return a vendor confirmation link.');
+      const confirmationUrl = linkData?.properties?.action_link;
+      if (!confirmationUrl) throw new Error('Supabase did not return a vendor confirmation link.');
 
       const safeName = escapeHtml(full_name);
       const safeEmail = escapeHtml(email);
-      const safeLink = escapeHtml(confirmationLink);
+      const safeLink = escapeHtml(confirmationUrl);
       const safePassword = escapeHtml(password);
       stage = 'sending the onboarding email';
       await d.sendVendorAccountEmail(
@@ -198,22 +230,31 @@ export function createAdminRouter(overrides = {}) {
         'Welcome to ApplyWizz Vendor Portal',
         `<div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.5">
          <p>Hello ${safeName},</p>
-         <p>Welcome to the ApplyWizz vendor portal. Your account has been registered.</p>
+         <p>Welcome to the ApplyWizz vendor portal. Your vendor account has been created and is inactive until you confirm it.</p>
          <p style="margin:0 0 20px">
            <a href="${safeLink}" style="display:inline-block;padding:12px 20px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;border-radius:6px">
-             Confirm account
+             Confirm your account
            </a>
          </p>
          <p><strong>Vendor account details</strong></p>
          <p><strong>Registered Email ID:</strong> ${safeEmail}<br>
          <strong>Initial Password:</strong> ${safePassword}</p>
-         <p>Confirm your account using the button above. You will be redirected to the login page.</p>
-         <p>If the button does not work, use this link:<br><a href="${safeLink}">${safeLink}</a></p>
+         <p>Select the button above to confirm and activate your account. You will then be redirected to the login page.</p>
          </div>`
       );
 
-      return { user_id: userId, email, role: 'vendor', profile };
+      return { user_id: createdUserId, email, role: 'vendor', status: 'pending_confirmation' };
     } catch (error) {
+      if (createdUserId) {
+        try {
+          const { error: cleanupError } = await d.supabaseAdmin.auth.admin.deleteUser(createdUserId);
+          if (cleanupError) {
+            console.error('[admin] Failed to remove vendor account after invitation setup failed:', cleanupError.message);
+          }
+        } catch (cleanupError) {
+          console.error('[admin] Failed to remove vendor account after invitation setup failed:', cleanupError.message);
+        }
+      }
       const errorMessage = String(error?.message || '').toLowerCase();
       if (
         error?.code === '23514' ||
@@ -221,19 +262,8 @@ export function createAdminRouter(overrides = {}) {
       ) {
         error.status = 409;
         error.publicMessage = 'The maximum of 3 vendor accounts has been reached.';
-        stage = 'checking the vendor account limit';
-      } else {
+      } else if (!error.publicMessage) {
         error.vendorStep = stage;
-      }
-      if (userId) {
-        try {
-          const { error: cleanupError } = await d.supabaseAdmin.auth.admin.deleteUser(userId);
-          if (cleanupError) {
-            console.error('[admin] Failed to clean up vendor account after onboarding failure:', cleanupError.message);
-          }
-        } catch (cleanupError) {
-          console.error('[admin] Failed to clean up vendor account after onboarding failure:', cleanupError.message);
-        }
       }
       throw error;
     }
@@ -253,8 +283,7 @@ export function createAdminRouter(overrides = {}) {
     if (error.vendorStep === 'generating the confirmation link') {
       return {
         status: 503,
-        message:
-          'Vendor account setup could not generate the confirmation link. Check the Supabase Auth configuration and redirect URL allowlist.',
+        message: 'Vendor confirmation link could not be generated by Supabase. Check the Supabase Auth configuration and backend logs.',
       };
     }
     return {
@@ -638,13 +667,16 @@ export function createAdminRouter(overrides = {}) {
         (shiftPreferences || []).map((preference) => [preference.user_id, preference])
       );
 
-      const emailMap = new Map(usersList.users.map((u) => [u.id, u.email]));
+      const authUserById = new Map(usersList.users.map((user) => [user.id, user]));
 
       const rows = profiles.map((p) => ({
         ...p,
         shift: shiftByUserId.get(p.id) || 'morning',
         cabin: getCabinName(preferenceByUserId.get(p.id)?.cabin, preferenceByUserId.get(p.id)?.preferred_location),
-        email: emailMap.get(p.id) || null,
+        email: authUserById.get(p.id)?.email || null,
+        email_confirmed_at: authUserById.get(p.id)?.email_confirmed_at,
+        vendor_invitation_pending:
+          authUserById.get(p.id)?.app_metadata?.vendor_invitation_pending === true,
       }));
       res.json(rows);
     } catch (e) {
@@ -781,6 +813,13 @@ export function createAdminRouter(overrides = {}) {
       if (existingErr) throw existingErr;
       if (!existing) return res.status(404).json({ error: 'User not found.' });
 
+      if (active && existing.role === 'vendor') {
+        const authUser = await findUserById(req.params.id);
+        if (!authUser?.email_confirmed_at || authUser.app_metadata?.vendor_invitation_pending) {
+          return res.status(409).json({ error: 'A vendor must confirm their email before the account can be activated.' });
+        }
+      }
+
       const { data, error } = await d.supabaseAdmin
         .from('profiles')
         .update({ active })
@@ -892,7 +931,7 @@ export function createAdminRouter(overrides = {}) {
       const { email, role, full_name } = schema.parse(req.body);
       if (role === 'vendor') {
         try {
-          const vendor = await createVendorAccount(email.trim().toLowerCase(), full_name.trim());
+          const vendor = await createVendorInvitation(email.trim().toLowerCase(), full_name.trim());
           return res.status(201).json({ ok: true, ...vendor });
         } catch (error) {
           console.error('[admin] Vendor creation/onboarding failed:', {
@@ -952,7 +991,7 @@ export function createAdminRouter(overrides = {}) {
       });
       const { email: rawEmail, full_name, password } = schema.parse(req.body);
       const email = rawEmail.trim().toLowerCase();
-      const vendor = await createVendorAccount(email, full_name, password);
+      const vendor = await createVendorInvitation(email, full_name, password);
       return res.status(201).json({ ok: true, ...vendor });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1077,7 +1116,7 @@ export function createAdminRouter(overrides = {}) {
       const { email, role, full_name } = schema.parse(req.body);
       if (role === 'vendor') {
         try {
-          const vendor = await createVendorAccount(
+          const vendor = await createVendorInvitation(
             email.trim().toLowerCase(),
             (full_name || email).trim()
           );
@@ -1086,6 +1125,7 @@ export function createAdminRouter(overrides = {}) {
             user_id: vendor.user_id,
             email: vendor.email,
             role: vendor.role,
+            status: vendor.status,
           });
         } catch (error) {
           console.error('[admin] Vendor creation/onboarding failed:', {

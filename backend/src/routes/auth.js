@@ -56,6 +56,81 @@ export function createAuthRouter(overrides = {}) {
     return data?.users?.find((user) => user.email?.toLowerCase() === email) || null;
   }
 
+  router.post('/confirm-vendor', async (req, res, next) => {
+    try {
+      const authorization = req.header('authorization') || '';
+      const accessToken = authorization.startsWith('Bearer ')
+        ? authorization.slice(7)
+        : null;
+      if (!accessToken) {
+        return res.status(401).json({ error: 'A confirmed vendor session is required.' });
+      }
+
+      const { data: authData, error: authError } = await d.supabaseAdmin.auth.getUser(accessToken);
+      const user = authData?.user;
+      if (authError || !user) {
+        return res.status(401).json({ error: 'Vendor confirmation session is invalid or expired.' });
+      }
+      if (user.app_metadata?.role !== 'vendor') {
+        return res.status(403).json({ error: 'A vendor account is required.' });
+      }
+
+      const { data: profile, error: profileError } = await d.supabaseAdmin
+        .from('profiles')
+        .select('id, role, active')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (profile?.role !== 'vendor') {
+        return res.status(403).json({ error: 'A vendor profile is required.' });
+      }
+      if (user.app_metadata?.vendor_invitation_pending !== true) {
+        return res.json({ ok: true, email: user.email, alreadyConfirmed: true });
+      }
+
+      const { error: confirmationError } = await d.supabaseAdmin.auth.admin.updateUserById(
+        user.id,
+        {
+          email_confirm: true,
+          app_metadata: {
+            ...user.app_metadata,
+            vendor_invitation_pending: false,
+          },
+        }
+      );
+      if (confirmationError) throw confirmationError;
+
+      const { error: activationError } = await d.supabaseAdmin
+        .from('profiles')
+        .update({ active: true })
+        .eq('id', user.id)
+        .eq('role', 'vendor');
+      if (activationError) {
+        const { error: rollbackError } = await d.supabaseAdmin.auth.admin.updateUserById(
+          user.id,
+          {
+            email_confirm: false,
+            app_metadata: {
+              ...user.app_metadata,
+              vendor_invitation_pending: true,
+            },
+          }
+        );
+        if (rollbackError) {
+          console.error('[Auth] Could not restore pending vendor status after profile activation failed:', rollbackError.message);
+        }
+        throw activationError;
+      }
+
+      return res.json({ ok: true, email: user.email });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Invalid confirmation request.' });
+      }
+      return next(error);
+    }
+  });
+
   async function findProfileById(userId) {
     const { data } = await d.supabaseAdmin
       .from('profiles')
@@ -473,7 +548,7 @@ export function createAuthRouter(overrides = {}) {
       const profile = existingUser ? await findProfileById(existingUser.id) : null;
       if (
         !email.endsWith(`@${ALLOWED_DOMAIN}`) &&
-        (profile?.role !== 'vendor' || !profile.active)
+        profile?.role !== 'vendor'
       ) {
         return res.status(403).json({ error: 'Login not available for this email.' });
       }
@@ -482,15 +557,19 @@ export function createAuthRouter(overrides = {}) {
         return res.json({ nextStep: 'otp' });
       }
 
-      if (!profile || !profile.active) {
+      if (!profile) {
         return res.json({ nextStep: 'otp' }); // don't reveal inactive status
       }
 
       if (profile.role === 'vendor') {
-        if (!existingUser.email_confirmed_at) {
+        if (!existingUser.email_confirmed_at || !profile.active) {
           return res.json({ nextStep: 'vendor-confirmation-required' });
         }
         return res.json({ nextStep: 'vendor-password' });
+      }
+
+      if (!profile.active) {
+        return res.json({ nextStep: 'otp' }); // don't reveal inactive status
       }
 
       const verifiedFactor = await findVerifiedTotpFactor(existingUser.id);

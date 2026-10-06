@@ -51,6 +51,8 @@ async function request(path, opts = {}) {
 }
 
 export const api = {
+  confirmVendorAccount: () =>
+    request('/api/auth/confirm-vendor', { method: 'POST', body: JSON.stringify({}) }),
   startEnrollment: (email) =>
     request('/api/auth/start-enrollment', { method: 'POST', body: JSON.stringify({ email }) }),
   verifyEnrollmentOtp: (email, code) =>

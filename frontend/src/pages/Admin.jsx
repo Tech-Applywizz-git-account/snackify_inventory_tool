@@ -827,6 +827,30 @@ export default function Admin() {
     }
   }
 
+  async function onToggleUserActive(user) {
+    const nextActive = !user.active;
+    const userLabel = user.full_name || user.email || 'this user';
+    if (
+      !nextActive &&
+      !window.confirm(`Deactivate ${userLabel}? They will lose access immediately. You can reactivate the account later.`)
+    ) {
+      return;
+    }
+
+    setBusy(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      await api.setUserActive(user.id, nextActive);
+      setOkMsg(`${userLabel} ${nextActive ? 'reactivated' : 'deactivated'}.`);
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onChangeCafeteriaCard(user, value) {
     const next = String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 24);
     const current = String(user.cafeteria_card_number || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -894,7 +918,7 @@ export default function Admin() {
           full_name: inviteName.trim(),
           password: inviteVendorPassword,
         });
-        setOkMsg(`✅ Vendor ${inviteName} created. A confirmation and login email was sent to ${inviteEmail.trim()}.`);
+        setOkMsg(`✅ Vendor ${inviteName} was added with access pending confirmation. A confirmation email was sent to ${inviteEmail.trim()}.`);
       } else {
         await api.createUser({
           email: inviteEmail.trim(),
@@ -1359,6 +1383,7 @@ export default function Admin() {
                 <th className="py-2 pr-3">Shift</th>
                 <th className="py-2 pr-3">Assigned cabin</th>
                 <th className="py-2 pr-3">Role</th>
+                <th className="py-2 pr-3">Account status</th>
                 <th className="py-2 pr-3">Change to</th>
                 <th className="py-2 pr-3">Actions</th>
                 <th className="py-2 pr-3">Joined</th>
@@ -1367,6 +1392,8 @@ export default function Admin() {
             <tbody>
               {users.map((u) => {
                 const isMe = u.id === profile?.id;
+                const vendorPendingConfirmation =
+                  u.role === 'vendor' && u.vendor_invitation_pending;
                 return (
                   <tr key={u.id} className="border-b last:border-0">
                     <td className="py-2 pr-3 font-medium text-slate-900">
@@ -1421,6 +1448,23 @@ export default function Admin() {
                       <RolePill role={u.role} />
                     </td>
                     <td className="py-2 pr-3">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${
+                          vendorPendingConfirmation
+                            ? 'bg-amber-100 text-amber-700'
+                            : u.active
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {vendorPendingConfirmation
+                          ? 'Pending confirmation'
+                          : u.active
+                            ? 'Active'
+                            : 'Deactivated'}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3">
                       <select
                         className="input min-w-[140px] py-1 text-xs"
                         value={u.role}
@@ -1448,6 +1492,23 @@ export default function Admin() {
                         >
                           Reset Authenticator
                         </button>
+                        {vendorPendingConfirmation ? (
+                          <span className="px-3 py-1.5 text-xs text-amber-700">
+                            Awaiting confirmation
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className={`btn-secondary text-xs px-3 py-1.5 disabled:opacity-50 ${
+                              u.active ? 'text-rose-700' : 'text-emerald-700'
+                            }`}
+                            disabled={busy || (isMe && u.active)}
+                            title={isMe && u.active ? 'You cannot deactivate your own account.' : undefined}
+                            onClick={() => onToggleUserActive(u)}
+                          >
+                            {u.active ? 'Deactivate account' : 'Reactivate account'}
+                          </button>
+                        )}
                         {u.role === 'vendor' && (
                           <button
                             type="button"
