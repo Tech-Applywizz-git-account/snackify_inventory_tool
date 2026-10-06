@@ -1,10 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../lib/api.js';
 import { supabase } from '../lib/supabase.js';
-
-const ALLOWED_DOMAIN = 'applywizz.ai';
 
 const fade = (delay = 0) => ({
   initial: { opacity: 0, y: 20 },
@@ -46,6 +45,8 @@ const STATS = [
 
 export default function Login() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { session, loading: authLoading } = useAuth();
 
   const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
@@ -57,8 +58,36 @@ export default function Login() {
   const [transactionId, setTransactionId] = useState('');
   const [enrollmentTransactionId, setEnrollmentTransactionId] = useState('');
   const [totpCode, setTotpCode] = useState('');
+  const [vendorConfirmed, setVendorConfirmed] = useState(false);
 
   const submitting = useRef(false);
+
+  useEffect(() => {
+    if (searchParams.get('vendor_confirmed') !== '1' || authLoading) return;
+    let cancelled = false;
+
+    async function finishVendorConfirmation() {
+      if (session) {
+        const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
+        if (signOutError) {
+          setErr(`Email confirmed, but sign-out did not finish: ${signOutError.message}`);
+          return;
+        }
+      }
+      if (!cancelled) {
+        setVendorConfirmed(true);
+        navigate('/login', { replace: true });
+      }
+    }
+
+    finishVendorConfirmation().catch((error) => {
+      if (!cancelled) setErr(error.message || 'Could not finish account confirmation.');
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, navigate, searchParams, session]);
 
   async function submitEmail(e) {
     e.preventDefault();
@@ -66,12 +95,6 @@ export default function Login() {
     submitting.current = true;
     setErr('');
     const trimmed = email.trim().toLowerCase();
-
-    if (!trimmed.endsWith(`@${ALLOWED_DOMAIN}`)) {
-      setErr(`Only @${ALLOWED_DOMAIN} accounts are allowed.`);
-      submitting.current = false;
-      return;
-    }
 
     setEmail(trimmed);
     setBusy(true);
@@ -86,6 +109,11 @@ export default function Login() {
       } else if (data.nextStep === 'password') {
         setPassword('');
         setStep('password');
+      } else if (data.nextStep === 'vendor-password') {
+        setPassword('');
+        setStep('vendor-password');
+      } else if (data.nextStep === 'vendor-confirmation-required') {
+        setStep('vendor-confirmation-required');
       } else if (data.nextStep === 'authenticator') {
         setTransactionId(data.transactionId);
         setTotpCode('');
@@ -123,6 +151,34 @@ export default function Login() {
       }
       setStep('done');
       navigate('/', { replace: true });
+    } catch (ex) {
+      setErr(ex.message || 'Sign-in failed.');
+      setPassword('');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitVendorPassword(e) {
+    e.preventDefault();
+    setErr('');
+    if (!password) {
+      setErr('Enter your vendor account password.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api.verifyVendorPassword(email, password);
+      const { error: sessionErr } = await supabase.auth.setSession({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+      });
+      if (sessionErr) {
+        setErr(`Could not finish sign-in: ${sessionErr.message}`);
+        return;
+      }
+      setStep('done');
+      navigate('/vendor/meal-check-in', { replace: true });
     } catch (ex) {
       setErr(ex.message || 'Sign-in failed.');
       setPassword('');
@@ -414,7 +470,9 @@ export default function Login() {
                           >
                             Sign in to Pantry
                           </h2>
-                          <p className="text-white/30 text-sm">Use your @applywizz.ai work email</p>
+                          <p className="text-white/30 text-sm">
+                            Use your work email or registered vendor email
+                          </p>
                         </div>
 
                         <form onSubmit={submitEmail} className="space-y-3">
@@ -423,13 +481,13 @@ export default function Login() {
                               className="block text-[11px] font-semibold text-white/20 uppercase tracking-widest mb-2"
                               style={{ fontFamily: "'Space Grotesk', sans-serif" }}
                             >
-                              Work email
+                              Work or vendor email
                             </label>
                             <input
                               type="email"
                               required
                               autoComplete="email"
-                              placeholder={`you@${ALLOWED_DOMAIN}`}
+                              placeholder="Work or registered vendor email"
                               value={email}
                               onChange={(e) => setEmail(e.target.value)}
                               className="w-full rounded-2xl px-4 py-3.5 text-sm text-white placeholder-white/20 focus:outline-none transition-all"
@@ -471,13 +529,19 @@ export default function Login() {
                           </button>
                         </div>
 
+                        {vendorConfirmed && (
+                          <p className="text-sm text-emerald-300" role="status">
+                            Your vendor account is confirmed. You can now sign in.
+                          </p>
+                        )}
+
                         <p className="text-[11px] text-white/15 text-center">
-                          Secured with Microsoft Authenticator (MFA)
+                        Secure sign-in for staff and vendors
                         </p>
 
                         <div className="pt-2 border-t border-white/[0.05]">
                           <div className="flex items-center justify-center gap-4">
-                            {['🔐 MFA secured', '☁️ Supabase', '🏢 Internal only'].map((label) => (
+                            {['🔐 MFA secured', '☁️ Supabase', '🏪 Vendor access'].map((label) => (
                               <span key={label} className="text-[10px] text-white/15">
                                 {label}
                               </span>
@@ -591,6 +655,61 @@ export default function Login() {
                           {err && <Msg text={err} />}
                           <GradientBtn busy={busy}>{busy ? 'Signing in…' : 'Sign in →'}</GradientBtn>
                         </form>
+                        <BackBtn onClick={resetToEmail} />
+                      </motion.div>
+                    )}
+
+                    {step === 'vendor-password' && (
+                      <motion.div
+                        key="vendor-password"
+                        className="space-y-4"
+                        initial={{ opacity: 0, y: 16 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.4 }}
+                      >
+                        <div className="text-center">
+                          <h2 className="text-xl font-bold text-white mb-1">Vendor sign in</h2>
+                          <p className="text-sm text-white/40">Enter the password from your welcome email.</p>
+                        </div>
+                        <form onSubmit={submitVendorPassword} className="space-y-3">
+                          <input
+                            type="password"
+                            required
+                            autoComplete="current-password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="Vendor account password"
+                            className="w-full rounded-2xl px-4 py-3.5 text-sm text-white placeholder-white/20 focus:outline-none"
+                            style={{
+                              background: 'rgba(255,255,255,0.05)',
+                              border: '1px solid rgba(255,255,255,0.1)',
+                            }}
+                          />
+                          {err && <Msg text={err} />}
+                          <GradientBtn busy={busy}>{busy ? 'Signing in…' : 'Sign in →'}</GradientBtn>
+                        </form>
+                        <BackBtn onClick={resetToEmail} />
+                      </motion.div>
+                    )}
+
+                    {step === 'vendor-confirmation-required' && (
+                      <motion.div
+                        key="vendor-confirmation-required"
+                        className="space-y-4"
+                        initial={{ opacity: 0, y: 16 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.4 }}
+                      >
+                        <div className="text-center space-y-2">
+                          <h2 className="text-xl font-bold text-white mb-1">Confirm your account</h2>
+                          <p className="text-sm text-white/50">
+                            Open the confirmation link sent to <strong className="text-white/80">{email}</strong>.
+                            You can sign in after confirming your email.
+                          </p>
+                        </div>
+                        {err && <Msg text={err} />}
                         <BackBtn onClick={resetToEmail} />
                       </motion.div>
                     )}

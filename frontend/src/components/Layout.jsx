@@ -44,6 +44,7 @@ const navByRole = {
     '/my-meal-box',
     '/meal-reviews',
     '/meal-token-dashboard',
+    '/vendor/meal-check-in',
     '/orders',
     '/queue',
     '/available',
@@ -57,18 +58,20 @@ const navByRole = {
     '/settings',
   ],
   staff: ['/request', '/meals', '/my-meal-box', '/orders', '/settings'],
-  admin: ['/available', '/request', '/orders', '/settings'],
+  admin: ['/available', '/request', '/vendor/meal-check-in', '/orders', '/settings'],
   office_boy: [
     '/request',
     '/meals',
     '/my-meal-box',
     '/meal-token-dashboard',
+    '/vendor/meal-check-in',
     '/orders',
     '/queue',
     '/bills',
     '/manual-purchases',
     '/settings',
   ],
+  vendor: ['/vendor/meal-check-in'],
 };
 
 const labels = {
@@ -83,6 +86,7 @@ const labels = {
   '/my-meal-box': 'My Meal Box',
   '/meal-reviews': 'Meal Reviews',
   '/meal-token-dashboard': 'Meal Tokens',
+  '/vendor/meal-check-in': 'Vendor Check-in',
   '/orders': 'Orders',
   '/queue': 'Queue',
   '/bills': 'Bills',
@@ -101,6 +105,7 @@ const roleDisplay = {
   office_boy: 'Office Boy',
   admin: 'Admin',
   staff: 'Applywizzian',
+  vendor: 'Vendor',
 };
 
 export default function Layout() {

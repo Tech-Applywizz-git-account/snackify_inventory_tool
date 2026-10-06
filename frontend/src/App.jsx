@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import InactivityLock from './components/InactivityLock.jsx';
 import Layout from './components/Layout.jsx';
 import MealReviewGate from './components/MealReviewPopup.jsx';
-import NightMealBookingGate from './components/NightMealBookingPopup.jsx';
 import { AuthProvider, useAuth } from './hooks/useAuth.js';
 import { supabase } from './lib/supabase.js';
 import AdminPage from './pages/Admin.jsx';
@@ -31,14 +30,20 @@ import PreferencesPage from './pages/Preferences.jsx';
 import RequestQueuePage from './pages/RequestQueue.jsx';
 import StaffViewPage from './pages/StaffView.jsx';
 
-function Protected({ children, allow }) {
+const VendorMealCheckinPage = lazy(() => import('./features/mealCheckin/VendorMealCheckinPage.jsx'));
+
+function Protected({ children, allow, allowAal1Roles = [] }) {
   const { session, profile, profileLoading, loading, aal } = useAuth();
   if (loading) return <div className="p-8 text-slate-500">Loading...</div>;
   if (!session) return <Navigate to="/login" replace />;
   if (profileLoading) return <div className="p-8 text-slate-500">Loading...</div>;
   // Require MFA (AAL2) — if only AAL1, send back to login for TOTP step
-  // Leadership can also sign in with their Supabase Auth account password.
-  if (aal !== 'aal2' && profile?.role !== 'leadership') return <Navigate to="/login" replace />;
+  // Leadership can also authenticate through the server-side admin password.
+  if (
+    aal !== 'aal2' &&
+    profile?.role !== 'leadership' &&
+    !allowAal1Roles.includes(profile?.role)
+  ) return <Navigate to="/login" replace />;
   if (allow && profile && !allow.includes(profile.role)) {
     return <div className="p-8 text-rose-600">Access denied for role: {profile.role}</div>;
   }
@@ -73,6 +78,7 @@ function RoleHome() {
     facility_manager: '/dashboard',
     office_boy: '/queue',
     staff: '/request',
+    vendor: '/vendor/meal-check-in',
   };
   return <Navigate to={roleHome[profile.role] || '/request'} replace />;
 }
@@ -83,12 +89,16 @@ function RoleHome() {
  * If not, shows the onboarding flow before rendering children.
  */
 function OnboardingGate({ children }) {
-  const { session, loading: authLoading } = useAuth();
+  const { session, profile, loading: authLoading } = useAuth();
   const [checking, setChecking] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
-    if (authLoading || !session) return;
+    if (authLoading || !session || profile?.role === 'vendor') {
+      setChecking(false);
+      setNeedsSetup(false);
+      return;
+    }
 
     async function check() {
       try {
@@ -109,7 +119,7 @@ function OnboardingGate({ children }) {
     }
 
     check();
-  }, [session, authLoading]);
+  }, [session, profile?.role, authLoading]);
 
   if (authLoading || checking) {
     return (
@@ -134,12 +144,21 @@ export default function App() {
       <Route path="/guest" element={<GuestPage />} />
       <Route path="/guest/track/:id" element={<LiveTrackingPage />} />
       <Route
+        path="/vendor/meal-check-in"
+        element={
+          <Protected allow={['leadership', 'office_boy', 'admin', 'vendor']} allowAal1Roles={['vendor']}>
+            <Suspense fallback={<div className="p-8 text-slate-500">Loading vendor check-in...</div>}>
+              <VendorMealCheckinPage />
+            </Suspense>
+          </Protected>
+        }
+      />
+      <Route
         element={
           <Protected>
             <OnboardingGate>
               <InactivityLock>
                 <MealReviewGate />
-                <NightMealBookingGate />
                 <Layout />
               </InactivityLock>
             </OnboardingGate>

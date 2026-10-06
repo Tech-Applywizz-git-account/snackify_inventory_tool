@@ -32,6 +32,7 @@ import syncCabinRouter from './routes/syncCabinCron.js';
 import guestMealRouter from './routes/guestMeal.js';
 import tokensRouter from './routes/tokens.js';
 import supportRouter from './routes/support.js';
+import mealCheckinRouter from './features/mealCheckin/router.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -101,6 +102,7 @@ app.use('/api/bills', billsRouter);
 app.use('/api/cafeteria', cafeteriaRouter);
 app.use('/api/meals', mealsRouter);
 app.use('/api/meal-reviews', mealReviewsRouter);
+app.use('/api/meal-checkin', mealCheckinRouter);
 app.use('/api/push', pushRouter);
 app.use('/api/meal-print', mealPrintRouter);
 app.use('/api/tokens', tokensRouter);

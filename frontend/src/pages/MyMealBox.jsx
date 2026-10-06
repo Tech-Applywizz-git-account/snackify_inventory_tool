@@ -8,9 +8,10 @@ import {
   RefreshCw,
   Ticket,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
+import MealQrPanel from '../features/mealCheckin/MealQrPanel.jsx';
 
 // ── IST date helper ───────────────────────────────────────────────────────────
 function getISTDate() {
@@ -52,13 +53,18 @@ export default function MyMealBox() {
     activeDate = getNextWorkingDay();
   }
 
-  const selectedDate = activeDate;
+  const [selectedDate, setSelectedDate] = useState(activeDate);
   const isToday = selectedDate === today;
 
   const [data, setData] = useState(null); // { booking, canReprint, reprintWindowMessage }
   const [loading, setLoading] = useState(true);
   const [printing, setPrinting] = useState(false);
   const [toast, setToast] = useState(null);
+  const loadRequestId = useRef(0);
+
+  useEffect(() => {
+    setSelectedDate(activeDate);
+  }, [activeDate]);
 
   const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type });
@@ -66,19 +72,48 @@ export default function MyMealBox() {
   }, []);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     try {
-      const result = await api.myMealToken(selectedDate);
+      let lookupDate = activeDate;
+      const hasExplicitDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '');
+
+      if (!hasExplicitDate) {
+        const [year, month] = activeDate.split('-').map(Number);
+        const nextMonth = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 7);
+        const bookingsByMonth = await Promise.all(
+          [...new Set([activeDate.slice(0, 7), nextMonth])].map((monthKey) =>
+            api.myMealBookings(monthKey)
+          )
+        );
+        const nextMeal = bookingsByMonth
+          .flat()
+          .filter(
+            (booking) =>
+              booking.meal_date >= activeDate &&
+              ['veg', 'non_veg', 'egg'].includes(booking.choice)
+          )
+          .sort((first, second) => first.meal_date.localeCompare(second.meal_date))[0];
+
+        if (nextMeal) lookupDate = nextMeal.meal_date;
+      }
+
+      const result = await api.myMealToken(lookupDate);
+      if (requestId !== loadRequestId.current) return;
+      setSelectedDate(result.booking ? lookupDate : activeDate);
       setData(result);
     } catch (e) {
-      showToast(e.message, 'error');
+      if (requestId === loadRequestId.current) showToast(e.message, 'error');
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
-  }, [selectedDate, showToast]);
+  }, [activeDate, dateParam, showToast]);
 
   useEffect(() => {
     load();
+    return () => {
+      loadRequestId.current += 1;
+    };
   }, [load]);
 
   async function handleReprint() {
@@ -380,6 +415,7 @@ export default function MyMealBox() {
 
                 {/* Token Details */}
                 <div style={{ padding: '20px 24px' }}>
+                  {choice && <MealQrPanel mealDate={selectedDate} />}
                   <div
                     style={{
                       display: 'grid',

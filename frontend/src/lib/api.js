@@ -70,6 +70,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  verifyVendorPassword: (email, password) =>
+    request('/api/auth/verify-vendor-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
   verifyTotpLogin: (transactionId, code) =>
     request('/api/auth/verify-totp-login', {
       method: 'POST',
@@ -154,6 +159,13 @@ export const api = {
     request(`/api/admin/users/${userId}/reset-authenticator`, { method: 'POST' }),
   createUser: (body) =>
     request('/api/admin/users/create', { method: 'POST', body: JSON.stringify(body) }),
+  createVendor: (body) =>
+    request('/api/admin/vendors/create', { method: 'POST', body: JSON.stringify(body) }),
+  resetVendorPassword: (userId, password) =>
+    request(`/api/admin/vendors/${userId}/password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
   inviteUser: (body) =>
     request('/api/admin/users/invite', { method: 'POST', body: JSON.stringify(body) }),
   lateMealBooking: (body) =>
@@ -238,6 +250,11 @@ export const api = {
 
   // Meal Box System
   myMealToken: (date) => request(`/api/meal-print/my-token?date=${date}`),
+  mealCheckinQr: (date) => request(`/api/meal-checkin/my-qr?date=${encodeURIComponent(date)}`),
+  mealCheckinScan: (body) =>
+    request('/api/meal-checkin/scan', { method: 'POST', body: JSON.stringify(body) }),
+  mealCheckinSummary: (date, shift = 'all') =>
+    request(`/api/meal-checkin/summary?date=${encodeURIComponent(date)}&shift=${encodeURIComponent(shift)}`),
   mealPrintStatus: (date) => request(`/api/meal-print/status?date=${date}`),
   triggerCabinPrint: (body) =>
     request('/api/meal-print/trigger-cabin', { method: 'POST', body: JSON.stringify(body) }),

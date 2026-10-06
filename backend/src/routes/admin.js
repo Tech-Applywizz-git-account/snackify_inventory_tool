@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
 import { lookupEmployeeIdByEmail } from '../lib/hrms.js';
 import { applyMealTokens } from '../lib/tokens.js';
+import { sendVendorAccountEmail } from '../lib/microsoftGraph.js';
 import {
   getRequireReviewToBookMeals,
   setRequireReviewToBookMeals,
@@ -16,8 +17,9 @@ import {
   validateReceiptDesign,
 } from '../../../office-print-gateway/receiptDesign.js';
 
-const roleEnum = z.enum(['facility_manager', 'finance', 'leadership', 'staff', 'office_boy']);
+const roleEnum = z.enum(['facility_manager', 'finance', 'leadership', 'staff', 'office_boy', 'vendor']);
 const lateMealChoices = z.enum(['veg', 'egg', 'non_veg']);
+const VENDOR_INITIAL_PASSWORD = 'vendor@123';
 
 function getISTDateString() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -108,9 +110,20 @@ export function getInviteRedirectUrl() {
   return `${base.replace(/\/$/, '')}/dashboard`;
 }
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]);
+}
+
 export function createAdminRouter(overrides = {}) {
   const d = {
     supabaseAdmin,
+    sendVendorAccountEmail,
     ...overrides,
   };
 
@@ -131,6 +144,123 @@ export function createAdminRouter(overrides = {}) {
     return (data?.factors ?? []).find(
       (factor) => factor.factor_type === 'totp' && factor.status === 'verified'
     ) || null;
+  }
+
+  async function createVendorAccount(email, full_name, password = VENDOR_INITIAL_PASSWORD) {
+    let userId;
+    let stage = 'creating the vendor account';
+    try {
+      const { data: created, error: createError } = await d.supabaseAdmin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: false,
+        app_metadata: { role: 'vendor' },
+        user_metadata: { full_name },
+      });
+      if (createError) {
+        if (String(createError.message).toLowerCase().includes('already')) {
+          const duplicateError = new Error('An account already exists for that email.');
+          duplicateError.status = 409;
+          duplicateError.publicMessage = duplicateError.message;
+          throw duplicateError;
+        }
+        throw createError;
+      }
+      userId = created?.user?.id;
+      if (!userId) throw new Error('Supabase did not return the created vendor account.');
+
+      stage = 'saving the vendor profile';
+      const { data: profile, error: profileError } = await d.supabaseAdmin
+        .from('profiles')
+        .upsert({ id: userId, full_name, email, role: 'vendor', active: true }, { onConflict: 'id' })
+        .select()
+        .single();
+      if (profileError) throw profileError;
+
+      stage = 'generating the confirmation link';
+      const redirectTo = `${(process.env.APP_PUBLIC_URL || 'http://localhost:5173').replace(/\/$/, '')}/login?vendor_confirmed=1`;
+      const { data: linkData, error: linkError } = await d.supabaseAdmin.auth.admin.generateLink({
+        type: 'magiclink',
+        email,
+        options: { redirectTo },
+      });
+      if (linkError) throw linkError;
+      const confirmationLink = linkData?.properties?.action_link;
+      if (!confirmationLink) throw new Error('Supabase did not return a vendor confirmation link.');
+
+      const safeName = escapeHtml(full_name);
+      const safeEmail = escapeHtml(email);
+      const safeLink = escapeHtml(confirmationLink);
+      const safePassword = escapeHtml(password);
+      stage = 'sending the onboarding email';
+      await d.sendVendorAccountEmail(
+        email,
+        'Welcome to ApplyWizz Vendor Portal',
+        `<div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.5">
+         <p>Hello ${safeName},</p>
+         <p>Welcome to the ApplyWizz vendor portal. Your account has been registered.</p>
+         <p style="margin:0 0 20px">
+           <a href="${safeLink}" style="display:inline-block;padding:12px 20px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;border-radius:6px">
+             Confirm account
+           </a>
+         </p>
+         <p><strong>Vendor account details</strong></p>
+         <p><strong>Registered Email ID:</strong> ${safeEmail}<br>
+         <strong>Initial Password:</strong> ${safePassword}</p>
+         <p>Confirm your account using the button above. You will be redirected to the login page.</p>
+         <p>If the button does not work, use this link:<br><a href="${safeLink}">${safeLink}</a></p>
+         </div>`
+      );
+
+      return { user_id: userId, email, role: 'vendor', profile };
+    } catch (error) {
+      const errorMessage = String(error?.message || '').toLowerCase();
+      if (
+        error?.code === '23514' ||
+        errorMessage.includes('maximum of 3 vendor accounts')
+      ) {
+        error.status = 409;
+        error.publicMessage = 'The maximum of 3 vendor accounts has been reached.';
+        stage = 'checking the vendor account limit';
+      } else {
+        error.vendorStep = stage;
+      }
+      if (userId) {
+        try {
+          const { error: cleanupError } = await d.supabaseAdmin.auth.admin.deleteUser(userId);
+          if (cleanupError) {
+            console.error('[admin] Failed to clean up vendor account after onboarding failure:', cleanupError.message);
+          }
+        } catch (cleanupError) {
+          console.error('[admin] Failed to clean up vendor account after onboarding failure:', cleanupError.message);
+        }
+      }
+      throw error;
+    }
+  }
+
+  function getVendorCreationErrorResponse(error) {
+    if (error.publicMessage) {
+      return { status: error.status || 409, message: error.publicMessage };
+    }
+    if (error.vendorStep === 'sending the onboarding email') {
+      return {
+        status: 503,
+        message:
+          'Vendor account setup could not send the onboarding email. Check Microsoft Graph credentials, that the support@applywizz.ai sender exists, and that it has Mail.Send permission.',
+      };
+    }
+    if (error.vendorStep === 'generating the confirmation link') {
+      return {
+        status: 503,
+        message:
+          'Vendor account setup could not generate the confirmation link. Check the Supabase Auth configuration and redirect URL allowlist.',
+      };
+    }
+    return {
+      status: 503,
+      message: `Vendor account setup failed while ${error.vendorStep || 'processing the request'}. Check the backend logs for details.`,
+    };
   }
 
   // Every admin route is leadership-only.
@@ -654,6 +784,20 @@ export function createAdminRouter(overrides = {}) {
         full_name: z.string().min(1),
       });
       const { email, role, full_name } = schema.parse(req.body);
+      if (role === 'vendor') {
+        try {
+          const vendor = await createVendorAccount(email.trim().toLowerCase(), full_name.trim());
+          return res.status(201).json({ ok: true, ...vendor });
+        } catch (error) {
+          console.error('[admin] Vendor creation/onboarding failed:', {
+            stage: error.vendorStep || 'creating the vendor account',
+            code: error.code || null,
+            message: error.message,
+          });
+          const response = getVendorCreationErrorResponse(error);
+          return res.status(response.status).json({ error: response.message });
+        }
+      }
 
       const pw = getDefaultPassword();
       if (!pw) {
@@ -664,6 +808,7 @@ export function createAdminRouter(overrides = {}) {
         email,
         password: pw,
         email_confirm: true,
+        app_metadata: { role },
         user_metadata: { full_name },
       });
 
@@ -689,6 +834,81 @@ export function createAdminRouter(overrides = {}) {
       res.status(201).json({ ok: true, user_id: userId, email, role, profile });
     } catch (e) {
       next(e);
+    }
+  });
+
+  router.post('/vendors/create', async (req, res) => {
+    try {
+      const schema = z.object({
+        email: z.string().email(),
+        full_name: z.string().trim().min(1),
+        password: z.string().min(8).max(128).default(VENDOR_INITIAL_PASSWORD),
+      });
+      const { email: rawEmail, full_name, password } = schema.parse(req.body);
+      const email = rawEmail.trim().toLowerCase();
+      const vendor = await createVendorAccount(email, full_name, password);
+      return res.status(201).json({ ok: true, ...vendor });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Invalid vendor details.' });
+      }
+      console.error('[admin] Vendor creation/onboarding failed:', {
+        stage: error.vendorStep || 'creating the vendor account',
+        code: error.code || null,
+        message: error.message,
+      });
+      const response = getVendorCreationErrorResponse(error);
+      return res.status(response.status).json({ error: response.message });
+    }
+  });
+
+  router.post('/vendors/:userId/password', async (req, res, next) => {
+    try {
+      const schema = z.object({ password: z.string().min(8).max(128) });
+      const { password } = schema.parse(req.body);
+      const targetUser = await findUserById(req.params.userId);
+      if (!targetUser) return res.status(404).json({ error: 'Vendor not found.' });
+      if (!targetUser.email) return res.status(409).json({ error: 'Vendor account has no registered email.' });
+
+      const { data: profile, error: profileError } = await d.supabaseAdmin
+        .from('profiles')
+        .select('role')
+        .eq('id', req.params.userId)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (profile?.role !== 'vendor') return res.status(404).json({ error: 'Vendor not found.' });
+
+      const { error: updateError } = await d.supabaseAdmin.auth.admin.updateUserById(req.params.userId, {
+        password,
+      });
+      if (updateError) throw updateError;
+
+      const safePassword = escapeHtml(password);
+      const safeEmail = escapeHtml(targetUser.email || '');
+      const loginUrl = escapeHtml(`${(process.env.APP_PUBLIC_URL || 'http://localhost:5173').replace(/\/$/, '')}/login`);
+      try {
+        await d.sendVendorAccountEmail(
+          targetUser.email,
+          'Your ApplyWizz vendor password was updated',
+          `<p>Hello,</p>
+           <p>An administrator has updated the password for your vendor account.</p>
+           <p><strong>Registered Email ID:</strong> ${safeEmail}<br>
+           <strong>New Password:</strong> ${safePassword}</p>
+           <p><a href="${loginUrl}">Go to the login page</a></p>`
+        );
+      } catch (emailError) {
+        console.error('[admin] Vendor password was changed but notification email failed:', emailError.message);
+        return res.status(503).json({
+          error: 'The password was updated, but the notification email could not be sent. Contact the vendor directly.',
+        });
+      }
+
+      return res.json({ ok: true, email: targetUser.email });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
+      }
+      next(error);
     }
   });
 
@@ -749,6 +969,28 @@ export function createAdminRouter(overrides = {}) {
         full_name: z.string().optional(),
       });
       const { email, role, full_name } = schema.parse(req.body);
+      if (role === 'vendor') {
+        try {
+          const vendor = await createVendorAccount(
+            email.trim().toLowerCase(),
+            (full_name || email).trim()
+          );
+          return res.status(201).json({
+            ok: true,
+            user_id: vendor.user_id,
+            email: vendor.email,
+            role: vendor.role,
+          });
+        } catch (error) {
+          console.error('[admin] Vendor creation/onboarding failed:', {
+            stage: error.vendorStep || 'creating the vendor account',
+            code: error.code || null,
+            message: error.message,
+          });
+          const response = getVendorCreationErrorResponse(error);
+          return res.status(response.status).json({ error: response.message });
+        }
+      }
 
       const { data: invited, error: invErr } = await d.supabaseAdmin.auth.admin.inviteUserByEmail(
         email,

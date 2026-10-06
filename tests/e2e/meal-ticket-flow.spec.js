@@ -91,6 +91,14 @@ test.describe('Meal ticket visibility', () => {
         reprintWindowMessage: 'Reprint opens after token generation',
       },
     }));
+    await page.route(new RegExp(`/api/meal-checkin/my-qr\\?date=${TEST_DATE}$`), route => route.fulfill({
+      json: {
+        meal_date: TEST_DATE,
+        choice: 'veg',
+        token: 'signed-meal-checkin-token',
+        qr_code: 'data:image/png;base64,aGVsbG8=',
+      },
+    }));
 
     await page.goto('/meals');
     await page.locator('button').filter({ hasText: '29' }).first().click();
@@ -103,6 +111,9 @@ test.describe('Meal ticket visibility', () => {
     await expect(page.getByText(/Today's Meal|Meal Ticket/)).toBeVisible();
     await expect(page.getByText('Token pending').first()).toBeVisible();
     await expect(page.getByText('Token will be generated at print time')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Meal collection QR' })).toBeVisible();
+    await expect(page.getByRole('img', { name: `Meal collection QR for ${TEST_DATE}` }))
+      .toHaveAttribute('src', 'data:image/png;base64,aGVsbG8=');
     await expect(page.getByRole('button', { name: /reprint ticket/i })).toBeDisabled();
   });
 
@@ -129,5 +140,49 @@ test.describe('Meal ticket visibility', () => {
     await expect(page.getByText('29MAY-TECH-001')).toBeVisible();
     await expect(page.getByText('Tech Cabin', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /reprint my token/i })).toBeVisible();
+  });
+
+  test('My Meal Box opens the next booked meal without showing an empty state first', async ({ page }) => {
+    const nextMealDate = '2026-06-01';
+    await page.route(/\/api\/meals\/my-bookings\?month=2026-05$/, route => route.fulfill({
+      json: [],
+    }));
+    await page.route(/\/api\/meals\/my-bookings\?month=2026-06$/, route => route.fulfill({
+      json: [{
+        id: 'booking-next',
+        user_id: USER_ID,
+        meal_date: nextMealDate,
+        choice: 'egg',
+      }],
+    }));
+    await page.route(/\/api\/meal-print\/my-token\?date=2026-06-01$/, route => route.fulfill({
+      json: {
+        booking: {
+          id: 'booking-next',
+          meal_date: nextMealDate,
+          choice: 'egg',
+          token_number: null,
+          cabin_name: null,
+          print_count: 0,
+        },
+        canReprint: false,
+        reprintWindowMessage: 'Token assigned at print time',
+      },
+    }));
+    await page.route(/\/api\/meal-checkin\/my-qr\?date=2026-06-01$/, route => route.fulfill({
+      json: {
+        meal_date: nextMealDate,
+        choice: 'egg',
+        token: 'signed-next-meal-token',
+        qr_code: 'data:image/png;base64,aGVsbG8=',
+      },
+    }));
+
+    await page.goto('/my-meal-box');
+
+    await expect(page.getByText('No meal booked for today')).not.toBeVisible();
+    await expect(page.getByText('Egg', { exact: true })).toBeVisible();
+    await expect(page.getByRole('img', { name: `Meal collection QR for ${nextMealDate}` }))
+      .toHaveAttribute('src', 'data:image/png;base64,aGVsbG8=');
   });
 });
