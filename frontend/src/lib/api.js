@@ -121,16 +121,6 @@ export const api = {
     request('/api/admin/receipt-design', { method: 'PATCH', body: JSON.stringify(config) }),
   resetReceiptDesign: () => request('/api/admin/receipt-design/reset', { method: 'POST' }),
   mealOverview: () => request('/api/admin/meal-overview'),
-  sendMealReport: (body) =>
-    request('/api/admin/meal-reports/send', { method: 'POST', body: JSON.stringify(body) }),
-  listMailRecipients: (mailType) =>
-    request(`/api/admin/mail-recipients${mailType ? `?mail_type=${encodeURIComponent(mailType)}` : ''}`),
-  addMailRecipient: (body) =>
-    request('/api/admin/mail-recipients', { method: 'POST', body: JSON.stringify(body) }),
-  updateMailRecipient: (id, body) =>
-    request(`/api/admin/mail-recipients/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  deleteMailRecipient: (id) =>
-    request(`/api/admin/mail-recipients/${id}`, { method: 'DELETE' }),
   listUnbookedUsers: (date) => request(`/api/admin/unbooked-users${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   listBookedUsers: (date) => request(`/api/admin/booked-users${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   setUserRole: (userId, role) =>

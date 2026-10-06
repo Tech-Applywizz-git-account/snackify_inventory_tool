@@ -159,6 +159,53 @@ async function request(app, method, path, body) {
   };
 }
 
+describe('GET /api/admin/meal-booking-analytics', () => {
+  it('returns daily counts grouped by the users saved shifts', async () => {
+    const supabaseAdmin = {
+      from: (table) => makeChain({
+        data: table === 'employee_cafeteria_preferences'
+          ? [{ user_id: 'day-user', shift: 'morning' }, { user_id: 'night-user', shift: 'night' }]
+          : [
+              { user_id: 'day-user', meal_date: '2026-08-03', choice: 'veg' },
+              { user_id: 'night-user', meal_date: '2026-08-03', choice: 'egg' },
+              { user_id: 'day-user', meal_date: '2026-08-03', choice: 'skip' },
+            ],
+      }),
+    };
+    const app = buildApp({ user: { role: 'leadership' }, supabaseAdmin });
+    const result = await request(
+      app,
+      'GET',
+      '/api/admin/meal-booking-analytics?from=2026-08-03&to=2026-08-03&group=day'
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.periods.length, 1);
+    assert.equal(result.body.periods[0].day_veg, 1);
+    assert.equal(result.body.periods[0].day_skipped, 1);
+    assert.equal(result.body.periods[0].night_egg, 1);
+    assert.equal(result.body.periods[0].day_bookings, 1);
+    assert.equal(result.body.periods[0].night_bookings, 1);
+  });
+
+  it('rejects invalid dates and reversed ranges', async () => {
+    const app = buildApp({ user: { role: 'leadership' }, supabaseAdmin: { from: () => makeChain() } });
+    const invalidDate = await request(
+      app,
+      'GET',
+      '/api/admin/meal-booking-analytics?from=2026-02-30&to=2026-03-01'
+    );
+    const reversedRange = await request(
+      app,
+      'GET',
+      '/api/admin/meal-booking-analytics?from=2026-03-02&to=2026-03-01'
+    );
+
+    assert.equal(invalidDate.status, 400);
+    assert.equal(reversedRange.status, 400);
+  });
+});
+
 describe('getDefaultPassword() — DEFAULT_PASSWORD env var', () => {
   let savedPassword;
   let savedNodeEnv;
