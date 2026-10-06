@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import QRCode from 'qrcode';
 import { isSendMailConfigured, sendOtpEmail } from '../lib/microsoftGraph.js';
@@ -55,6 +56,97 @@ export function createAuthRouter(overrides = {}) {
     if (error) throw error;
     return data?.users?.find((user) => user.email?.toLowerCase() === email) || null;
   }
+
+  async function findPendingVendorByConfirmationHash(tokenHash) {
+    const expectedHash = Buffer.from(tokenHash, 'hex');
+    const perPage = 500;
+    for (let page = 1; ; page += 1) {
+      const { data, error } = await d.supabaseAdmin.auth.admin.listUsers({ page, perPage });
+      if (error) throw error;
+      const users = data?.users || [];
+      const vendor = users.find((user) => {
+        const storedHash = user.app_metadata?.vendor_confirmation_token_hash;
+        if (
+          user.app_metadata?.role !== 'vendor' ||
+          user.app_metadata?.vendor_invitation_pending !== true ||
+          typeof storedHash !== 'string' ||
+          !/^[a-f\d]{64}$/i.test(storedHash)
+        ) {
+          return false;
+        }
+        return timingSafeEqual(Buffer.from(storedHash, 'hex'), expectedHash);
+      });
+      if (vendor) return vendor;
+      if (users.length < perPage) return null;
+    }
+  }
+
+  router.post('/confirm-vendor-link', async (req, res, next) => {
+    try {
+      const schema = z.object({
+        tokenHash: z.string().regex(/^[a-f\d]{64}$/i),
+      });
+      const { tokenHash } = schema.parse(req.body);
+      const user = await findPendingVendorByConfirmationHash(tokenHash);
+      if (!user) {
+        return res.status(400).json({ error: 'This vendor confirmation link is invalid or has already been used.' });
+      }
+
+      const { data: profile, error: profileError } = await d.supabaseAdmin
+        .from('profiles')
+        .select('id, role, active')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (profile?.role !== 'vendor') {
+        return res.status(403).json({ error: 'A vendor profile is required.' });
+      }
+
+      const { data: activatedProfile, error: activationError } = await d.supabaseAdmin
+        .from('profiles')
+        .update({ active: true })
+        .eq('id', user.id)
+        .eq('role', 'vendor')
+        .eq('active', false)
+        .select('id')
+        .maybeSingle();
+      if (activationError) throw activationError;
+      if (!activatedProfile) {
+        return res.status(400).json({ error: 'This vendor confirmation link is invalid or has already been used.' });
+      }
+
+      const { error: confirmationError } = await d.supabaseAdmin.auth.admin.updateUserById(
+        user.id,
+        {
+          email_confirm: true,
+          app_metadata: {
+            ...user.app_metadata,
+            vendor_invitation_pending: false,
+            vendor_confirmation_token_hash: null,
+          },
+        }
+      );
+      if (confirmationError) {
+        const { error: restoreError } = await d.supabaseAdmin
+          .from('profiles')
+          .update({ active: false })
+          .eq('id', user.id)
+          .eq('role', 'vendor')
+          .eq('active', true);
+        if (restoreError) {
+          console.error('[Auth] Could not restore inactive vendor profile after confirmation failed:', restoreError.message);
+        }
+        throw confirmationError;
+      }
+
+      return res.json({ ok: true, email: user.email });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Invalid vendor confirmation link.' });
+      }
+      return next(error);
+    }
+  });
 
   router.post('/confirm-vendor', async (req, res, next) => {
     try {
