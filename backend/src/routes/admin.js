@@ -305,6 +305,7 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
+<<<<<<< HEAD
   router.get('/meal-booking-analytics', async (req, res, next) => {
     try {
       const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
@@ -407,11 +408,124 @@ export function createAdminRouter(overrides = {}) {
     } catch (e) {
       if (e instanceof z.ZodError) {
         return res.status(400).json({ error: 'from and to must be valid dates; group must be day, week, or month' });
+=======
+  // POST /api/admin/meal-reports/send — manual day/night report (email + telegram)
+  router.post('/meal-reports/send', async (req, res, next) => {
+    try {
+      const schema = z.object({
+        date: z.enum(['today', 'tomorrow']),
+        shift: z.enum(['day', 'night']),
+      });
+      const { date, shift } = schema.parse(req.body || {});
+      const { today, tomorrow } = getAdminMealDates();
+      const mealDate = date === 'today' ? today : tomorrow;
+      const { sendMealShiftReport } = await import('../lib/mealReports.js');
+      const result = await sendMealShiftReport({ mealDate, shift });
+      res.json(result);
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ error: 'date must be today|tomorrow and shift must be day|night' });
+>>>>>>> 3300b54a246ddf59446d234ac8cf348ddbe4bc2b
       }
       next(e);
     }
   });
 
+<<<<<<< HEAD
+=======
+  // GET /api/admin/mail-recipients?mail_type=
+  router.get('/mail-recipients', async (req, res, next) => {
+    try {
+      const {
+        listMailRecipients,
+        MAIL_TYPES,
+        MAIL_TYPE_LABELS,
+      } = await import('../lib/mailRecipients.js');
+      const mailType = req.query.mail_type ? String(req.query.mail_type) : null;
+      if (mailType && !MAIL_TYPES.includes(mailType)) {
+        return res.status(400).json({ error: `mail_type must be one of: ${MAIL_TYPES.join(', ')}` });
+      }
+      const recipients = await listMailRecipients(mailType);
+      res.json({ mail_types: MAIL_TYPES, labels: MAIL_TYPE_LABELS, recipients });
+    } catch (e) {
+      if (/relation .* does not exist|schema cache/i.test(String(e?.message || ''))) {
+        return res.status(503).json({
+          error: 'Apply the mail_recipients migration (0053_mail_recipients.sql) before managing recipients.',
+        });
+      }
+      next(e);
+    }
+  });
+
+  // POST /api/admin/mail-recipients
+  router.post('/mail-recipients', async (req, res, next) => {
+    try {
+      const schema = z.object({
+        email: z.string().email(),
+        mail_type: z.string(),
+        recipient_kind: z.enum(['to', 'cc']),
+        display_name: z.string().trim().max(120).nullable().optional(),
+        active: z.boolean().optional(),
+      });
+      const body = schema.parse(req.body || {});
+      const { upsertMailRecipient } = await import('../lib/mailRecipients.js');
+      const recipient = await upsertMailRecipient({
+        email: body.email,
+        mailType: body.mail_type,
+        recipientKind: body.recipient_kind,
+        displayName: body.display_name ?? null,
+        active: body.active,
+      });
+      res.status(201).json(recipient);
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Invalid mail recipient payload.' });
+      }
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      if (/relation .* does not exist|schema cache/i.test(String(e?.message || ''))) {
+        return res.status(503).json({
+          error: 'Apply the mail_recipients migration (0053_mail_recipients.sql) before managing recipients.',
+        });
+      }
+      next(e);
+    }
+  });
+
+  // PATCH /api/admin/mail-recipients/:id
+  router.patch('/mail-recipients/:id', async (req, res, next) => {
+    try {
+      const schema = z.object({
+        email: z.string().email().optional(),
+        mail_type: z.string().optional(),
+        recipient_kind: z.enum(['to', 'cc']).optional(),
+        display_name: z.string().trim().max(120).nullable().optional(),
+        active: z.boolean().optional(),
+      });
+      const patch = schema.parse(req.body || {});
+      const { updateMailRecipient } = await import('../lib/mailRecipients.js');
+      const recipient = await updateMailRecipient(req.params.id, patch);
+      res.json(recipient);
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Invalid mail recipient update.' });
+      }
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      next(e);
+    }
+  });
+
+  // DELETE /api/admin/mail-recipients/:id
+  router.delete('/mail-recipients/:id', async (req, res, next) => {
+    try {
+      const { deleteMailRecipient } = await import('../lib/mailRecipients.js');
+      await deleteMailRecipient(req.params.id);
+      res.status(204).end();
+    } catch (e) {
+      next(e);
+    }
+  });
+
+>>>>>>> 3300b54a246ddf59446d234ac8cf348ddbe4bc2b
   router.patch('/meal-settings', async (req, res, next) => {
     try {
       const enabled = req.body?.require_review_to_book_meals;
@@ -496,12 +610,12 @@ export function createAdminRouter(overrides = {}) {
     try {
       let { data: profiles, error: pErr } = await d.supabaseAdmin
         .from('profiles')
-        .select('id, full_name, role, preferred_name, employee_code, consumer_report, created_at, cafeteria_card_number')
+        .select('id, full_name, role, preferred_name, employee_code, consumer_report, created_at, cafeteria_card_number, active')
         .order('created_at', { ascending: true });
       if (pErr && /cafeteria_card_number/i.test(pErr.message || '')) {
         const retry = await d.supabaseAdmin
           .from('profiles')
-          .select('id, full_name, role, preferred_name, employee_code, consumer_report, created_at')
+          .select('id, full_name, role, preferred_name, employee_code, consumer_report, created_at, active')
           .order('created_at', { ascending: true });
         profiles = retry.data;
         pErr = retry.error;
@@ -643,6 +757,53 @@ export function createAdminRouter(overrides = {}) {
         .select()
         .single();
       if (error) throw error;
+      res.json(data);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // PATCH /api/admin/users/:id/active — deactivate / reactivate an employee
+  router.patch('/users/:id/active', async (req, res, next) => {
+    try {
+      const schema = z.object({ active: z.boolean() });
+      const { active } = schema.parse(req.body);
+
+      if (req.params.id === req.user.id && active === false) {
+        return res.status(400).json({
+          error: 'You cannot deactivate your own account. Ask another leadership user to do it.',
+        });
+      }
+
+      const { data: existing, error: existingErr } = await d.supabaseAdmin
+        .from('profiles')
+        .select('id, full_name, role, active')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (existingErr) throw existingErr;
+      if (!existing) return res.status(404).json({ error: 'User not found.' });
+
+      const { data, error } = await d.supabaseAdmin
+        .from('profiles')
+        .update({ active })
+        .eq('id', req.params.id)
+        .select('id, full_name, role, active, preferred_name, employee_code, consumer_report, created_at, cafeteria_card_number')
+        .single();
+      if (error) throw error;
+
+      await d.supabaseAdmin.from('audit_logs').insert({
+        user_id: req.user.id,
+        action: active ? 'USER_REACTIVATED' : 'USER_DEACTIVATED',
+        entity_type: 'profile',
+        entity_id: req.params.id,
+        old_value: {
+          active: existing.active,
+          full_name: existing.full_name,
+          role: existing.role,
+        },
+        new_value: { active },
+      });
+
       res.json(data);
     } catch (e) {
       next(e);
@@ -1125,7 +1286,7 @@ export function createAdminRouter(overrides = {}) {
   router.post('/wallets/monthly-reset', async (_req, res, next) => {
     try {
       const { ensureMonthGrant } = await import('../lib/tokens.js');
-      const { data: users, error } = await d.supabaseAdmin.from('profiles').select('id');
+      const { data: users, error } = await d.supabaseAdmin.from('profiles').select('id').eq('active', true);
       if (error) throw error;
       let granted = 0;
       for (const u of users || []) {

@@ -5,8 +5,19 @@ import { checkAndNotifyLowStock, sendDailyStockDigest } from '../lib/stockAlerts
 import { supabaseAdmin } from '../lib/supabase.js';
 import { postAIReminderToTeams } from '../lib/teams.js';
 import { sendPushToUsers } from './push.js';
-import { sendMealBookingReminderEmail, sendMealSkipReminderEmail, sendMealNightReportEmail, sendMealBookingConfirmationEmail } from '../lib/microsoftGraph.js';
+import { sendMealBookingReminderEmail, sendMealSkipReminderEmail, sendMealBookingConfirmationEmail } from '../lib/microsoftGraph.js';
 import { ensureMonthGrant } from '../lib/tokens.js';
+import { sendMealShiftReport } from '../lib/mealReports.js';
+import {
+  buildNightShiftReportData,
+  countMealBookings,
+  filterDayMealBookings,
+  filterNightMealBookings,
+  getEveningReportMealDate,
+  getISTDateString,
+  getNextWorkingMealDate,
+  getReportRecipientEmails,
+} from '../lib/mealReportHelpers.js';
 
 const router = Router();
 
@@ -24,6 +35,17 @@ const CABIN_PRINT_ORDER = [
 
 // Exported so mealPrint.js can use the same cabin list
 export { CABIN_PRINT_ORDER };
+
+export {
+  buildNightShiftReportData,
+  countMealBookings,
+  filterDayMealBookings,
+  filterNightMealBookings,
+  getEveningReportMealDate,
+  getISTDateString,
+  getNextWorkingMealDate,
+  getReportRecipientEmails,
+};
 
 export function getCabinName(bookingCabin, preferredLocation) {
   const cabinNames = {
@@ -53,104 +75,6 @@ export function resolveBookingCabin(bookingCabin, assignedCabin) {
     'RK Cabin': 'R.K Cabin',
     'Manisha Cabin': 'Durga Sri Manisha Cabin',
   }[cabin] || cabin;
-}
-
-export function filterDayMealBookings(bookings, preferences) {
-  const nightShiftUserIds = new Set(
-    (preferences || [])
-      .filter((preference) => preference.shift === 'night')
-      .map((preference) => preference.user_id)
-  );
-
-  return (bookings || []).filter((booking) => !nightShiftUserIds.has(booking.user_id));
-}
-
-export function filterNightMealBookings(bookings, preferences) {
-  const nightShiftUserIds = new Set(
-    (preferences || [])
-      .filter((preference) => preference.shift === 'night')
-      .map((preference) => preference.user_id)
-  );
-
-  return (bookings || []).filter((booking) => nightShiftUserIds.has(booking.user_id));
-}
-
-export function countMealBookings(bookings) {
-  const counts = { veg: 0, non_veg: 0, egg: 0, skip: 0 };
-  const others = {};
-  const latestBookingByUser = new Map();
-  let anonymousIndex = 0;
-
-  for (const booking of bookings || []) {
-    if (!booking || !booking.choice) continue;
-
-    const userKey = booking.user_id ?? `__anonymous__${anonymousIndex++}`;
-    latestBookingByUser.set(userKey, booking.choice);
-  }
-
-  for (const choice of latestBookingByUser.values()) {
-    if (choice in counts) {
-      counts[choice]++;
-    } else {
-      others[choice] = (others[choice] || 0) + 1;
-    }
-  }
-
-  const bookedCount = counts.veg + counts.non_veg + counts.egg + Object.values(others).reduce((sum, count) => sum + count, 0);
-  return { counts, others, bookedCount, skippedCount: counts.skip };
-}
-
-export function buildNightShiftReportData(bookings, preferences, dateLabel) {
-  const nightShiftBookings = filterNightMealBookings(bookings, preferences);
-  const { counts, others, bookedCount, skippedCount } = countMealBookings(nightShiftBookings);
-
-  return {
-    counts,
-    others,
-    bookedCount,
-    skippedCount,
-    totalNotBooked: 0,
-    unbookedNames: [],
-    dateLabel,
-  };
-}
-
-// ── Helper: get IST date string "YYYY-MM-DD" ─────────────────────────────────
-export function getISTDateString(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-export function getNextWorkingMealDate(date = new Date()) {
-  const istDate = getISTDateString(date);
-  const [year, month, day] = istDate.split('-').map(Number);
-  const nextDate = new Date(Date.UTC(year, month - 1, day + 1));
-
-  while (nextDate.getUTCDay() === 0 || nextDate.getUTCDay() === 6) {
-    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
-  }
-
-  return [
-    nextDate.getUTCFullYear(),
-    String(nextDate.getUTCMonth() + 1).padStart(2, '0'),
-    String(nextDate.getUTCDate()).padStart(2, '0'),
-  ].join('-');
-}
-
-export function getReportRecipientEmails(activeProfiles) {
-  const allowedRoles = new Set(['leadership', 'office_boy', 'facility_manager', 'admin']);
-
-  return [...new Set(
-    (activeProfiles || [])
-      .filter((profile) => profile.email && allowedRoles.has(profile.role))
-      .map((profile) => profile.email)
-  )];
 }
 
 // ── Helper: check if today is a working day (Mon-Fri) ────────────────────────
@@ -529,8 +453,8 @@ async function sendWeeklyForecastDigest(items, botToken) {
 }
 
 // POST /api/cron/meal-booking-night-shift-report
-// Called by pg_cron at 10:15 PM IST. Reports the next working day's
-// night-shift meal bookings after today's 10:00 PM booking cutoff.
+// Called by pg_cron at 10:15 PM IST. Reports next working day's night-shift
+// bookings. Monday meals are reported on Sunday (bookings stay open Fri–Sun).
 router.post('/meal-booking-night-shift-report', async (req, res, next) => {
   try {
     const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
@@ -540,129 +464,20 @@ router.post('/meal-booking-night-shift-report', async (req, res, next) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // The report is sent today, but night bookings store tomorrow's meal_date.
-    // This runs after the 10:00 PM IST night booking cutoff.
     const reportDate = getISTDateString();
-    const reportDay = new Date(`${reportDate}T00:00:00Z`).getUTCDay();
-    if (reportDay === 0 || reportDay === 6) {
-      return res.json({
-        ok: true,
-        skipped: true,
-        reason: 'Weekend: the Friday night report already covers Monday; no duplicate report is sent',
-        reportDate,
-      });
-    }
-    const mealDate = getNextWorkingMealDate();
+    const mealDate = getEveningReportMealDate();
     if (!mealDate) {
       return res.json({
         ok: true,
         skipped: true,
-        reason: 'The next day is not a working day; no night-shift booking window closed today',
+        reason:
+          'Friday/Saturday: Monday night-shift report waits until Sunday 10:15 PM IST (bookings stay open through the weekend).',
         reportDate,
       });
     }
 
-    const [{ data: bookings, error: bookingsErr }, { data: preferences, error: preferencesErr }] = await Promise.all([
-      supabaseAdmin
-        .from('meal_bookings')
-        .select('user_id, choice')
-        .eq('meal_date', mealDate),
-      supabaseAdmin
-        .from('employee_cafeteria_preferences')
-        .select('user_id, shift'),
-    ]);
-
-    if (bookingsErr) throw bookingsErr;
-    if (preferencesErr) throw preferencesErr;
-
-    const dateLabel = new Date(`${mealDate}T00:00:00+05:30`).toLocaleDateString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
-
-    const reportData = buildNightShiftReportData(bookings, preferences, dateLabel);
-    const { counts, others, bookedCount, skippedCount } = reportData;
-
-    const { data: activeProfiles, error: profilesErr } = await supabaseAdmin
-      .from('profiles')
-      .select('id, email, role')
-      .eq('active', true);
-
-    if (profilesErr) throw profilesErr;
-
-    const uniqueReportRecipients = getReportRecipientEmails(activeProfiles);
-
-    if (uniqueReportRecipients.length > 0) {
-      sendMealNightReportEmail(uniqueReportRecipients, {
-        mealDate: dateLabel,
-        totalBooked: bookedCount,
-        totalSkipped: skippedCount,
-        totalNotBooked: 0,
-        vegCount: counts.veg,
-        nonVegCount: counts.non_veg,
-        eggCount: counts.egg,
-        others,
-        unbookedNames: [],
-      }).catch((e) => console.error('[MealNightReport] Email sending failed:', e.message));
-    }
-
-    const { data: mappings, error: mapErr } = await supabaseAdmin
-      .from('telegram_user_map')
-      .select('telegram_chat_id, profiles!user_id!inner(role)')
-      .in('profiles.role', ['office_boy', 'facility_manager', 'leadership', 'admin']);
-
-    if (mapErr) throw mapErr;
-
-    const chatIds = [...new Set(mappings?.map((mapping) => mapping.telegram_chat_id).filter(Boolean) || [])];
-
-    let msg = `🌙 *Night Shift Meal Count*\n`;
-    msg += `🕙 Reported: *${reportDate} at 10:15 PM IST*\n`;
-    msg += `📅 Date: *${dateLabel}*\n\n`;
-    msg += `🟢 *Veg*: ${counts.veg}\n`;
-    msg += `🔴 *Non-Veg*: ${counts.non_veg}\n`;
-    msg += `🥚 *Egg*: ${counts.egg}\n`;
-    for (const [choice, count] of Object.entries(others)) {
-      msg += `🍱 *${choice}*: ${count}\n`;
-    }
-    msg += `\nTotal Night Shift Bookings: *${bookedCount}*`;
-    if (skippedCount > 0) msg += `\nSkipped: *${skippedCount}*`;
-
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
-    if (!botToken || chatIds.length === 0) {
-      return res.json({
-        ok: true,
-        reportDate,
-        mealDate,
-        totalBookings: bookedCount,
-        totalSkipped: skippedCount,
-        chatCount: chatIds.length,
-        sent: 0,
-        message: !botToken ? 'Telegram bot token not set' : 'No registered Telegram chats found',
-      });
-    }
-
-    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-    const results = await Promise.allSettled(
-      chatIds.map((chatId) =>
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }),
-        }).then(async (response) => {
-          if (!response.ok) throw new Error(`Telegram error ${response.status}: ${await response.text()}`);
-          return response.json();
-        })
-      )
-    );
-
-    const succeeded = results.filter((result) => result.status === 'fulfilled').length;
-    const failed = results.length - succeeded;
-    console.log(`[NightShiftReport] Report for ${mealDate} sent to ${succeeded} chats, failed to ${failed} chats.`);
-
-    res.json({ ok: failed === 0, reportDate, mealDate, totalBookings: bookedCount, totalSkipped: skippedCount, succeeded, failed });
+    const result = await sendMealShiftReport({ mealDate, shift: 'night' });
+    res.json({ ...result, reportDate });
   } catch (e) {
     next(e);
   }
@@ -795,7 +610,8 @@ router.post('/meal-booking-reminder', async (req, res, next) => {
 });
 
 // POST /api/cron/meal-booking-night-report
-// Called by pg_cron at 8:30 PM IST everyday (15:00 UTC).
+// Called by pg_cron at 8:30 PM IST. Day-shift meal bookings summary.
+// Monday meals are reported on Sunday (bookings stay open Fri–Sun).
 router.post('/meal-booking-night-report', async (req, res, next) => {
   try {
     const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
@@ -805,218 +621,26 @@ router.post('/meal-booking-night-report', async (req, res, next) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // 1. Calculate target report date in IST (tomorrow, or Monday if today is Friday)
-    const now = new Date();
-    const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-
-    const todayDay = istNow.getDay();
     const isTest = !!(req.query.testEmail || req.body?.testEmail);
+    const mealDate = isTest
+      ? getNextWorkingMealDate()
+      : getEveningReportMealDate();
 
-    // Skip Saturday (6) and Sunday (0) unless it's a manual test run
-    if ((todayDay === 0 || todayDay === 6) && !isTest) {
+    if (!mealDate) {
       return res.json({
         ok: true,
         skipped: true,
-        reason: 'Today is a weekend. Night reports are only sent on working days (Monday-Friday).',
+        reason:
+          'Friday/Saturday: Monday day-shift report waits until Sunday 8:30 PM IST (bookings stay open through the weekend).',
       });
     }
 
-    const isFriday = todayDay === 5;
-    const daysToAdd = isFriday ? 3 : 1;
-
-    const istTomorrow = new Date(istNow);
-    istTomorrow.setDate(istTomorrow.getDate() + daysToAdd);
-
-    const yyyy = istTomorrow.getFullYear();
-    const mm = String(istTomorrow.getMonth() + 1).padStart(2, '0');
-    const dd = String(istTomorrow.getDate()).padStart(2, '0');
-    const tomorrowStr = `${yyyy}-${mm}-${dd}`;
-
-    // 2. Check if tomorrow is a working day (Mon-Fri)
-    const tomorrowDay = istTomorrow.getDay(); // 0=Sun, 6=Sat
-    const isTomorrowWorkingDay = tomorrowDay >= 1 && tomorrowDay <= 5;
-
-    if (!isTomorrowWorkingDay && !isTest) {
-      return res.json({
-        ok: true,
-        skipped: true,
-        reason: `Tomorrow (${tomorrowStr}) is not a working day. Night reports are only sent for working days.`,
-      });
-    }
-
-    // 3. Query ALL meal bookings for tomorrow (including skips)
-    const { data: bookings, error: bookingsErr } = await supabaseAdmin
-      .from('meal_bookings')
-      .select('user_id, choice')
-      .eq('meal_date', tomorrowStr);
-
-    if (bookingsErr) throw bookingsErr;
-
-    // 4. Query active profiles to calculate not booked and list unbooked names
-    const { data: activeProfiles, error: profilesErr } = await supabaseAdmin
-      .from('profiles')
-      .select('id, full_name, email, role')
-      .eq('active', true);
-
-    if (profilesErr) throw profilesErr;
-
-    const { data: shiftPreferences, error: shiftPreferencesErr } = await supabaseAdmin
-      .from('employee_cafeteria_preferences')
-      .select('user_id, shift');
-
-    if (shiftPreferencesErr) throw shiftPreferencesErr;
-
-    const dayShiftUserIds = new Set(
-      (shiftPreferences || [])
-        .filter((preference) => preference.shift !== 'night')
-        .map((preference) => preference.user_id)
-    );
-    const dayShiftProfiles = activeProfiles.filter((profile) => dayShiftUserIds.has(profile.id));
-    const dayShiftBookings = (bookings || []).filter((booking) => dayShiftUserIds.has(booking.user_id));
-
-    // Count only day-shift bookings for the catering report.
-    const counts = {
-      veg: 0,
-      non_veg: 0,
-      egg: 0,
-      skip: 0,
-    };
-    const others = {};
-
-    for (const booking of dayShiftBookings) {
-      if (booking.choice in counts) {
-        counts[booking.choice]++;
-      } else {
-        others[booking.choice] = (others[booking.choice] || 0) + 1;
-      }
-    }
-
-    // Booked count (excluding skip)
-    const bookedCount = counts.veg + counts.non_veg + counts.egg + Object.values(others).reduce((a, b) => a + b, 0);
-    const skippedCount = counts.skip;
-
-    const bookedUserIds = new Set(dayShiftBookings.map((booking) => booking.user_id).filter(Boolean));
-    
-    // Unbooked users are active profiles who did not book at all (no row in meal_bookings for tomorrow)
-    const unbookedUsers = dayShiftProfiles.filter((profile) => !bookedUserIds.has(profile.id));
-    const notBookedCount = unbookedUsers.length;
-    const unbookedNames = unbookedUsers.map((u) => u.full_name);
-
-    // 5. Send Email Summary Report to leadership, office_boy, and facility_manager
-    // Parse tomorrowStr at midnight IST to avoid timezone shift double-conversion bugs
-    const parsedTomorrow = new Date(`${tomorrowStr}T00:00:00+05:30`);
-    const dateLabel = parsedTomorrow.toLocaleDateString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
+    const result = await sendMealShiftReport({
+      mealDate,
+      shift: 'day',
+      testEmail: req.query.testEmail || req.body?.testEmail || undefined,
     });
-
-    let uniqueReportRecipients;
-    if (req.query.testEmail || req.body?.testEmail) {
-      uniqueReportRecipients = [req.query.testEmail || req.body.testEmail];
-    } else {
-      uniqueReportRecipients = getReportRecipientEmails(activeProfiles);
-    }
-
-    if (uniqueReportRecipients.length > 0) {
-      sendMealNightReportEmail(uniqueReportRecipients, {
-        mealDate: dateLabel,
-        totalBooked: bookedCount,
-        totalSkipped: skippedCount,
-        totalNotBooked: notBookedCount,
-        vegCount: counts.veg,
-        nonVegCount: counts.non_veg,
-        eggCount: counts.egg,
-        others,
-        unbookedNames,
-      }).catch((e) => console.error('[MealNightReport] Email sending failed:', e.message));
-    }
-
-    // 6. Format and send Telegram messages (retaining original behavior)
-    // Telegram stats exclude skips
-    const telegramTotal = bookedCount;
-
-    // Fetch mappings for office_boy, facility_manager, leadership, and admin
-    const { data: mappings, error: mapErr } = await supabaseAdmin
-      .from('telegram_user_map')
-      .select('telegram_chat_id, profiles!user_id!inner(role)')
-      .in('profiles.role', ['office_boy', 'facility_manager', 'leadership', 'admin']);
-
-    if (mapErr) throw mapErr;
-
-    const chatIds = [...new Set(mappings?.map((m) => m.telegram_chat_id).filter(Boolean) || [])];
-    
-    if (chatIds.length === 0) {
-      return res.json({
-        ok: true,
-        message: 'Email report queued. No registered Telegram chats found for office_boy, facility_manager, or leadership.',
-        tomorrow: tomorrowStr,
-        totalBooked: bookedCount,
-        skipped: skippedCount,
-        notBooked: notBookedCount,
-      });
-    }
-
-    let msg = `📋 *Meal Bookings Report*\n`;
-    msg += `📅 Date: *${dateLabel}*\n\n`;
-    msg += `🟢 *Veg*: ${counts.veg}\n`;
-    msg += `🔴 *Non-Veg*: ${counts.non_veg}\n`;
-    msg += `🥚 *Egg*: ${counts.egg}\n`;
-
-    // Append any other choices if they exist
-    for (const [choice, count] of Object.entries(others)) {
-      msg += `🍱 *${choice}*: ${count}\n`;
-    }
-
-    msg += `\nTotal Bookings: *${telegramTotal}*`;
-
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
-    if (!botToken) {
-      console.warn('[MealNightReport] TELEGRAM_BOT_TOKEN not set, skipping actual send');
-      return res.json({
-        ok: true,
-        message: 'Telegram bot token not set. Message that would have been sent: ' + msg.replace(/\n/g, ' '),
-        chatCount: chatIds.length,
-        tomorrow: tomorrowStr,
-        totalBookings: telegramTotal,
-        counts: { veg: counts.veg, non_veg: counts.non_veg, egg: counts.egg, ...others },
-      });
-    }
-
-    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-    const results = await Promise.allSettled(
-      chatIds.map((cid) =>
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: cid, text: msg, parse_mode: 'Markdown' }),
-        }).then(async (r) => {
-          if (!r.ok) {
-            const body = await r.text();
-            throw new Error(`Telegram error ${r.status}: ${body}`);
-          }
-          return r.json();
-        })
-      )
-    );
-
-    const succeeded = results.filter((r) => r.status === 'fulfilled').length;
-    const failed = results.filter((r) => r.status === 'rejected').length;
-
-    console.log(`[MealNightReport] Report sent to ${succeeded} chats, failed to ${failed} chats.`);
-
-    res.json({
-      ok: true,
-      tomorrow: tomorrowStr,
-      totalBookings: bookedCount,
-      totalSkipped: skippedCount,
-      totalNotBooked: notBookedCount,
-      counts: { veg: counts.veg, non_veg: counts.non_veg, egg: counts.egg, ...others },
-      succeeded,
-      failed,
-    });
+    res.json({ ...result, tomorrow: mealDate });
   } catch (e) {
     next(e);
   }

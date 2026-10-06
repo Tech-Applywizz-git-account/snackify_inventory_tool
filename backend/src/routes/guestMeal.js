@@ -83,12 +83,16 @@ router.post(
 
       if (insertErr) throw insertErr;
 
-      // Fetch leadership + finance emails for notification
+      // Fetch leadership + finance emails for notification (legacy fallback)
       const { data: recipients } = await supabaseAdmin
         .from('profiles')
         .select('email')
         .in('role', ['leadership', 'finance'])
         .eq('active', true);
+
+      const { getMailRecipients } = await import('../lib/mailRecipients.js');
+      const fallbackTo = (recipients || []).map((r) => r.email).filter(Boolean);
+      const { to, cc } = await getMailRecipients('guest_meal', { fallbackTo });
 
       // Build the accept URL
       const baseUrl = process.env.APP_URL || 'https://snackify-inventory-tool.onrender.com';
@@ -105,7 +109,8 @@ router.post(
         bookedBy,
         mealDate,
         acceptUrl,
-        recipients: recipients || [],
+        recipients: to.map((email) => ({ email })),
+        ccEmails: cc,
       }).catch((e) => {
         console.error('[GuestMeal] Failed to send notification email:', e.message);
       });

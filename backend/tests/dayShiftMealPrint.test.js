@@ -5,6 +5,7 @@ import {
   countMealBookings,
   filterDayMealBookings,
   filterNightMealBookings,
+  getEveningReportMealDate,
   getISTDateString,
   getNextWorkingMealDate,
   getReportRecipientEmails,
@@ -103,6 +104,35 @@ test('night-shift report payload excludes day-shift users and includes email-rea
   assert.equal(result.unbookedNames.length, 0);
 });
 
+test('night-shift report lists active night users who have not booked', () => {
+  const bookings = [
+    { user_id: 'night-user-1', choice: 'veg' },
+  ];
+  const preferences = [
+    { user_id: 'day-user', shift: 'morning' },
+    { user_id: 'night-user-1', shift: 'night' },
+    { user_id: 'night-user-2', shift: 'night' },
+    { user_id: 'night-user-3', shift: 'night' },
+  ];
+  const activeProfiles = [
+    { id: 'day-user', full_name: 'Day Person' },
+    { id: 'night-user-1', full_name: 'Night One' },
+    { id: 'night-user-2', full_name: 'Night Two' },
+    { id: 'night-user-3', full_name: 'Night Three' },
+  ];
+
+  const result = buildNightShiftReportData(
+    bookings,
+    preferences,
+    'Monday, 28 September 2026',
+    activeProfiles
+  );
+
+  assert.equal(result.bookedCount, 1);
+  assert.equal(result.totalNotBooked, 2);
+  assert.deepEqual(result.unbookedNames, ['Night Three', 'Night Two']);
+});
+
 test('meal report recipients include admin accounts so Jagan can receive the report', () => {
   const profiles = [
     { id: 'lead', email: 'lead@company.com', role: 'leadership' },
@@ -126,4 +156,16 @@ test('night-shift report sent today counts the next working day meal', () => {
 
   assert.equal(getNextWorkingMealDate(mondayNight), '2026-09-22');
   assert.equal(getNextWorkingMealDate(fridayNight), '2026-09-28');
+});
+test('evening meal reports wait until Sunday for Monday bookings', () => {
+  // Thursday evening → Friday meal
+  assert.equal(getEveningReportMealDate(new Date('2026-09-24T16:45:00.000Z')), '2026-09-25');
+  // Friday evening → skip (Monday bookings still open Sat–Sun)
+  assert.equal(getEveningReportMealDate(new Date('2026-09-25T16:45:00.000Z')), null);
+  // Saturday evening → skip
+  assert.equal(getEveningReportMealDate(new Date('2026-09-26T16:45:00.000Z')), null);
+  // Sunday evening → Monday meal
+  assert.equal(getEveningReportMealDate(new Date('2026-09-27T16:45:00.000Z')), '2026-09-28');
+  // Monday evening → Tuesday meal
+  assert.equal(getEveningReportMealDate(new Date('2026-09-28T16:45:00.000Z')), '2026-09-29');
 });

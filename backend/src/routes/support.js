@@ -28,12 +28,20 @@ router.post('/ticket', async (req, res, next) => {
       .select('email')
       .eq('role', 'facility_manager');
 
+    const { getMailRecipients } = await import('../lib/mailRecipients.js');
+    const fallbackTo = (managers || []).map((m) => m.email).filter(Boolean);
+    const { to, cc } = await getMailRecipients('support_ticket', {
+      fallbackTo,
+      fallbackCc: ['dinesh@applywizz.ai'],
+    });
+
     const digits = String(me?.cafeteria_card_number || '').replace(/\D/g, '');
     const employeeName = me?.preferred_name || me?.full_name || req.user.email || 'Applywizzian';
     const employeeEmail = me?.email || req.user.email;
 
     await sendSupportTicketEmail({
-      toEmails: (managers || []).map((m) => m.email).filter(Boolean),
+      toEmails: to,
+      ccEmails: cc,
       replyTo: employeeEmail,
       employeeName,
       employeeEmail,
@@ -42,7 +50,7 @@ router.post('/ticket', async (req, res, next) => {
       message: kind === 'other' ? message : message || '',
     });
 
-    res.json({ ok: true, message: 'Ticket sent to facility manager. Dinesh is on CC.' });
+    res.json({ ok: true, message: 'Ticket sent to facility manager.' });
   } catch (e) {
     next(e);
   }

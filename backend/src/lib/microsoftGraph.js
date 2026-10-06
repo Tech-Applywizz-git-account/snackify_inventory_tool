@@ -172,23 +172,29 @@ export async function sendLowStockEmail(itemName, remaining, supabaseAdmin, isCr
     return;
   }
 
-  // Fetch all leadership email addresses from profiles table
+  const { getMailRecipients } = await import('./mailRecipients.js');
+
+  // Legacy fallback: all leadership emails
   const { data: leaders, error } = await supabaseAdmin
     .from('profiles')
     .select('email')
     .eq('role', 'leadership');
 
-  if (error || !leaders || leaders.length === 0) {
-    console.warn('[LowStock] No leadership emails found — skipping low stock email.');
+  if (error) {
+    console.warn('[LowStock] Failed to load leadership emails:', error.message);
+  }
+
+  const fallbackTo = (leaders || []).map((l) => l.email).filter(Boolean);
+  const { to, cc } = await getMailRecipients('low_stock', { fallbackTo });
+
+  if (to.length === 0) {
+    console.warn('[LowStock] No recipient emails found — skipping low stock email.');
     return;
   }
 
   const token = await getGraphToken();
-  const toRecipients = leaders
-    .filter((l) => l.email)
-    .map((l) => ({ emailAddress: { address: l.email } }));
-
-  if (toRecipients.length === 0) return;
+  const toRecipients = to.map((email) => ({ emailAddress: { address: email } }));
+  const ccRecipients = cc.map((email) => ({ emailAddress: { address: email } }));
 
   const subject = isCritical
     ? `🚨 Critical Stock Alert: ${itemName} — Only ${remaining} servings left!`
@@ -214,6 +220,7 @@ export async function sendLowStockEmail(itemName, remaining, supabaseAdmin, isCr
         subject,
         body: { contentType: 'Text', content: body },
         toRecipients,
+        ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
       },
       saveToSentItems: false,
     }),
@@ -223,12 +230,12 @@ export async function sendLowStockEmail(itemName, remaining, supabaseAdmin, isCr
     const text = await res.text().catch(() => '');
     console.error(`[LowStock] Graph sendMail failed (${res.status}): ${text.slice(0, 200)}`);
   } else {
-    console.log(`[LowStock] Low stock email sent for "${itemName}" (${remaining} servings left) to ${toRecipients.length} leaders.`);
+    console.log(`[LowStock] Low stock email sent for "${itemName}" (${remaining} servings left) to ${toRecipients.length} recipients.`);
   }
 }
 
 /** Send a daily cafeteria consumption report to leadership/admin users. */
-export async function sendDailyConsumptionReportEmail(reportDate, rows, recipients) {
+export async function sendDailyConsumptionReportEmail(reportDate, rows, recipients, ccEmails = []) {
   if (!isGraphConfigured()) {
     throw new Error('Microsoft Graph email is not configured');
   }
@@ -237,6 +244,11 @@ export async function sendDailyConsumptionReportEmail(reportDate, rows, recipien
     .filter((email) => email)
     .map((email) => ({ emailAddress: { address: email } }));
   if (!toRecipients.length) throw new Error('No admin email addresses found');
+
+  const toSet = new Set((recipients || []).map((email) => String(email).toLowerCase()));
+  const ccRecipients = [...new Set((ccEmails || []).filter(Boolean))]
+    .filter((email) => !toSet.has(String(email).toLowerCase()))
+    .map((email) => ({ emailAddress: { address: email } }));
 
   const escapeHtml = (value) =>
     String(value ?? '')
@@ -288,6 +300,7 @@ export async function sendDailyConsumptionReportEmail(reportDate, rows, recipien
         subject: `Daily Cafeteria Consumption Report — ${reportDate}`,
         body: { contentType: 'HTML', content: body },
         toRecipients,
+        ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
       },
       saveToSentItems: false,
     }),
@@ -538,9 +551,10 @@ export async function sendMealSkipReminderEmail(email, mealDate) {
 }
 
 /**
- * Send the nightly meal booking summary report email.
+ * Send the meal booking summary report email (day shift or night shift).
  * @param {string[]} emails - recipient addresses
  * @param {object} reportData - report details
+ * @param {'day'|'night'} [reportData.shift='day'] - which shift this report covers
  */
 export async function sendMealNightReportEmail(emails, reportData) {
   if (!isGraphConfigured()) {
@@ -550,13 +564,24 @@ export async function sendMealNightReportEmail(emails, reportData) {
 
   const token = await getGraphToken();
   const toRecipients = emails.map((email) => ({ emailAddress: { address: email } }));
+  const ccRecipients = [...new Set((reportData.ccEmails || []).filter(Boolean))]
+    .filter((email) => !emails.includes(email))
+    .map((email) => ({ emailAddress: { address: email } }));
 
   if (toRecipients.length === 0) return;
 
-  const subject = `📋 Daily Meal Bookings Summary Report (${reportData.mealDate})`;
+  const isNightShift = reportData.shift === 'night';
+  const shiftLabel = isNightShift ? 'Night Shift' : 'Day Shift';
+  const subjectEmoji = isNightShift ? '🌙' : '☀️';
+  const subject = `${subjectEmoji} ${shiftLabel} Meal Bookings Summary (${reportData.mealDate})`;
+  const headerTitle = `${shiftLabel} Meal Bookings Report`;
+  const generatedAtLabel = isNightShift
+    ? 'This report was auto-generated at 10:15 PM IST for night-shift cafeteria prep.'
+    : 'This report was auto-generated at 8:30 PM IST for day-shift cafeteria prep.';
 
-  const unbookedList = (reportData.unbookedNames || []).length > 0
-    ? (reportData.unbookedNames || []).map(name => `<li style="margin-bottom: 6px; font-weight: 500;">${name}</li>`).join('')
+  const unbookedNames = reportData.unbookedNames || [];
+  const unbookedListHtml = unbookedNames.length > 0
+    ? unbookedNames.map((name) => `<li style="margin-bottom: 6px; font-weight: 500;">${name}</li>`).join('')
     : '<li style="color: #16a34a; font-style: italic; font-weight: 600;">None (All active members have responded! 🎉)</li>';
 
   const body = `
@@ -569,9 +594,9 @@ export async function sendMealNightReportEmail(emails, reportData) {
         <!-- Header -->
         <tr>
           <td align="center" style="padding: 40px 40px 20px 40px;">
-            <span style="font-size: 42px;">📋</span>
+            <span style="font-size: 42px;">${subjectEmoji}</span>
             <h2 style="margin: 16px 0 8px 0; color: #1e293b; font-size: 24px; font-weight: 700; letter-spacing: -0.025em; line-height: 32px;">
-              Meal Bookings Night Report
+              ${headerTitle}
             </h2>
             <p style="margin: 0; color: #64748b; font-size: 14px; font-weight: 500;">
               Snackify Cafeteria Notification
@@ -584,7 +609,7 @@ export async function sendMealNightReportEmail(emails, reportData) {
             <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;">
             
             <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 24px; color: #475569;">
-              Here is the summary of tomorrow's meal choices and bookings status for <strong style="color: #0f172a;">${reportData.mealDate}</strong>:
+              Here is the <strong style="color: #0f172a;">${shiftLabel.toLowerCase()}</strong> meal bookings summary for <strong style="color: #0f172a;">${reportData.mealDate}</strong>:
             </p>
 
             <!-- Summary Statistics Table -->
@@ -607,7 +632,7 @@ export async function sendMealNightReportEmail(emails, reportData) {
                 </tr>
                 <tr style="border-bottom: 1px solid #f1f5f9;">
                   <td style="padding: 14px 16px; font-size: 14px; color: #64748b; font-weight: 600;">Not Booked</td>
-                  <td align="right" style="padding: 14px 16px; font-size: 14px; color: #334155; font-weight: 700;">${reportData.totalNotBooked}</td>
+                  <td align="right" style="padding: 14px 16px; font-size: 14px; color: #334155; font-weight: 700;">${reportData.totalNotBooked ?? 0}</td>
                 </tr>
               </tbody>
             </table>
@@ -644,15 +669,15 @@ export async function sendMealNightReportEmail(emails, reportData) {
             </table>
 
             <!-- Unbooked Members List -->
-            <h3 style="margin: 28px 0 12px 0; color: #dc2626; font-size: 16px; font-weight: 700;">⚠️ Members who have NOT booked or skipped:</h3>
+            <h3 style="margin: 28px 0 12px 0; color: #dc2626; font-size: 16px; font-weight: 700;">⚠️ ${shiftLabel} members who have NOT booked:</h3>
             <div style="background-color: #fcfcfc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 24px;">
               <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 14px; line-height: 22px;">
-                ${unbookedList}
+                ${unbookedListHtml}
               </ul>
             </div>
 
             <p style="margin: 24px 0 0 0; font-size: 13px; line-height: 20px; color: #94a3b8; text-align: center;">
-              This report was auto-generated at 8:30 PM IST today for administrative cafeteria prep optimization.
+              ${generatedAtLabel}
             </p>
           </td>
         </tr>
@@ -660,7 +685,7 @@ export async function sendMealNightReportEmail(emails, reportData) {
         <tr>
           <td style="background-color: #f8fafc; border-top: 1px solid #f1f5f9; padding: 24px 40px; text-align: center;">
             <p style="margin: 0; font-size: 12px; color: #94a3b8; line-height: 18px;">
-              ApplyWizz Snackify • Automated Nightly Summaries<br>
+              ApplyWizz Snackify • Automated ${shiftLabel} Summaries<br>
               For support or queries, contact <a href="mailto:support@applywizz.ai" style="color: #64748b; text-decoration: underline;">support@applywizz.ai</a>
             </p>
           </td>
@@ -680,6 +705,7 @@ export async function sendMealNightReportEmail(emails, reportData) {
         subject,
         body: { contentType: 'Html', content: body },
         toRecipients,
+        ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
       },
       saveToSentItems: false,
     }),
@@ -821,7 +847,7 @@ export async function sendMealBookingConfirmationEmail(email, name, choice, meal
  * @param {string} params.acceptUrl   - full URL for the Accept button
  * @param {Array}  params.recipients  - array of { email } objects
  */
-export async function sendGuestMealNotificationEmail({ bookingId, guestName, mealType, bookedBy, mealDate, acceptUrl, recipients }) {
+export async function sendGuestMealNotificationEmail({ bookingId, guestName, mealType, bookedBy, mealDate, acceptUrl, recipients, ccEmails = [] }) {
   if (!isGraphConfigured()) {
     console.warn('[GuestMeal] Microsoft Graph not configured — skipping guest meal notification email.');
     return;
@@ -896,6 +922,11 @@ export async function sendGuestMealNotificationEmail({ bookingId, guestName, mea
   const toRecipients = recipients.filter((r) => r.email).map((r) => ({ emailAddress: { address: r.email } }));
   if (toRecipients.length === 0) return;
 
+  const toSet = new Set(toRecipients.map((r) => r.emailAddress.address.toLowerCase()));
+  const ccRecipients = [...new Set((ccEmails || []).filter(Boolean))]
+    .filter((email) => !toSet.has(String(email).toLowerCase()))
+    .map((email) => ({ emailAddress: { address: email } }));
+
   const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -904,6 +935,7 @@ export async function sendGuestMealNotificationEmail({ bookingId, guestName, mea
         subject,
         body: { contentType: 'Html', content: body },
         toRecipients,
+        ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
       },
       saveToSentItems: false,
     }),
@@ -919,6 +951,7 @@ const DINESH_CC = 'dinesh@applywizz.ai';
 
 export async function sendSupportTicketEmail({
   toEmails = [],
+  ccEmails = [],
   replyTo,
   employeeName,
   employeeEmail,
@@ -960,9 +993,12 @@ export async function sendSupportTicketEmail({
   const toRecipients = (uniqueTo.length ? uniqueTo : [DINESH_CC]).map((address) => ({
     emailAddress: { address },
   }));
-  const ccRecipients = uniqueTo.includes(DINESH_CC.toLowerCase())
-    ? []
-    : [{ emailAddress: { address: DINESH_CC } }];
+  const toSet = new Set(toRecipients.map((r) => r.emailAddress.address.toLowerCase()));
+  const configuredCc = [...new Set((ccEmails || []).map((e) => String(e || '').toLowerCase()).filter(Boolean))];
+  const fallbackCc = configuredCc.length > 0 ? configuredCc : [DINESH_CC.toLowerCase()];
+  const ccRecipients = fallbackCc
+    .filter((email) => !toSet.has(email))
+    .map((address) => ({ emailAddress: { address } }));
 
   const token = await getGraphToken();
   const resMail = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
@@ -976,7 +1012,7 @@ export async function sendSupportTicketEmail({
         subject,
         body: { contentType: 'Html', content: html },
         toRecipients,
-        ccRecipients,
+        ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
         replyTo: replyTo ? [{ emailAddress: { address: replyTo } }] : [],
       },
       saveToSentItems: true,
