@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../lib/api.js';
 
@@ -58,6 +59,63 @@ function addDays(date, days) {
   const value = new Date(`${date}T00:00:00Z`);
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
+}
+
+function startOfWeek(date) {
+  const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+  return addDays(date, -((weekday + 6) % 7));
+}
+
+function endOfMonth(month) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  return new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+}
+
+const MEAL_CHART_CATEGORIES = [
+  { key: 'veg', label: 'Veg', color: '#27816f', tint: '#eef7f4' },
+  { key: 'non_veg', label: 'Non-veg', color: '#d45b55', tint: '#fdf2f1' },
+  { key: 'egg', label: 'Egg', color: '#d6a52d', tint: '#fbf7e9' },
+  { key: 'other', label: 'Other', color: '#64748b', tint: '#f1f4f7' },
+  { key: 'skipped', label: 'Skipped', color: '#aab4bf', tint: '#f5f6f7' },
+];
+
+function MealChartTooltip({ active, payload, label, shiftName }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  if (!row) return null;
+  const total = MEAL_CHART_CATEGORIES.reduce((sum, category) => {
+    const key = category.key === 'skipped' ? `${shiftName}_skipped` : `${shiftName}_${category.key}`;
+    return sum + (row[key] || 0);
+  }, 0);
+
+  return (
+    <div className="min-w-40 rounded-md border border-slate-200 bg-white p-3 shadow-lg">
+      <div className="mb-2 flex items-center justify-between gap-4 border-b border-slate-100 pb-2">
+        <strong className="text-xs text-slate-900">{label}</strong>
+        <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+          {shiftName} shift
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {MEAL_CHART_CATEGORIES.map((category) => {
+          const key = category.key === 'skipped' ? `${shiftName}_skipped` : `${shiftName}_${category.key}`;
+          return (
+            <div key={category.key} className="flex items-center justify-between gap-5 text-xs">
+              <span className="inline-flex items-center gap-2 text-slate-600">
+                <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: category.color }} />
+                {category.label}
+              </span>
+              <strong className="tabular-nums text-slate-900">{row[key] || 0}</strong>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex justify-between border-t border-slate-100 pt-2 text-xs">
+        <span className="font-medium text-slate-600">Total</span>
+        <strong className="tabular-nums text-slate-900">{total}</strong>
+      </div>
+    </div>
+  );
 }
 
 const DEFAULT_RECEIPT_DESIGN = {
@@ -324,6 +382,289 @@ function ForecastPanel() {
   );
 }
 
+function MealBookingAnalytics() {
+  const today = getISTDateString();
+  const [periodMode, setPeriodMode] = useState('day');
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [selectedMonth, setSelectedMonth] = useState(today.slice(0, 7));
+  const [customFrom, setCustomFrom] = useState(() => addDays(today, -29));
+  const [customTo, setCustomTo] = useState(today);
+  const [customGroup, setCustomGroup] = useState('day');
+  const [shift, setShift] = useState('all');
+  const [analytics, setAnalytics] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const mealCategories = MEAL_CHART_CATEGORIES;
+  let from = selectedDate;
+  let to = selectedDate;
+  let group = 'day';
+  if (periodMode === 'week') {
+    from = selectedDate ? startOfWeek(selectedDate) : '';
+    to = from ? addDays(from, 6) : '';
+  } else if (periodMode === 'month') {
+    from = selectedMonth ? `${selectedMonth}-01` : '';
+    to = selectedMonth ? endOfMonth(selectedMonth) : '';
+    group = 'week';
+  } else if (periodMode === 'custom') {
+    from = customFrom;
+    to = customTo;
+    group = customGroup;
+  }
+  const dateRangeValid = Boolean(from && to && from <= to);
+
+  useEffect(() => {
+    if (!dateRangeValid) {
+      setLoading(false);
+      setError('Choose a valid date range.');
+      return undefined;
+    }
+    let active = true;
+    setLoading(true);
+    setError('');
+    setAnalytics(null);
+    api.mealBookingAnalytics({ from, to, group })
+      .then((result) => {
+        if (active) setAnalytics(result);
+      })
+      .catch((requestError) => {
+        if (active) setError(requestError.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [from, to, group, dateRangeValid]);
+
+  const chartRows = analytics?.periods || [];
+  const totals = chartRows.reduce((result, row) => {
+    for (const shiftName of ['day', 'night']) {
+      for (const category of mealCategories) {
+        const key = category.key === 'skipped' ? `${shiftName}_skipped` : `${shiftName}_${category.key}`;
+        result[shiftName][category.key] += row[key] || 0;
+      }
+    }
+    return result;
+  }, {
+    day: Object.fromEntries(mealCategories.map(({ key }) => [key, 0])),
+    night: Object.fromEntries(mealCategories.map(({ key }) => [key, 0])),
+  });
+  const visibleShifts = shift === 'all' ? ['day', 'night'] : [shift];
+  const hasBookings = Object.values(totals).some((shiftTotals) => Object.values(shiftTotals).some(Boolean));
+  const chartMinWidth = Math.max(420, chartRows.length * (group === 'day' ? 72 : 128));
+  const periodOptions = [
+    ['day', 'Day'],
+    ['week', 'Week'],
+    ['month', 'Month'],
+    ['custom', 'Custom range'],
+  ];
+
+  return (
+    <section className="card" aria-labelledby="meal-analytics-title">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-4">
+        <div>
+          <h2 id="meal-analytics-title" className="font-semibold">Meal booking analytics</h2>
+          <p className="mt-1 text-xs text-slate-500">Meal choices and skipped bookings by shift</p>
+        </div>
+        <fieldset className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
+          <legend className="sr-only">Meal shift</legend>
+          {[['all', 'All shifts'], ['day', 'Day'], ['night', 'Night']].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={shift === value}
+              onClick={() => setShift(value)}
+              className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${shift === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </fieldset>
+      </div>
+
+      <div className="flex flex-wrap items-end justify-between gap-x-5 gap-y-3 border-b border-slate-100 py-3">
+        <fieldset className="min-w-0">
+          <legend className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">View period</legend>
+          <div className="inline-flex max-w-full flex-wrap rounded-md border border-slate-200 bg-slate-50 p-1">
+            {periodOptions.map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={periodMode === value}
+                onClick={() => setPeriodMode(value)}
+                className={`rounded px-3 py-1.5 text-xs font-medium transition-colors ${periodMode === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-2 lg:max-w-3xl">
+          {periodMode === 'day' && (
+            <label className="text-xs font-medium text-slate-600">
+              Meal date
+              <input type="date" className="input mt-1 w-full py-1.5" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+            </label>
+          )}
+          {periodMode === 'week' && (
+            <label className="text-xs font-medium text-slate-600">
+              Week containing
+              <input type="date" className="input mt-1 w-full py-1.5" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+            </label>
+          )}
+          {periodMode === 'month' && (
+            <label className="text-xs font-medium text-slate-600">
+              Month
+              <input type="month" className="input mt-1 w-full py-1.5" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} />
+            </label>
+          )}
+          {periodMode === 'custom' && (
+            <>
+              <label className="text-xs font-medium text-slate-600">
+                From
+                <input type="date" className="input mt-1 w-full py-1.5" value={customFrom} max={customTo || undefined} onChange={(event) => setCustomFrom(event.target.value)} />
+              </label>
+              <label className="text-xs font-medium text-slate-600">
+                To
+                <input type="date" className="input mt-1 w-full py-1.5" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} />
+              </label>
+              <label className="text-xs font-medium text-slate-600 sm:col-span-2">
+                Group custom range by
+                <select className="input mt-1 w-full py-1.5" value={customGroup} onChange={(event) => setCustomGroup(event.target.value)}>
+                  <option value="day">Day</option>
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                </select>
+              </label>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="py-4" aria-live="polite">
+        {loading ? (
+          <div className="flex h-56 items-center justify-center text-sm text-slate-500">Loading meal bookings...</div>
+        ) : error ? (
+          <div className="flex h-56 items-center justify-center text-sm text-rose-600">{error}</div>
+        ) : (
+          <>
+            {!hasBookings && (
+              <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                No bookings recorded for this period. The charts below show zero counts.
+              </div>
+            )}
+            <div className={visibleShifts.length === 2 ? 'grid grid-cols-1 gap-x-5 gap-y-5 xl:grid-cols-2' : 'grid grid-cols-1'}>
+            {visibleShifts.map((shiftName) => (
+              <section key={shiftName} className="min-w-0 rounded-md border border-slate-200 bg-white p-3" aria-labelledby={`meal-${shiftName}-title`}>
+                <div className="mb-2 flex items-baseline justify-between gap-3">
+                  <h3 id={`meal-${shiftName}-title`} className="text-sm font-semibold text-slate-800">
+                    {shiftName === 'day' ? 'Day shift' : 'Night shift'}
+                  </h3>
+                  <span className="text-xs text-slate-500">
+                    {analytics?.from} to {analytics?.to}
+                  </span>
+                </div>
+                <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  {mealCategories.map(({ key, label, color }) => (
+                    <div key={key} className="min-w-0 rounded-md border border-slate-100 px-2 py-1.5" style={{ backgroundColor: mealCategories.find((category) => category.key === key)?.tint }}>
+                      <span className="block truncate text-[11px] font-medium text-slate-500">{label}</span>
+                      <strong className="mt-0.5 block text-lg leading-none tabular-nums text-slate-900">{totals[shiftName][key]}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div className="overflow-x-auto pb-2">
+                  <div className="rounded-md bg-slate-50/70 px-2 pt-2" style={{ minWidth: chartMinWidth, height: 310 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chartRows} margin={{ top: 6, right: 14, bottom: 54, left: -8 }} barCategoryGap="28%">
+                        <CartesianGrid vertical={false} stroke="#dfe6eb" strokeDasharray="3 5" />
+                        <XAxis
+                          dataKey="label"
+                          interval={0}
+                          angle={-45}
+                          textAnchor="end"
+                          height={76}
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: '#64748b', fontSize: 10, fontWeight: 500 }}
+                        />
+                        <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                        <Tooltip
+                          cursor={{ fill: '#e9eff2', opacity: 0.55 }}
+                          content={<MealChartTooltip shiftName={shiftName} />}
+                        />
+                        {mealCategories.map(({ key, label, color }) => (
+                          <Bar
+                            key={key}
+                            dataKey={key === 'skipped' ? `${shiftName}_skipped` : `${shiftName}_${key}`}
+                            name={label}
+                            stackId={shiftName}
+                            fill={color}
+                            radius={[4, 4, 0, 0]}
+                            maxBarSize={48}
+                            animationDuration={450}
+                          />
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+                <div className="mb-2 mt-3 flex items-baseline justify-between gap-3 border-t border-slate-100 pt-3">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Booking trend</h4>
+                  <span className="text-[11px] text-slate-400">Meal choices per period</span>
+                </div>
+                <div className="overflow-x-auto pb-2">
+                  <div className="rounded-md bg-slate-50/70 px-2 pt-2" style={{ minWidth: chartMinWidth, height: 250 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={chartRows} margin={{ top: 8, right: 14, bottom: 54, left: -8 }}>
+                        <CartesianGrid vertical={false} stroke="#dfe6eb" strokeDasharray="3 5" />
+                        <XAxis
+                          dataKey="label"
+                          interval={0}
+                          angle={-45}
+                          textAnchor="end"
+                          height={76}
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: '#64748b', fontSize: 10, fontWeight: 500 }}
+                        />
+                        <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                        <Tooltip content={<MealChartTooltip shiftName={shiftName} />} />
+                        {mealCategories.map(({ key, label, color }) => (
+                          <Line
+                            key={key}
+                            type="monotone"
+                            dataKey={key === 'skipped' ? `${shiftName}_skipped` : `${shiftName}_${key}`}
+                            name={label}
+                            stroke={color}
+                            strokeWidth={2.5}
+                            dot={{ r: 3, strokeWidth: 1.5, fill: '#fff' }}
+                            activeDot={{ r: 5, strokeWidth: 0 }}
+                          />
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 pt-2 text-xs text-slate-600" aria-label={`${shiftName} chart legend`}>
+                  {mealCategories.map(({ key, label, color }) => (
+                    <span key={key} className="inline-flex items-center gap-1.5 rounded-full border border-slate-100 bg-white px-2.5 py-1">
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
+                      <span>{label}</span>
+                    </span>
+                  ))}
+                </div>
+              </section>
+            ))}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function Admin() {
   const { profile } = useAuth();
   const [users, setUsers] = useState(null);
@@ -331,10 +672,13 @@ export default function Admin() {
   const [okMsg, setOkMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [resetTarget, setResetTarget] = useState(null);
+  const [vendorPasswordTarget, setVendorPasswordTarget] = useState(null);
+  const [vendorPassword, setVendorPassword] = useState('');
 
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('staff');
   const [inviteName, setInviteName] = useState('');
+  const [inviteVendorPassword, setInviteVendorPassword] = useState('vendor@123');
   const [reportEmail, setReportEmail] = useState('');
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [unbookedUsers, setUnbookedUsers] = useState(null);
@@ -544,17 +888,27 @@ export default function Admin() {
     setErr('');
     setOkMsg('');
     try {
-      await api.createUser({
-        email: inviteEmail.trim(),
-        role: inviteRole,
-        full_name: inviteName.trim(),
-      });
-      setOkMsg(
-        `✅ ${inviteName} added! They can log in with "${inviteEmail}" + Microsoft Authenticator.`
-      );
+      if (inviteRole === 'vendor') {
+        await api.createVendor({
+          email: inviteEmail.trim(),
+          full_name: inviteName.trim(),
+          password: inviteVendorPassword,
+        });
+        setOkMsg(`✅ Vendor ${inviteName} created. A confirmation and login email was sent to ${inviteEmail.trim()}.`);
+      } else {
+        await api.createUser({
+          email: inviteEmail.trim(),
+          role: inviteRole,
+          full_name: inviteName.trim(),
+        });
+        setOkMsg(
+          `✅ ${inviteName} added! They can log in with "${inviteEmail}" + Microsoft Authenticator.`
+        );
+      }
       setInviteEmail('');
       setInviteName('');
       setInviteRole('staff');
+      setInviteVendorPassword('vendor@123');
       await load();
     } catch (e) {
       setErr(e.message);
@@ -720,6 +1074,24 @@ export default function Admin() {
     }
   }
 
+  async function onResetVendorPassword(e) {
+    e.preventDefault();
+    if (!vendorPasswordTarget) return;
+    setBusy(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      await api.resetVendorPassword(vendorPasswordTarget.id, vendorPassword);
+      setOkMsg(`Vendor password updated and emailed to ${vendorPasswordTarget.email}.`);
+      setVendorPasswordTarget(null);
+      setVendorPassword('');
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (err && !users) return <div className="text-rose-600">{err}</div>;
   if (!users) return <div className="text-slate-500">Loading users...</div>;
 
@@ -765,6 +1137,8 @@ export default function Admin() {
         </div>
       </div>
 
+      {profile?.role === 'leadership' && <MealBookingAnalytics />}
+
       {profile?.role === 'leadership' && (
         <ReceiptDesignPanel
           design={receiptDesign}
@@ -776,9 +1150,9 @@ export default function Admin() {
       )}
 
       <div className="card">
-        <h2 className="font-semibold mb-1">Add a team member</h2>
+        <h2 className="font-semibold mb-1">Add a team member or vendor</h2>
         <p className="text-xs text-slate-500 mb-4">
-          Creates their account instantly. They'll set up Microsoft Authenticator on first login.
+          Team members use Microsoft Authenticator. Vendors receive a confirmation link and initial password by email.
         </p>
         <form onSubmit={onInvite} className="grid grid-cols-1 sm:grid-cols-12 gap-3">
           <input
@@ -800,7 +1174,10 @@ export default function Admin() {
           <select
             className="input sm:col-span-3"
             value={inviteRole}
-            onChange={(e) => setInviteRole(e.target.value)}
+            onChange={(e) => {
+              setInviteRole(e.target.value);
+              setErr('');
+            }}
           >
             {ROLE_OPTIONS.map((r) => (
               <option key={r.value} value={r.value}>
@@ -808,7 +1185,21 @@ export default function Admin() {
               </option>
             ))}
           </select>
-          <button className="btn-primary sm:col-span-2" disabled={busy}>
+          {inviteRole === 'vendor' && (
+            <input
+              type="text"
+              required
+              minLength={8}
+              maxLength={128}
+              autoComplete="new-password"
+              placeholder="Initial vendor password"
+              aria-label="Initial vendor password"
+              className="input sm:col-span-5"
+              value={inviteVendorPassword}
+              onChange={(e) => setInviteVendorPassword(e.target.value)}
+            />
+          )}
+          <button className={`btn-primary ${inviteRole === 'vendor' ? 'sm:col-span-2' : 'sm:col-span-2'}`} disabled={busy}>
             {busy ? 'Adding…' : '+ Add'}
           </button>
         </form>
@@ -1044,18 +1435,35 @@ export default function Admin() {
                       </select>
                     </td>
                     <td className="py-2 pr-3">
-                      <button
-                        type="button"
-                        className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
-                        disabled={busy}
-                        onClick={() => {
-                          setErr('');
-                          setOkMsg('');
-                          setResetTarget(u);
-                        }}
-                      >
-                        Reset Authenticator
-                      </button>
+                      <div className="flex flex-col gap-1.5">
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
+                          disabled={busy}
+                          onClick={() => {
+                            setErr('');
+                            setOkMsg('');
+                            setResetTarget(u);
+                          }}
+                        >
+                          Reset Authenticator
+                        </button>
+                        {u.role === 'vendor' && (
+                          <button
+                            type="button"
+                            className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
+                            disabled={busy}
+                            onClick={() => {
+                              setErr('');
+                              setOkMsg('');
+                              setVendorPassword('');
+                              setVendorPasswordTarget(u);
+                            }}
+                          >
+                            Reset Vendor Password
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2 pr-3 text-slate-500 text-xs">
                       {u.created_at ? new Date(u.created_at).toLocaleDateString() : '-'}
@@ -1106,6 +1514,47 @@ export default function Admin() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {vendorPasswordTarget && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <form
+            className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4"
+            onSubmit={onResetVendorPassword}
+          >
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-900">Reset vendor password</h3>
+              <p className="text-sm text-slate-500">
+                Set a new password for {vendorPasswordTarget.full_name || vendorPasswordTarget.email}.
+                It will be emailed to the registered address.
+              </p>
+            </div>
+            <input
+              type="text"
+              required
+              minLength={8}
+              maxLength={128}
+              autoComplete="new-password"
+              className="input w-full"
+              placeholder="New password (at least 8 characters)"
+              value={vendorPassword}
+              onChange={(e) => setVendorPassword(e.target.value)}
+            />
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="btn-secondary flex-1"
+                disabled={busy}
+                onClick={() => setVendorPasswordTarget(null)}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="btn-primary flex-1 disabled:opacity-50" disabled={busy}>
+                {busy ? 'Updating…' : 'Update and email'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

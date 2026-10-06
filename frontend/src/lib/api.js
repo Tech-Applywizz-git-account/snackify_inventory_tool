@@ -70,6 +70,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  verifyVendorPassword: (email, password) =>
+    request('/api/auth/verify-vendor-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
   verifyTotpLogin: (transactionId, code) =>
     request('/api/auth/verify-totp-login', {
       method: 'POST',
@@ -142,6 +147,13 @@ export const api = {
     request(`/api/admin/users/${userId}/reset-authenticator`, { method: 'POST' }),
   createUser: (body) =>
     request('/api/admin/users/create', { method: 'POST', body: JSON.stringify(body) }),
+  createVendor: (body) =>
+    request('/api/admin/vendors/create', { method: 'POST', body: JSON.stringify(body) }),
+  resetVendorPassword: (userId, password) =>
+    request(`/api/admin/vendors/${userId}/password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
   inviteUser: (body) =>
     request('/api/admin/users/invite', { method: 'POST', body: JSON.stringify(body) }),
   lateMealBooking: (body) =>

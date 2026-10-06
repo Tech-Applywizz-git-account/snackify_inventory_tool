@@ -125,6 +125,35 @@ export async function sendOtpEmail(email, code) {
   }
 }
 
+/** Send vendor account emails from the mailbox explicitly assigned to this workflow. */
+export async function sendVendorAccountEmail(email, subject, html) {
+  if (!isGraphConfigured()) {
+    throw new Error('Microsoft Graph not configured; vendor email was not sent.');
+  }
+
+  const token = await getGraphToken();
+  const res = await fetch('https://graph.microsoft.com/v1.0/users/support@applywizz.ai/sendMail', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'HTML', content: html },
+        toRecipients: [{ emailAddress: { address: email } }],
+      },
+      saveToSentItems: false,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Graph sendMail failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+}
+
 /** True when Graph credentials are configured — same condition as directory lookup. */
 export function isSendMailConfigured() {
   return isGraphConfigured();

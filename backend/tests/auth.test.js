@@ -1100,6 +1100,42 @@ describe('POST /api/auth/start-login', () => {
     } finally { await close(); }
   });
 
+  it('allows an active external vendor account to choose password sign-in', async () => {
+    const vendor = {
+      id: 'vendor-id',
+      email: 'vendor@example.com',
+      email_confirmed_at: '2026-10-01T12:00:00.000Z',
+    };
+    const { post, close } = await startServer({
+      supabaseAdmin: makeSupabaseAdmin({
+        authUsers: [vendor],
+        fromResults: [{ data: { id: vendor.id, role: 'vendor', active: true }, error: null }],
+      }),
+      normalizeEmail: (e) => e.trim().toLowerCase(),
+    });
+    try {
+      const response = await post('/start-login', { email: vendor.email });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.nextStep, 'vendor-password');
+    } finally { await close(); }
+  });
+
+  it('requires email confirmation before offering vendor password sign-in', async () => {
+    const vendor = { id: 'vendor-id', email: 'vendor@example.com', email_confirmed_at: null };
+    const { post, close } = await startServer({
+      supabaseAdmin: makeSupabaseAdmin({
+        authUsers: [vendor],
+        fromResults: [{ data: { id: vendor.id, role: 'vendor', active: true }, error: null }],
+      }),
+      normalizeEmail: (e) => e.trim().toLowerCase(),
+    });
+    try {
+      const response = await post('/start-login', { email: vendor.email });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.nextStep, 'vendor-confirmation-required');
+    } finally { await close(); }
+  });
+
   it('returns nextStep:otp when user has no verified TOTP (not yet enrolled)', async () => {
     const { post, close } = await startServer({
       supabaseAdmin: makeSupabaseAdmin({
@@ -1167,6 +1203,40 @@ describe('POST /api/auth/start-login', () => {
     try {
       await post('/start-login', { email: 'alice@applywizz.ai' });
       assert.equal(directoryLookupCalled, false, 'isDirectoryUser must never be called');
+    } finally { await close(); }
+  });
+});
+
+describe('POST /api/auth/verify-vendor-password', () => {
+  it('returns a session only for a confirmed active vendor account', async () => {
+    const vendor = {
+      id: 'vendor-id',
+      email: 'vendor@example.com',
+      email_confirmed_at: '2026-10-01T12:00:00.000Z',
+    };
+    const { post, close } = await startServer({
+      supabaseAdmin: makeSupabaseAdmin({
+        authUsers: [vendor],
+        fromResults: [{ data: { id: vendor.id, role: 'vendor', active: true }, error: null }],
+      }),
+      supabaseAnon: {
+        auth: {
+          signInWithPassword: async () => ({
+            data: { session: { access_token: 'vendor-access', refresh_token: 'vendor-refresh' } },
+            error: null,
+          }),
+        },
+      },
+      normalizeEmail: (e) => e.trim().toLowerCase(),
+    });
+    try {
+      const response = await post('/verify-vendor-password', {
+        email: vendor.email,
+        password: 'vendor@123',
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.access_token, 'vendor-access');
+      assert.equal(response.body.refresh_token, 'vendor-refresh');
     } finally { await close(); }
   });
 });

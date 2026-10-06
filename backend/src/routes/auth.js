@@ -490,6 +490,13 @@ export function createAuthRouter(overrides = {}) {
         return res.json({ nextStep: 'otp' }); // don't reveal inactive status
       }
 
+      if (profile.role === 'vendor') {
+        if (!existingUser.email_confirmed_at) {
+          return res.json({ nextStep: 'vendor-confirmation-required' });
+        }
+        return res.json({ nextStep: 'vendor-password' });
+      }
+
       const verifiedFactor = await findVerifiedTotpFactor(existingUser.id);
       if (profile.role === 'leadership' && !verifiedFactor) {
         return res.json({ nextStep: 'password' });
@@ -568,6 +575,46 @@ export function createAuthRouter(overrides = {}) {
         return res.status(400).json({ error: 'Invalid request.' });
       }
       next(e);
+    }
+  });
+
+  router.post('/verify-vendor-password', async (req, res, next) => {
+    try {
+      const schema = z.object({
+        email: z.string().email(),
+        password: z.string().min(1),
+      });
+      const { email: rawEmail, password } = schema.parse(req.body);
+      const email = d.normalizeEmail(rawEmail);
+
+      const existingUser = await findUserByEmail(email);
+      const profile = existingUser ? await findProfileById(existingUser.id) : null;
+      if (
+        !existingUser ||
+        !existingUser.email_confirmed_at ||
+        !profile?.active ||
+        profile.role !== 'vendor'
+      ) {
+        return res.status(401).json({ error: 'Invalid email or password, or account not confirmed.' });
+      }
+
+      const { data: signInData, error: signInError } = await d.supabaseAnon.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (signInError || !signInData?.session?.access_token) {
+        return res.status(401).json({ error: 'Invalid email or password, or account not confirmed.' });
+      }
+
+      return res.json({
+        access_token: signInData.session.access_token,
+        refresh_token: signInData.session.refresh_token,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Invalid request.' });
+      }
+      next(error);
     }
   });
 

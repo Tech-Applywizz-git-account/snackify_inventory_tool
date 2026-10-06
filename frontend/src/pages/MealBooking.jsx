@@ -506,6 +506,7 @@ export default function MealBooking() {
   const [payPhase, setPayPhase] = useState('');
   const [payAmount, setPayAmount] = useState(0);
   const [payError, setPayError] = useState('');
+  const [bookedMealDate, setBookedMealDate] = useState('');
 
   const selectedDateParts = selectedDate ? selectedDate.split('-').map(Number) : [];
   const selectedDay = selectedDate ? new Date(Date.UTC(selectedDateParts[0], selectedDateParts[1] - 1, selectedDateParts[2])).getUTCDay() : null;
@@ -645,6 +646,7 @@ export default function MealBooking() {
       setBookings(updated);
       setConfirmData(null);
       setChangingDate(null);
+      setBookedMealDate(dateStr);
       setPayPhase('paid');
       if (isManager && selectedDate === dateStr) {
         api
@@ -716,7 +718,11 @@ export default function MealBooking() {
         error={payError}
         onDone={() => {
           setPayPhase('');
-          navigate('/my-meal-box');
+          navigate(
+            bookedMealDate
+              ? `/my-meal-box?date=${encodeURIComponent(bookedMealDate)}`
+              : '/my-meal-box'
+          );
         }}
         onFailClose={() => {
           setPayPhase('');

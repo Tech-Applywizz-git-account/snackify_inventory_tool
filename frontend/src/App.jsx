@@ -32,14 +32,18 @@ import StaffViewPage from './pages/StaffView.jsx';
 
 const VendorMealCheckinPage = lazy(() => import('./features/mealCheckin/VendorMealCheckinPage.jsx'));
 
-function Protected({ children, allow }) {
+function Protected({ children, allow, allowAal1Roles = [] }) {
   const { session, profile, profileLoading, loading, aal } = useAuth();
   if (loading) return <div className="p-8 text-slate-500">Loading...</div>;
   if (!session) return <Navigate to="/login" replace />;
   if (profileLoading) return <div className="p-8 text-slate-500">Loading...</div>;
   // Require MFA (AAL2) — if only AAL1, send back to login for TOTP step
   // Leadership can also authenticate through the server-side admin password.
-  if (aal !== 'aal2' && profile?.role !== 'leadership') return <Navigate to="/login" replace />;
+  if (
+    aal !== 'aal2' &&
+    profile?.role !== 'leadership' &&
+    !allowAal1Roles.includes(profile?.role)
+  ) return <Navigate to="/login" replace />;
   if (allow && profile && !allow.includes(profile.role)) {
     return <div className="p-8 text-rose-600">Access denied for role: {profile.role}</div>;
   }
@@ -142,7 +146,7 @@ export default function App() {
       <Route
         path="/vendor/meal-check-in"
         element={
-          <Protected allow={['leadership', 'office_boy', 'admin', 'vendor']}>
+          <Protected allow={['leadership', 'office_boy', 'admin', 'vendor']} allowAal1Roles={['vendor']}>
             <Suspense fallback={<div className="p-8 text-slate-500">Loading vendor check-in...</div>}>
               <VendorMealCheckinPage />
             </Suspense>
