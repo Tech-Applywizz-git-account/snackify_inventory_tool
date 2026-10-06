@@ -135,7 +135,7 @@ export default function Login() {
     e.preventDefault();
     setErr('');
     if (!password) {
-      setErr('Enter the admin password.');
+      setErr('Enter your account password.');
       return;
     }
     setBusy(true);
@@ -609,7 +609,7 @@ export default function Login() {
                             style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)' }}
                             onClick={chooseAdminPassword}
                           >
-                            Sign in with admin password
+                            Sign in with account password
                           </button>
                           <button
                             type="button"
@@ -645,7 +645,7 @@ export default function Login() {
                             autoComplete="current-password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            placeholder="Admin password"
+                            placeholder="Account password"
                             className="w-full rounded-2xl px-4 py-3.5 text-sm text-white placeholder-white/20 focus:outline-none"
                             style={{
                               background: 'rgba(255,255,255,0.05)',

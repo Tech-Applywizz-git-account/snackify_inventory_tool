@@ -83,15 +83,17 @@ router.post('/daily-consumption-email', requireRole('leadership', 'admin'), asyn
     }
 
     const rows = await buildDailyConsumptionReport(reportDate);
+    const { getMailRecipients } = await import('../lib/mailRecipients.js');
     const { data: subscribers, error: subscriberError } = await supabaseAdmin
       .from('profiles')
       .select('email')
       .eq('consumer_report', true)
       .not('email', 'is', null);
     if (subscriberError) throw subscriberError;
-    const recipients = [...new Set((subscribers || []).map((subscriber) => subscriber.email).filter(Boolean))];
-    await sendDailyConsumptionReportEmail(reportDate, rows, recipients);
-    res.json({ ok: true, date: reportDate, items: rows.length, recipients: recipients.length });
+    const fallbackTo = [...new Set((subscribers || []).map((subscriber) => subscriber.email).filter(Boolean))];
+    const { to, cc } = await getMailRecipients('daily_consumption', { fallbackTo });
+    await sendDailyConsumptionReportEmail(reportDate, rows, to, cc);
+    res.json({ ok: true, date: reportDate, items: rows.length, recipients: to.length, cc: cc.length });
   } catch (e) {
     next(e);
   }

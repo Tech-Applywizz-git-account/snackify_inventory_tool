@@ -186,11 +186,9 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
     return { canBook: true, canSkip: true, reason: 'open' };
   } else {
     // Night Shift (Dinner) - books the next working day's dinner the evening before.
-    // Friday night is the exception: Monday's meal is three calendar days away.
-    const targetIsNextWorkingDay = mealDate === nextWD;
-    const targetIsMonday = getMealDateDay(mealDate) === 1;
-    const todayIsFriday = new Date(Date.UTC(parts.year, parts.month, parts.day)).getUTCDay() === 5;
-    if (targetIsNextWorkingDay && (diffDays === 1 || (targetIsMonday && todayIsFriday))) {
+    // Window: 6:00 PM – 10:00 PM IST whenever the target is the next working day
+    // (Fri/Sat/Sun evenings all cover Monday's meal).
+    if (mealDate === nextWD) {
       if (isBlockedMealDate(mealDate)) {
         return { canBook: false, canSkip: false, reason: 'blocked' };
       }
@@ -206,6 +204,112 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
     return { canBook: false, canSkip: false, reason: 'future_locked' };
   }
 }
+
+const BOOKING_PROMPT_REOPEN_SECONDS = 20;
+const CHOICE_LABELS = {
+  veg: 'Veg',
+  non_veg: 'Non-Veg',
+  egg: 'Egg',
+  skip: 'Skip meal',
+};
+
+function formatMealDateLabel(mealDate) {
+  return new Date(`${mealDate}T00:00:00+05:30`).toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+function getNightWindowMeta(nowDate = new Date()) {
+  const parts = getISTParts(nowDate);
+  const currentHour = parts.hour + parts.minute / 60;
+  const mealDate = getNextWorkingDay(nowDate);
+  const inWindow = currentHour >= 18 && currentHour < 22;
+  const yyyy = parts.year;
+  const mm = String(parts.month + 1).padStart(2, '0');
+  const dd = String(parts.day).padStart(2, '0');
+  const todayStr = `${yyyy}-${mm}-${dd}`;
+
+  return {
+    meal_date: mealDate,
+    date_label: formatMealDateLabel(mealDate),
+    in_window: inWindow,
+    window_starts_at: `${todayStr}T18:00:00+05:30`,
+    window_ends_at: `${todayStr}T22:00:00+05:30`,
+    reopen_after_seconds: BOOKING_PROMPT_REOPEN_SECONDS,
+    ist_hour: parts.hour,
+    ist_minute: parts.minute,
+  };
+}
+
+// ── GET /api/meals/booking-prompt ─────────────────────────────────────────────
+// Mobile/web: should we force the night-shift meal booking popup?
+// show_popup = night shift + 6–10 PM IST + not yet booked/skipped for next WD.
+// Clients must poll or reopen every reopen_after_seconds until already_responded.
+router.get('/booking-prompt', async (req, res, next) => {
+  try {
+    const { data: prefs } = await supabaseAdmin
+      .from('employee_cafeteria_preferences')
+      .select('shift')
+      .eq('user_id', req.user.id)
+      .maybeSingle();
+    const userShift = prefs?.shift || 'morning';
+    const window = getNightWindowMeta();
+    const options = isWorkingDay(window.meal_date) ? getOptionsForDate(window.meal_date) : [];
+    const actions = getAllowedActions(window.meal_date, userShift);
+    const booking = await findMealBooking(req.user.id, window.meal_date);
+    // Book OR skip both count as responded (popup should stop).
+    const alreadyResponded = Boolean(booking?.choice);
+    const isNight = userShift === 'night';
+
+    let skipReason = null;
+    if (!isNight) skipReason = 'not_night_shift';
+    else if (!window.in_window) skipReason = actions.reason || 'outside_window';
+    else if (alreadyResponded) skipReason = booking.choice === 'skip' ? 'already_skipped' : 'already_booked';
+
+    const showPopup = isNight && window.in_window && !alreadyResponded && (actions.canBook || actions.canSkip);
+
+    let tokenPrice = null;
+    let wallet = null;
+    try {
+      tokenPrice = await mealTokenPrice(window.meal_date);
+      wallet = await walletForUser(req.user.id);
+    } catch (_) {}
+
+    res.json({
+      shift: userShift,
+      ...window,
+      already_responded: alreadyResponded,
+      already_booked: alreadyResponded && booking?.choice !== 'skip',
+      already_skipped: alreadyResponded && booking?.choice === 'skip',
+      show_popup: showPopup,
+      skip_reason: skipReason,
+      can_book: showPopup ? actions.canBook : false,
+      can_skip: showPopup ? actions.canSkip : false,
+      reason: alreadyResponded
+        ? booking?.choice === 'skip'
+          ? 'already_skipped'
+          : 'already_booked'
+        : actions.reason,
+      options,
+      choices: [
+        ...options.map((value) => ({ value, label: CHOICE_LABELS[value] || value, kind: 'meal' })),
+        { value: 'skip', label: CHOICE_LABELS.skip, kind: 'skip' },
+      ],
+      booking: booking || null,
+      token_price: tokenPrice,
+      wallet,
+      // Hints for mobile clients
+      book_endpoint: 'POST /api/meals/book',
+      book_body: { date: window.meal_date, choice: 'veg|non_veg|egg|skip' },
+    });
+  } catch (e) {
+    next(e);
+  }
+});
 
 // ── GET /api/meals/options?date=2026-05-21 ────────────────────────────────────
 // Returns what options are available for a date + current booking + cutoff status

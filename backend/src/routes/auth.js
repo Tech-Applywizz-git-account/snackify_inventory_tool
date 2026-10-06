@@ -11,10 +11,6 @@ const LOGIN_TX_TTL_MS = 5 * 60 * 1000;        // 5 min
 const MAX_TOTP_ATTEMPTS = 5;
 const RESERVATION_LEASE_MS = 60 * 1000;        // 60s stale reservation recovery
 
-function getAdminPortalPassword() {
-  return process.env.ADMIN_PORTAL_PASSWORD || null;
-}
-
 function displayNameFromEmail(email) {
   return email
     .split('@')[0]
@@ -538,9 +534,8 @@ export function createAuthRouter(overrides = {}) {
   });
 
   // ── POST /api/auth/verify-admin-password ────────────────────────────────
-  // Leadership portal access uses the server-side admin password instead of
-  // Microsoft Authenticator. The password is never sent to the frontend code
-  // or stored in the database by this route.
+  // Leadership portal access: verify the user's own Supabase Auth password
+  // (set on their account), not a shared env password.
   router.post('/verify-admin-password', async (req, res, next) => {
     try {
       const schema = z.object({
@@ -549,11 +544,6 @@ export function createAuthRouter(overrides = {}) {
       });
       const { email: rawEmail, password } = schema.parse(req.body);
       const email = d.normalizeEmail(rawEmail);
-      const configuredPassword = getAdminPortalPassword();
-
-      if (!configuredPassword) {
-        return res.status(503).json({ error: 'Admin password login is not configured.' });
-      }
 
       const existingUser = await findUserByEmail(email);
       const profile = existingUser ? await findProfileById(existingUser.id) : null;
@@ -561,14 +551,17 @@ export function createAuthRouter(overrides = {}) {
         return res.status(401).json({ error: 'Invalid email or password.' });
       }
 
-      if (password !== configuredPassword) {
+      const { data: signInData, error: signInErr } = await d.supabaseAnon.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (signInErr || !signInData?.session?.access_token) {
         return res.status(401).json({ error: 'Invalid email or password.' });
       }
 
-      const session = await getUserSession(email);
       return res.json({
-        access_token: session.access_token,
-        refresh_token: session.refresh_token,
+        access_token: signInData.session.access_token,
+        refresh_token: signInData.session.refresh_token,
       });
     } catch (e) {
       if (e instanceof z.ZodError) {
