@@ -305,6 +305,113 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
+  router.get('/meal-booking-analytics', async (req, res, next) => {
+    try {
+      const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+        const date = new Date(`${value}T00:00:00.000Z`);
+        return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+      });
+      const querySchema = z.object({
+        from: dateSchema,
+        to: dateSchema,
+        group: z.enum(['day', 'week', 'month']).default('day'),
+      });
+      const { from, to, group } = querySchema.parse(req.query);
+      if (from > to) {
+        return res.status(400).json({ error: 'from must be on or before to' });
+      }
+
+      const [{ data: preferences, error: preferencesError }, bookings] = await Promise.all([
+        d.supabaseAdmin.from('employee_cafeteria_preferences').select('user_id, shift'),
+        (async () => {
+          const rows = [];
+          const pageSize = 1000;
+          for (let offset = 0; ; offset += pageSize) {
+            const { data, error } = await d.supabaseAdmin
+              .from('meal_bookings')
+              .select('user_id, meal_date, choice')
+              .gte('meal_date', from)
+              .lte('meal_date', to)
+              .order('meal_date', { ascending: true })
+              .range(offset, offset + pageSize - 1);
+            if (error) throw error;
+            rows.push(...(data || []));
+            if (!data || data.length < pageSize) break;
+          }
+          return rows;
+        })(),
+      ]);
+      if (preferencesError) throw preferencesError;
+
+      const shiftByUserId = new Map((preferences || []).map((preference) => [preference.user_id, preference.shift]));
+      const startOfPeriod = (date) => {
+        if (group === 'month') return `${date.slice(0, 7)}-01`;
+        if (group === 'week') {
+          const value = new Date(`${date}T00:00:00.000Z`);
+          value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7));
+          return value.toISOString().slice(0, 10);
+        }
+        return date;
+      };
+      const formatDate = (date) => new Date(`${date}T00:00:00.000Z`).toLocaleDateString('en-IN', {
+        timeZone: 'UTC',
+        day: 'numeric',
+        month: 'short',
+        year: '2-digit',
+      });
+      const periods = new Map();
+      const cursor = new Date(`${from}T00:00:00.000Z`);
+      const lastDate = new Date(`${to}T00:00:00.000Z`);
+      while (cursor <= lastDate) {
+        const date = cursor.toISOString().slice(0, 10);
+        const period = startOfPeriod(date);
+        if (!periods.has(period)) {
+          const periodEnd = group === 'month'
+            ? new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0))
+            : new Date(`${period}T00:00:00.000Z`);
+          if (group === 'week') periodEnd.setUTCDate(periodEnd.getUTCDate() + 6);
+          const counts = Object.fromEntries(['day', 'night'].flatMap((shift) => [
+            [`${shift}_bookings`, 0],
+            [`${shift}_skipped`, 0],
+            [`${shift}_veg`, 0],
+            [`${shift}_non_veg`, 0],
+            [`${shift}_egg`, 0],
+            [`${shift}_other`, 0],
+          ]));
+          periods.set(period, {
+            period,
+            label: group === 'month' ? new Date(`${period}T00:00:00.000Z`).toLocaleDateString('en-IN', { timeZone: 'UTC', month: 'short', year: 'numeric' })
+              : group === 'week' ? `${formatDate(period)} - ${formatDate(periodEnd.toISOString().slice(0, 10))}`
+                : formatDate(period),
+            ...counts,
+          });
+        }
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
+
+      for (const booking of bookings) {
+        const period = periods.get(startOfPeriod(booking.meal_date));
+        if (!period) continue;
+        const shift = shiftByUserId.get(booking.user_id) === 'night' ? 'night' : 'day';
+        const choice = String(booking.choice || '').toLowerCase();
+        if (choice === 'skip') {
+          period[`${shift}_skipped`] += 1;
+          continue;
+        }
+        period[`${shift}_bookings`] += 1;
+        const category = ['veg', 'non_veg', 'egg'].includes(choice) ? choice : 'other';
+        period[`${shift}_${category}`] += 1;
+      }
+
+      res.json({ from, to, group, periods: [...periods.values()] });
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ error: 'from and to must be valid dates; group must be day, week, or month' });
+      }
+      next(e);
+    }
+  });
+
   router.patch('/meal-settings', async (req, res, next) => {
     try {
       const enabled = req.body?.require_review_to_book_meals;

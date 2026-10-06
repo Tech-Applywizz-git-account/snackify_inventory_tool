@@ -121,6 +121,10 @@ export const api = {
     request('/api/admin/receipt-design', { method: 'PATCH', body: JSON.stringify(config) }),
   resetReceiptDesign: () => request('/api/admin/receipt-design/reset', { method: 'POST' }),
   mealOverview: () => request('/api/admin/meal-overview'),
+  mealBookingAnalytics: (params) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/api/admin/meal-booking-analytics?${query}`);
+  },
   listUnbookedUsers: (date) => request(`/api/admin/unbooked-users${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   listBookedUsers: (date) => request(`/api/admin/booked-users${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   setUserRole: (userId, role) =>
