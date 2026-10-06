@@ -305,7 +305,6 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
-<<<<<<< HEAD
   router.get('/meal-booking-analytics', async (req, res, next) => {
     try {
       const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
@@ -408,7 +407,11 @@ export function createAdminRouter(overrides = {}) {
     } catch (e) {
       if (e instanceof z.ZodError) {
         return res.status(400).json({ error: 'from and to must be valid dates; group must be day, week, or month' });
-=======
+      }
+      next(e);
+    }
+  });
+
   // POST /api/admin/meal-reports/send — manual day/night report (email + telegram)
   router.post('/meal-reports/send', async (req, res, next) => {
     try {
@@ -425,14 +428,11 @@ export function createAdminRouter(overrides = {}) {
     } catch (e) {
       if (e instanceof z.ZodError) {
         return res.status(400).json({ error: 'date must be today|tomorrow and shift must be day|night' });
->>>>>>> 3300b54a246ddf59446d234ac8cf348ddbe4bc2b
       }
       next(e);
     }
   });
 
-<<<<<<< HEAD
-=======
   // GET /api/admin/mail-recipients?mail_type=
   router.get('/mail-recipients', async (req, res, next) => {
     try {
@@ -524,8 +524,6 @@ export function createAdminRouter(overrides = {}) {
       next(e);
     }
   });
-
->>>>>>> 3300b54a246ddf59446d234ac8cf348ddbe4bc2b
   router.patch('/meal-settings', async (req, res, next) => {
     try {
       const enabled = req.body?.require_review_to_book_meals;
