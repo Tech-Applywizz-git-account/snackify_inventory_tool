@@ -46,7 +46,7 @@ const STATS = [
 export default function Login() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { session, loading: authLoading } = useAuth();
+  const { session, profile, profileLoading, loading: authLoading } = useAuth();
 
   const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
@@ -63,10 +63,21 @@ export default function Login() {
   const submitting = useRef(false);
 
   useEffect(() => {
-    if (searchParams.get('vendor_confirmed') !== '1' || authLoading) return;
+    const nativeVendorConfirmation = searchParams.get('vendor_confirmation') === '1';
+    const legacyVendorConfirmation = searchParams.get('vendor_confirmed') === '1';
+    const confirmedVendorSession =
+      nativeVendorConfirmation &&
+      session &&
+      profile?.role === 'vendor' &&
+      !profile.active;
+    if ((!confirmedVendorSession && !legacyVendorConfirmation) || authLoading || profileLoading) return;
     let cancelled = false;
 
     async function finishVendorConfirmation() {
+      if (confirmedVendorSession) {
+        setBusy(true);
+        await api.confirmVendorAccount();
+      }
       if (session) {
         const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
         if (signOutError) {
@@ -82,12 +93,14 @@ export default function Login() {
 
     finishVendorConfirmation().catch((error) => {
       if (!cancelled) setErr(error.message || 'Could not finish account confirmation.');
+    }).finally(() => {
+      if (!cancelled) setBusy(false);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [authLoading, navigate, searchParams, session]);
+  }, [authLoading, navigate, profile, profileLoading, searchParams, session]);
 
   async function submitEmail(e) {
     e.preventDefault();
