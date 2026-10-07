@@ -104,11 +104,14 @@ export function getDefaultPassword() {
   return pw;
 }
 
+function getPublicAppUrl() {
+  return (process.env.APP_PUBLIC_URL || 'https://snackify.applywizz.ai').replace(/\/+$/, '');
+}
+
 // Invite emails should always land on the canonical public app URL in production.
 // Named export for focused tests — not a public API.
 export function getInviteRedirectUrl() {
-  const base = process.env.APP_PUBLIC_URL || 'http://localhost:5173';
-  return `${base.replace(/\/$/, '')}/dashboard`;
+  return `${getPublicAppUrl()}/dashboard`;
 }
 
 function escapeHtml(value) {
@@ -213,7 +216,7 @@ export function createAdminRouter(overrides = {}) {
       if (!profile) throw new Error('Supabase did not create the vendor profile.');
 
       stage = 'building the confirmation link';
-      const publicAppUrl = process.env.APP_PUBLIC_URL || 'https://snackify.applywizz.ai';
+      const publicAppUrl = getPublicAppUrl();
       const confirmationUrl = new URL(
         `/confirm/${confirmationTokenHash}`,
         publicAppUrl
@@ -1029,7 +1032,7 @@ export function createAdminRouter(overrides = {}) {
 
       const safePassword = escapeHtml(password);
       const safeEmail = escapeHtml(targetUser.email || '');
-      const loginUrl = escapeHtml(`${(process.env.APP_PUBLIC_URL || 'http://localhost:5173').replace(/\/$/, '')}/login`);
+      const loginUrl = escapeHtml(`${getPublicAppUrl()}/login`);
       try {
         await d.sendVendorAccountEmail(
           targetUser.email,
