@@ -254,7 +254,7 @@ router.post('/', async (req, res, next) => {
 });
 
 // ── GET /api/meal-reviews  (admin list) ──────────────────────────────────────
-router.get('/', requireRole('leadership', 'finance'), async (req, res, next) => {
+router.get('/', requireRole('leadership', 'finance', 'office_boy'), async (req, res, next) => {
   try {
     const mealDate = (req.query.date || getISTDateString()).toString();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(mealDate)) {

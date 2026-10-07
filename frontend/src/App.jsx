@@ -11,6 +11,7 @@ import AuditLogPage from './pages/AuditLog.jsx';
 import BillApprovalPage from './pages/BillApproval.jsx';
 import BillUploadPage from './pages/BillUpload.jsx';
 import CafeteriaPage from './pages/Cafeteria.jsx';
+import ConfirmVendorPage from './pages/ConfirmVendor.jsx';
 import ConnectionsPage from './pages/Connections.jsx';
 import DailyUpdatePage from './pages/DailyUpdate.jsx';
 import DashboardPage from './pages/Dashboard.jsx';
@@ -140,6 +141,7 @@ export default function App() {
   return (
     <AuthProvider>
       <Routes>
+      <Route path="/confirm/:tokenHash" element={<ConfirmVendorPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/guest" element={<GuestPage />} />
       <Route path="/guest/track/:id" element={<LiveTrackingPage />} />
