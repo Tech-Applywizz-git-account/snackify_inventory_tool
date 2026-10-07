@@ -21,7 +21,7 @@ function stopMediaStream(stream) {
 
 export default function VendorMealCheckinPage() {
   const { profile } = useAuth();
-  const canViewReviews = ['leadership', 'finance'].includes(profile?.role);
+  const canViewReviews = ['leadership', 'finance', 'office_boy'].includes(profile?.role);
   const today = getISTDate();
   const [mealDate, setMealDate] = useState(getISTDate);
   const [mealShift, setMealShift] = useState('day');
