@@ -1,12 +1,33 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
 
 const confirmationRequests = new Map();
 
 function confirmVendorInvitationOnce(tokenHash) {
   if (!confirmationRequests.has(tokenHash)) {
-    const request = api.confirmVendorInvitation(tokenHash);
+    const url = 'https://snackify.applywizz.ai/api/auth/confirm-vendor-link';
+    const request = fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokenHash }),
+    }).then(async (res) => {
+      if (!res.ok) {
+        let msg = `${res.status} ${res.statusText}`;
+        try {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const body = await res.json();
+            if (body?.error) msg = body.error;
+          }
+        } catch (e) {}
+        const error = new Error(msg);
+        error.status = res.status;
+        throw error;
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    });
     confirmationRequests.set(tokenHash, request);
     request.then(
       () => confirmationRequests.delete(tokenHash),
@@ -18,7 +39,6 @@ function confirmVendorInvitationOnce(tokenHash) {
 
 export default function ConfirmVendor() {
   const { tokenHash } = useParams();
-  const navigate = useNavigate();
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -28,7 +48,7 @@ export default function ConfirmVendor() {
     confirmVendorInvitationOnce(tokenHash)
       .then(() => {
         if (!cancelled) {
-          navigate('/login?vendor_confirmed=1', { replace: true });
+          window.location.replace('https://snackify.applywizz.ai/login?vendor_confirmed=1');
         }
       })
       .catch((confirmationError) => {
@@ -40,7 +60,7 @@ export default function ConfirmVendor() {
     return () => {
       cancelled = true;
     };
-  }, [navigate, tokenHash]);
+  }, [tokenHash]);
 
   return (
     <main className="min-h-screen grid place-items-center bg-slate-950 px-4 text-white">
@@ -49,9 +69,9 @@ export default function ConfirmVendor() {
           <>
             <h1 className="text-xl font-semibold">Confirmation unsuccessful</h1>
             <p className="mt-3 text-sm text-white/65">{error}</p>
-            <Link className="mt-6 inline-block text-sm font-semibold text-blue-300" to="/login">
+            <a className="mt-6 inline-block text-sm font-semibold text-blue-300" href="https://snackify.applywizz.ai/login">
               Go to login
-            </Link>
+            </a>
           </>
         ) : (
           <>
