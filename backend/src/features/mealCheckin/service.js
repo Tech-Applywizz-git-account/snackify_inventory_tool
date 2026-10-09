@@ -180,10 +180,21 @@ export function filterBookingsByShift(bookings, preferences, shift = 'all') {
       .filter((preference) => preference.shift === 'night')
       .map((preference) => preference.user_id)
   );
-
   return (bookings || []).filter((booking) =>
     shift === 'night'
       ? nightShiftUserIds.has(booking.user_id)
       : !nightShiftUserIds.has(booking.user_id)
+  );
+}
+
+export function filterProfilesByShift(profiles, preferences, shift = 'all') {
+  if (shift === 'all') return profiles || [];
+  const nightShiftUserIds = new Set(
+    (preferences || [])
+      .filter((preference) => preference.shift === 'night')
+      .map((preference) => preference.user_id)
+  );
+  return (profiles || []).filter((profile) =>
+    shift === 'night' ? nightShiftUserIds.has(profile.id) : !nightShiftUserIds.has(profile.id)
   );
 }

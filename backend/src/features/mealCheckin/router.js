@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import QRCode from 'qrcode';
 import { supabaseAdmin } from '../../lib/supabase.js';
+import { requireVendorAccess } from '../../lib/vendorAccess.js';
 import { requireRole } from '../../middleware/auth.js';
 import {
   attachMealCheckins,
   createMealQrToken,
+  filterProfilesByShift,
   filterBookingsByShift,
   isMealDate,
   isMealServiceClosed,
@@ -199,9 +201,20 @@ router.post('/scan', requireRole(...CHECKIN_ROLES), async (req, res, next) => {
   }
 });
 
-router.get('/summary', requireRole(...CHECKIN_ROLES), async (req, res, next) => {
-  try {
-    const mealDate = req.query.date || todayInIst();
+router.get(
+  '/summary',
+  requireRole(...CHECKIN_ROLES),
+  requireVendorAccess({
+    ownerKeys: ['user_id', 'created_by', 'vendor_id'],
+    getResource: async (req) => {
+      const vendorScopeId = req.query.vendor_id || req.query.vendorId || req.query.report_id || req.query.service_id || req.query.client_id;
+      if (!vendorScopeId) return null;
+      return { user_id: vendorScopeId };
+    },
+  }),
+  async (req, res, next) => {
+    try {
+      const mealDate = req.query.date || todayInIst();
     const shift = req.query.shift || 'all';
     if (!isMealDate(mealDate))
       return res.status(400).json({ error: 'A valid meal date is required.' });
@@ -212,21 +225,37 @@ router.get('/summary', requireRole(...CHECKIN_ROLES), async (req, res, next) => 
       .from('meal_bookings')
       .select('id, user_id, choice')
       .eq('meal_date', mealDate)
-      .in('choice', MEAL_CHOICES)
       .order('booked_at', { ascending: true });
     if (error) throw error;
 
-    const bookings = allBookings || [];
-    const bookingUserIds = [...new Set(bookings.map((booking) => booking.user_id))];
-    let preferences = [];
+    const mealBookings = (allBookings || []).filter((booking) => MEAL_CHOICES.includes(booking.choice));
+
+    let vendorUserIds = new Set();
+    const bookingUserIds = [...new Set(mealBookings.map((booking) => booking.user_id))];
     if (bookingUserIds.length) {
-      const { data, error: preferencesError } = await supabaseAdmin
-        .from('employee_cafeteria_preferences')
-        .select('user_id, shift')
-        .in('user_id', bookingUserIds);
-      if (preferencesError) throw preferencesError;
-      preferences = data || [];
+      const { data: bookingProfiles, error: bookingProfilesError } = await supabaseAdmin
+        .from('profiles')
+        .select('id, role')
+        .in('id', bookingUserIds);
+      if (bookingProfilesError) throw bookingProfilesError;
+      vendorUserIds = new Set(
+        (bookingProfiles || []).filter((profile) => profile?.role === 'vendor').map((profile) => profile.id)
+      );
     }
+
+    const bookings = mealBookings.filter((booking) => !vendorUserIds.has(booking.user_id));
+    const [{ data: preferences, error: preferencesError }, { data: activeProfiles, error: profilesError }] =
+      await Promise.all([
+        supabaseAdmin.from('employee_cafeteria_preferences').select('user_id, shift'),
+        supabaseAdmin
+          .from('profiles')
+          .select('id, full_name, preferred_name, employee_code, role')
+          .eq('active', true),
+      ]);
+    if (preferencesError) throw preferencesError;
+    if (profilesError) throw profilesError;
+    const employeeRoster = (activeProfiles || []).filter((profile) => profile?.role !== 'vendor');
+    const shiftRoster = filterProfilesByShift(employeeRoster, preferences, shift);
 
     const rows = filterBookingsByShift(bookings, preferences, shift);
     const bookingIds = rows.map((booking) => booking.id);
@@ -257,15 +286,21 @@ router.get('/summary', requireRole(...CHECKIN_ROLES), async (req, res, next) => 
     if (profileIds.length) {
       const { data: profiles, error: profileError } = await supabaseAdmin
         .from('profiles')
-        .select('id, full_name, preferred_name, employee_code')
+        .select('id, full_name, preferred_name, employee_code, role')
         .in('id', profileIds);
       if (profileError) throw profileError;
-      profileById = new Map((profiles || []).map((profile) => [profile.id, profile]));
+      const employeeProfiles = (profiles || []).filter((profile) => profile?.role !== 'vendor');
+      profileById = new Map(employeeProfiles.map((profile) => [profile.id, profile]));
     }
 
     const checkinByBooking = new Map(checkins.map((checkin) => [checkin.meal_booking_id, checkin]));
     const shiftByUserId = new Map(
-      preferences.map((preference) => [preference.user_id, preference.shift])
+      (preferences || []).map((preference) => [preference.user_id, preference.shift])
+    );
+    const bookedUserIds = new Set(
+      (allBookings || [])
+        .filter((booking) => !vendorUserIds.has(booking.user_id))
+        .map((booking) => booking.user_id)
     );
     const details = rows.map((booking) => {
       const checkin = checkinByBooking.get(booking.id);
@@ -283,6 +318,18 @@ router.get('/summary', requireRole(...CHECKIN_ROLES), async (req, res, next) => 
         checked_in_by: served ? profileName(checker) : null,
       };
     });
+    const unbookedDetails = shiftRoster
+      .filter((profile) => !bookedUserIds.has(profile.id))
+      .map((profile) => ({
+        row_id: `not-booked:${profile.id}`,
+        employee_name: profileName(profile),
+        employee_code: profile.employee_code || '',
+        shift: shiftByUserId.get(profile.id) === 'night' ? 'night' : 'day',
+        choice: null,
+        status: 'not_booked',
+        checked_in_at: null,
+        checked_in_by: null,
+      }));
 
     res.json({
       ...summary,
@@ -290,7 +337,7 @@ router.get('/summary', requireRole(...CHECKIN_ROLES), async (req, res, next) => 
       service_cutoff_ist: cutoff,
       service_closed: closed,
       daily_servings: dailyServings,
-      bookings: details,
+      bookings: [...details, ...unbookedDetails],
     });
   } catch (error) {
     next(error);

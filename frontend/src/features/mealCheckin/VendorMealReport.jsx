@@ -1,11 +1,12 @@
-import { CheckCircle2, Clock3, Download, Search, Users } from 'lucide-react';
+import { CheckCircle2, Clock3, Download, Search, UserRound, Users } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 const FILTERS = [
-  { key: 'all', label: 'All bookings' },
+  { key: 'all', label: 'All employees' },
   { key: 'not_yet_served', label: 'Not served' },
   { key: 'served', label: 'Served' },
   { key: 'no_show', label: 'No-shows' },
+  { key: 'not_booked', label: 'Not booked' },
 ];
 
 function formatTime(value) {
@@ -127,12 +128,14 @@ async function downloadReport({ rows, mealDate, serviceSummary, filterLabel, sea
       String(index + 1),
       row.employee_name || 'Unknown',
       row.employee_code || '—',
-      String(row.choice || '').replace('_', ' '),
+      row.choice ? String(row.choice).replace('_', ' ') : 'Not booked',
       row.status === 'not_yet_served'
         ? 'Not yet served'
         : row.status === 'no_show'
           ? 'No-show'
-          : 'Served',
+          : row.status === 'not_booked'
+            ? 'Not booked'
+            : 'Served',
       formatTime(row.checked_in_at),
       row.checked_in_by || '—',
     ]),
@@ -173,13 +176,22 @@ async function downloadReport({ rows, mealDate, serviceSummary, filterLabel, sea
 function StatusBadge({ status }) {
   const isServed = status === 'served';
   const isNoShow = status === 'no_show';
-  const Icon = isServed ? CheckCircle2 : Clock3;
-  const label = isServed ? 'Served' : isNoShow ? 'No-show' : 'Not served';
+  const isNotBooked = status === 'not_booked';
+  const Icon = isServed ? CheckCircle2 : isNotBooked ? UserRound : Clock3;
+  const label = isServed
+    ? 'Served'
+    : isNoShow
+      ? 'No-show'
+      : isNotBooked
+        ? 'Not booked'
+        : 'Not served';
   const colors = isServed
     ? 'bg-emerald-50 text-emerald-800 ring-emerald-200'
     : isNoShow
       ? 'bg-rose-50 text-rose-800 ring-rose-200'
-      : 'bg-amber-50 text-amber-800 ring-amber-200';
+      : isNotBooked
+        ? 'bg-slate-100 text-slate-700 ring-slate-300'
+        : 'bg-amber-50 text-amber-800 ring-amber-200';
 
   return (
     <span
@@ -205,7 +217,7 @@ export default function VendorMealReport({
   const [exportError, setExportError] = useState('');
 
   const counts = useMemo(() => {
-    const result = { all: bookings.length, not_yet_served: 0, served: 0, no_show: 0 };
+    const result = { all: bookings.length, not_yet_served: 0, served: 0, no_show: 0, not_booked: 0 };
     for (const booking of bookings) {
       if (Object.hasOwn(result, booking.status)) result[booking.status] += 1;
     }
@@ -321,11 +333,11 @@ export default function VendorMealReport({
       ) : filteredBookings.length === 0 ? (
         <div className="px-5 py-10 text-center">
           <p className="text-sm font-semibold text-slate-800">
-            {bookings.length === 0 ? 'No meal bookings for today.' : 'No bookings match this view.'}
+            {bookings.length === 0 ? 'No employees in this shift roster.' : 'No employees match this view.'}
           </p>
           <p className="mt-1 text-xs text-slate-500">
             {bookings.length === 0
-              ? 'Eligible bookings will appear here as employees book meals.'
+              ? 'Active employees for the selected shift will appear here.'
               : 'Try another status filter or search term.'}
           </p>
         </div>
@@ -334,7 +346,7 @@ export default function VendorMealReport({
           <div className="space-y-3 p-3 md:hidden">
             {filteredBookings.map((booking, index) => (
               <article
-                key={booking.booking_id}
+                key={booking.row_id || booking.booking_id}
                 className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
               >
                 <div className="flex items-start justify-between gap-3">
@@ -352,7 +364,7 @@ export default function VendorMealReport({
                   <div>
                     <dt className="text-slate-500">Meal</dt>
                     <dd className="mt-0.5 font-medium capitalize text-slate-800">
-                      {booking.choice.replace('_', ' ')}
+                      {booking.choice ? booking.choice.replace('_', ' ') : 'Not booked'}
                     </dd>
                   </div>
                   <div>
@@ -385,7 +397,7 @@ export default function VendorMealReport({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredBookings.map((booking, index) => (
-                <tr key={booking.booking_id} className="transition-colors hover:bg-emerald-50/40">
+                <tr key={booking.row_id || booking.booking_id} className="transition-colors hover:bg-emerald-50/40">
                   <td className="px-4 py-3 tabular-nums text-slate-500 sm:px-5">{index + 1}</td>
                   <td className="whitespace-nowrap px-4 py-3 sm:px-5">
                     <p className="font-semibold text-slate-900">{booking.employee_name}</p>
@@ -395,7 +407,7 @@ export default function VendorMealReport({
                   </td>
                   <td className="whitespace-nowrap px-4 py-3">
                     <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium capitalize text-slate-700">
-                      {booking.choice.replace('_', ' ')}
+                      {booking.choice ? booking.choice.replace('_', ' ') : 'Not booked'}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3">
@@ -417,7 +429,7 @@ export default function VendorMealReport({
 
       {!loading && !error && filteredBookings.length > 0 && (
         <footer className="border-t border-slate-200 px-4 py-2.5 text-xs text-slate-500 sm:px-5">
-          Showing {filteredBookings.length} of {bookings.length} eligible bookings
+          Showing {filteredBookings.length} of {bookings.length} employees
         </footer>
       )}
     </section>
