@@ -299,8 +299,8 @@ Tap "Done" -> status: done, live_status: done
 - Cancel till **8 PM**
 
 ### Night Shift Employees
-- Book by **2 PM** for same day's dinner
-- Cancel till **5 PM**
+- Book between **6:00 PM and 12:00 AM** the evening before, for the next working day's meal
+- The night-shift booking summary email is sent at **12:15 AM** IST
 
 ```
 [7-Day Calendar Strip]

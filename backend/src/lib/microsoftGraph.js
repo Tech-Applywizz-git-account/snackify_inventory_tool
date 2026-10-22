@@ -576,7 +576,7 @@ export async function sendMealNightReportEmail(emails, reportData) {
   const subject = `${subjectEmoji} ${shiftLabel} Meal Bookings Summary (${reportData.mealDate})`;
   const headerTitle = `${shiftLabel} Meal Bookings Report`;
   const generatedAtLabel = isNightShift
-    ? 'This report was auto-generated at 10:15 PM IST for night-shift cafeteria prep.'
+    ? 'This report was auto-generated at 12:15 AM IST for night-shift cafeteria prep.'
     : 'This report was auto-generated at 8:30 PM IST for day-shift cafeteria prep.';
 
   const unbookedNames = reportData.unbookedNames || [];

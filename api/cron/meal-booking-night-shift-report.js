@@ -1,6 +1,6 @@
 /**
  * Vercel Cron: trigger the nightly night-shift booking summary report.
- * Runs at 10:15 PM IST every day (16:45 UTC).
+ * Runs at 12:15 AM IST every day (18:45 UTC).
  */
 module.exports = async function handler(req, res) {
   console.log('[vercel-cron] /api/cron/meal-booking-night-shift-report hit', new Date().toISOString(), {

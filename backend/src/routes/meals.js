@@ -123,8 +123,8 @@ function getNextWorkingDay(nowDate = new Date()) {
  *   - After 8:00 PM → locked
  *   - Special: Fri/Sat/Sun morning → Monday meal open all day (no 6pm cut-off)
  * Night (dinner):
- *   - Can book tomorrow only
- *   - Tomorrow: open 6:00 PM – 10:00 PM the day before
+ *   - Can book the next working day only
+ *   - Open 6:00 PM – 12:00 AM IST the evening before (Fri/Sat/Sun evenings cover Monday)
  */
 function getAllowedActions(mealDate, shift = 'morning', mockDate) {
   const parts = getISTParts(mockDate || new Date());
@@ -186,14 +186,12 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
     return { canBook: true, canSkip: true, reason: 'open' };
   } else {
     // Night Shift (Dinner) - books the next working day's dinner the evening before.
-    // Window: 6:00 PM – 10:00 PM IST whenever the target is the next working day
-    // (Fri/Sat/Sun evenings all cover Monday's meal).
+    // Window: 6:00 PM until 12:00 AM IST whenever the target is the next working day
+    // (Fri/Sat/Sun evenings all cover Monday's meal). Midnight rolls the calendar
+    // day, so the window closes without a same-day hour check.
     if (mealDate === nextWD) {
       if (isBlockedMealDate(mealDate)) {
         return { canBook: false, canSkip: false, reason: 'blocked' };
-      }
-      if (currentHour >= 22) {
-        return { canBook: false, canSkip: false, reason: 'locked' };
       }
       if (currentHour >= 18) {
         return { canBook: true, canSkip: true, reason: 'open' };
@@ -227,18 +225,21 @@ function getNightWindowMeta(nowDate = new Date()) {
   const parts = getISTParts(nowDate);
   const currentHour = parts.hour + parts.minute / 60;
   const mealDate = getNextWorkingDay(nowDate);
-  const inWindow = currentHour >= 18 && currentHour < 22;
+  const inWindow = currentHour >= 18;
   const yyyy = parts.year;
   const mm = String(parts.month + 1).padStart(2, '0');
   const dd = String(parts.day).padStart(2, '0');
   const todayStr = `${yyyy}-${mm}-${dd}`;
+  const windowEnd = new Date(Date.UTC(parts.year, parts.month, parts.day));
+  windowEnd.setUTCDate(windowEnd.getUTCDate() + 1);
+  const windowEndStr = formatUTCDateStr(windowEnd);
 
   return {
     meal_date: mealDate,
     date_label: formatMealDateLabel(mealDate),
     in_window: inWindow,
     window_starts_at: `${todayStr}T18:00:00+05:30`,
-    window_ends_at: `${todayStr}T22:00:00+05:30`,
+    window_ends_at: `${windowEndStr}T00:00:00+05:30`,
     reopen_after_seconds: BOOKING_PROMPT_REOPEN_SECONDS,
     ist_hour: parts.hour,
     ist_minute: parts.minute,
@@ -247,7 +248,7 @@ function getNightWindowMeta(nowDate = new Date()) {
 
 // ── GET /api/meals/booking-prompt ─────────────────────────────────────────────
 // Mobile/web: should we force the night-shift meal booking popup?
-// show_popup = night shift + 6–10 PM IST + not yet booked/skipped for next WD.
+// show_popup = night shift + 6 PM–12 AM IST + not yet booked/skipped for next WD.
 // Clients must poll or reopen every reopen_after_seconds until already_responded.
 router.get('/booking-prompt', async (req, res, next) => {
   try {
@@ -419,7 +420,10 @@ router.post('/book', async (req, res, next) => {
         }
         const lockedMsg = {
           past: 'You can only book lunch for the next working day.',
-          not_open_yet: 'Booking opens at 9:00 AM IST.',
+          not_open_yet:
+            userShift === 'night'
+              ? 'Night-shift booking opens at 6:00 PM IST and closes at 12:00 AM IST.'
+              : 'Booking opens at 9:00 AM IST.',
           future_locked: 'This date is not open for booking yet.',
           blocked: 'Meal booking is not available on this date (office closed).',
           weekend: 'Not a working day.',

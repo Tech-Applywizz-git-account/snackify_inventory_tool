@@ -16,6 +16,7 @@ import {
   getEveningReportMealDate,
   getISTDateString,
   getNextWorkingMealDate,
+  getNightShiftReportMealDate,
   getReportRecipientEmails,
 } from '../lib/mealReportHelpers.js';
 
@@ -44,6 +45,7 @@ export {
   getEveningReportMealDate,
   getISTDateString,
   getNextWorkingMealDate,
+  getNightShiftReportMealDate,
   getReportRecipientEmails,
 };
 
@@ -453,8 +455,9 @@ async function sendWeeklyForecastDigest(items, botToken) {
 }
 
 // POST /api/cron/meal-booking-night-shift-report
-// Called by pg_cron at 10:15 PM IST. Reports next working day's night-shift
-// bookings. Monday meals are reported on Sunday (bookings stay open Fri–Sun).
+// Called by Vercel Cron daily at 12:15 AM IST (vercel.json), after the midnight cutoff.
+// Reports that calendar day's night-shift meal. Monday is sent Monday 12:15 AM
+// (bookings stay open Friday evening through Sunday).
 router.post('/meal-booking-night-shift-report', async (req, res, next) => {
   try {
     const secret = req.query.secret || req.body?.secret || req.headers['x-cron-secret'];
@@ -465,13 +468,13 @@ router.post('/meal-booking-night-shift-report', async (req, res, next) => {
     }
 
     const reportDate = getISTDateString();
-    const mealDate = getEveningReportMealDate();
+    const mealDate = getNightShiftReportMealDate();
     if (!mealDate) {
       return res.json({
         ok: true,
         skipped: true,
         reason:
-          'Friday/Saturday: Monday night-shift report waits until Sunday 10:15 PM IST (bookings stay open through the weekend).',
+          'Saturday/Sunday: Monday night-shift report waits until Monday 12:15 AM IST (bookings stay open through the weekend).',
         reportDate,
       });
     }

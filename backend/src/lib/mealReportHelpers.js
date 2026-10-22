@@ -113,7 +113,7 @@ export function getReportRecipientEmails(activeProfiles) {
 }
 
 /**
- * Meal date covered by the evening day/night report when run "now" (IST).
+ * Meal date covered by the evening day-shift report when run "now" (IST).
  *
  * Unchanged for Tue–Fri meals (previous evening):
  *   Mon–Thu evening → tomorrow
@@ -136,4 +136,18 @@ export function getEveningReportMealDate(date = new Date()) {
 
   // Sunday → Monday; Mon–Thu → tomorrow (same as before for Tue–Fri meals).
   return getNextWorkingMealDate(date);
+}
+
+/**
+ * Meal date for the night-shift report sent at 12:15 AM IST.
+ * Booking closes at midnight, so the report covers today's working-day meal.
+ * Saturday and Sunday are skipped because Monday stays open until Monday 12:00 AM.
+ */
+export function getNightShiftReportMealDate(date = new Date()) {
+  const istDate = getISTDateString(date);
+  const [year, month, day] = istDate.split('-').map(Number);
+  const istWeekday = new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).getUTCDay();
+
+  if (istWeekday === 0 || istWeekday === 6) return null;
+  return istDate;
 }

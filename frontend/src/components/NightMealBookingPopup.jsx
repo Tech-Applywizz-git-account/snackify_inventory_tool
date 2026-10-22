@@ -199,7 +199,7 @@ export function NightMealBookingPopup({ open, status, onClose, onSubmitted }) {
                     Book tomorrow&apos;s night meal
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {status?.date_label || status?.meal_date || 'Next working day'} · open until 10:00 PM IST
+                    {status?.date_label || status?.meal_date || 'Next working day'} · open until 12:00 AM IST
                   </p>
                 </div>
               </div>
@@ -214,7 +214,7 @@ export function NightMealBookingPopup({ open, status, onClose, onSubmitted }) {
             </div>
 
             <p className="text-sm text-slate-600">
-              Night shift booking window is 6–10 PM. This reminder comes back every{' '}
+              Night shift booking window is 6 PM–12 AM. This reminder comes back every{' '}
               {status?.reopen_after_seconds ?? 20}s until you book or skip.
             </p>
 

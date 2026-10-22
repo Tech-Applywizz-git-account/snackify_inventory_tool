@@ -24,7 +24,7 @@
     },
     {
       "path": "/api/cron/meal-booking-night-shift-report",
-      "schedule": "45 16 * * *"
+      "schedule": "45 18 * * *"
     }
   ]
 }

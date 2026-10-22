@@ -176,9 +176,9 @@ export default function MealCard({ userShift = 'morning' }) {
         <div className="flex flex-col items-end gap-0.5">
           {reason === 'open' && (
             <>
-              <CountdownTimer cutoffHour={userShift === 'night' ? 22 : 18} />
+              <CountdownTimer cutoffHour={userShift === 'night' ? 24 : 18} />
               <span className="text-[10px] text-slate-300 font-medium">
-                Book by {userShift === 'night' ? '10 PM' : '6 PM'}
+                Book by {userShift === 'night' ? '12 AM' : '6 PM'}
               </span>
             </>
           )}
@@ -202,7 +202,7 @@ export default function MealCard({ userShift = 'morning' }) {
 
       {userShift === 'night' && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-sm font-extrabold text-amber-900">
-          Night shift: book the meal for {formatDate(targetDate)} between 6:00 PM and 10:00 PM,
+          Night shift: book the meal for {formatDate(targetDate)} between 6:00 PM and 12:00 AM,
           one day before.
         </div>
       )}

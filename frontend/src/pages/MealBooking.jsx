@@ -197,14 +197,10 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
     }
     return { canBook: true, canSkip: true, reason: 'open' };
   } else {
-    // Night shift meals are bookable for the next working day, from 6:00 PM to 10:00 PM.
-    // Friday night can book Monday's meal across the weekend.
-    const targetIsMonday = new Date(Date.UTC(tYear, tMonth - 1, tDay)).getUTCDay() === 1;
-    const todayIsFriday = new Date(Date.UTC(parts.year, parts.month, parts.day)).getUTCDay() === 5;
-    if (dateStr === nextWD && (diffDays === 1 || (targetIsMonday && todayIsFriday))) {
-      if (currentHour >= 22) {
-        return { canBook: false, canSkip: false, reason: 'locked' };
-      }
+    // Night shift meals are bookable for the next working day, from 6:00 PM until 12:00 AM.
+    // Friday, Saturday, and Sunday evenings all cover Monday. Midnight starts the next
+    // calendar day, which closes the previous evening's window.
+    if (dateStr === nextWD) {
       if (currentHour >= 18) {
         return { canBook: true, canSkip: true, reason: 'open' };
       }
@@ -896,7 +892,7 @@ export default function MealBooking() {
                 year: 'numeric',
                 timeZone: 'Asia/Kolkata',
               })}{' '}
-              between 6:00 PM and 10:00 PM, one day before.
+              between 6:00 PM and 12:00 AM, one day before.
             </div>
           )}
 
@@ -988,7 +984,7 @@ export default function MealBooking() {
               }
               const openTimeLabel = getOpeningTimeLabel(selectedDate, userPrefs.shift);
               const toneMsg = userPrefs.shift === 'night'
-                ? 'Night-shift meals must be booked one day before, between 6:00 PM and 10:00 PM.'
+                ? 'Night-shift meals must be booked one day before, between 6:00 PM and 12:00 AM.'
                 : getToneMessage(userPrefs.notification_tone, userPrefs.shift, openTimeLabel);
               return (
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center space-y-1">

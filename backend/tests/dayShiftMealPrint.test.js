@@ -7,7 +7,7 @@ import {
   filterNightMealBookings,
   getEveningReportMealDate,
   getISTDateString,
-  getNextWorkingMealDate,
+  getNightShiftReportMealDate,
   getReportRecipientEmails,
   resolveBookingCabin,
 } from '../src/routes/cron.js';
@@ -150,12 +150,19 @@ test('night-shift report resolves the current report date in IST', () => {
   assert.equal(getISTDateString(utcDate), '2026-09-22');
 });
 
-test('night-shift report sent today counts the next working day meal', () => {
-  const mondayNight = new Date('2026-09-21T16:45:00.000Z');
-  const fridayNight = new Date('2026-09-25T16:45:00.000Z');
-
-  assert.equal(getNextWorkingMealDate(mondayNight), '2026-09-22');
-  assert.equal(getNextWorkingMealDate(fridayNight), '2026-09-28');
+test('night-shift report sent at 12:15 AM IST counts that working day meal', () => {
+  // Monday 18:45 UTC = Tuesday 00:15 IST
+  assert.equal(getNightShiftReportMealDate(new Date('2026-09-21T18:45:00.000Z')), '2026-09-22');
+  // Thursday 18:45 UTC = Friday 00:15 IST
+  assert.equal(getNightShiftReportMealDate(new Date('2026-09-24T18:45:00.000Z')), '2026-09-25');
+  // Friday 18:45 UTC = Saturday 00:15 IST; Monday stays open through the weekend
+  assert.equal(getNightShiftReportMealDate(new Date('2026-09-25T18:45:00.000Z')), null);
+  // Saturday 18:45 UTC = Sunday 00:15 IST
+  assert.equal(getNightShiftReportMealDate(new Date('2026-09-26T18:45:00.000Z')), null);
+  // Sunday 18:45 UTC = Monday 00:15 IST
+  assert.equal(getNightShiftReportMealDate(new Date('2026-09-27T18:45:00.000Z')), '2026-09-28');
+  // Monday 18:45 UTC = Tuesday 00:15 IST
+  assert.equal(getNightShiftReportMealDate(new Date('2026-09-28T18:45:00.000Z')), '2026-09-29');
 });
 test('evening meal reports wait until Sunday for Monday bookings', () => {
   // Thursday evening → Friday meal
