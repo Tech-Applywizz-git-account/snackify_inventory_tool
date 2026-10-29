@@ -20,6 +20,7 @@ import LiveTrackingPage from './pages/LiveTracking.jsx';
 import LoginPage from './pages/Login.jsx';
 import GuestPage from './pages/Guest.jsx';
 import ManualPurchasesPage from './pages/ManualPurchases.jsx';
+import MealAttendanceReportPage from './pages/MealAttendanceReport.jsx';
 import MealBookingPage from './pages/MealBooking.jsx';
 import MealHistoryPage from './pages/MealHistory.jsx';
 import MealReviewsPage from './pages/MealReviews.jsx';
@@ -34,13 +35,15 @@ import StaffViewPage from './pages/StaffView.jsx';
 const VendorMealCheckinPage = lazy(() => import('./features/mealCheckin/VendorMealCheckinPage.jsx'));
 
 function Protected({ children, allow, allowAal1Roles = [] }) {
-  const { session, profile, profileLoading, loading, aal } = useAuth();
+  const { session, profile, profileLoading, loading, aal, isImpersonating } = useAuth();
   if (loading) return <div className="p-8 text-slate-500">Loading...</div>;
   if (!session) return <Navigate to="/login" replace />;
   if (profileLoading) return <div className="p-8 text-slate-500">Loading...</div>;
   // Require MFA (AAL2) — if only AAL1, send back to login for TOTP step
   // Leadership can also authenticate through the server-side admin password.
+  // Impersonation sessions are AAL1 magic-link tokens; skip target MFA re-check.
   if (
+    !isImpersonating &&
     aal !== 'aal2' &&
     profile?.role !== 'leadership' &&
     !allowAal1Roles.includes(profile?.role)
@@ -90,12 +93,12 @@ function RoleHome() {
  * If not, shows the onboarding flow before rendering children.
  */
 function OnboardingGate({ children }) {
-  const { session, profile, loading: authLoading } = useAuth();
+  const { session, profile, loading: authLoading, isImpersonating } = useAuth();
   const [checking, setChecking] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
-    if (authLoading || !session || profile?.role === 'vendor') {
+    if (authLoading || !session || profile?.role === 'vendor' || isImpersonating) {
       setChecking(false);
       setNeedsSetup(false);
       return;
@@ -120,7 +123,7 @@ function OnboardingGate({ children }) {
     }
 
     check();
-  }, [session, profile?.role, authLoading]);
+  }, [session, profile?.role, authLoading, isImpersonating]);
 
   if (authLoading || checking) {
     return (
@@ -152,6 +155,14 @@ export default function App() {
             <Suspense fallback={<div className="p-8 text-slate-500">Loading vendor check-in...</div>}>
               <VendorMealCheckinPage />
             </Suspense>
+          </Protected>
+        }
+      />
+      <Route
+        path="/meal-attendance-report"
+        element={
+          <Protected allow={['leadership']}>
+            <MealAttendanceReportPage />
           </Protected>
         }
       />

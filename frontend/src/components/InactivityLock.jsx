@@ -9,7 +9,7 @@ const INACTIVITY_TIMEOUT = 15 * 60 * 1000; // 15 minutes
 
 export default function InactivityLock({ children }) {
   // Pull name and profile directly — no prop threading needed
-  const { profile } = useAuth();
+  const { profile, isImpersonating } = useAuth();
   const userName = profile?.preferred_name || profile?.full_name;
 
   // 'idle' | 'locked' | 'verify'
@@ -22,16 +22,21 @@ export default function InactivityLock({ children }) {
   const timerRef = useRef(null);
   const inputRef = useRef(null);
 
-  const locked = step === 'locked' || step === 'verify';
+  const locked = !isImpersonating && (step === 'locked' || step === 'verify');
 
   // ── Inactivity timer ─────────────────────────────────────────────────────
   const resetTimer = useCallback(() => {
-    if (locked) return;
+    if (isImpersonating || locked) return;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setStep('locked'), INACTIVITY_TIMEOUT);
-  }, [locked]);
+  }, [isImpersonating, locked]);
 
   useEffect(() => {
+    if (isImpersonating) {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setStep('idle');
+      return undefined;
+    }
     const events = ['mousedown', 'mousemove', 'keydown', 'touchstart', 'scroll', 'click'];
     for (const e of events) window.addEventListener(e, resetTimer, { passive: true });
     resetTimer();
@@ -39,7 +44,7 @@ export default function InactivityLock({ children }) {
       for (const e of events) window.removeEventListener(e, resetTimer);
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [resetTimer]);
+  }, [isImpersonating, resetTimer]);
 
   // Focus the TOTP input the moment the verify step appears
   useEffect(() => {

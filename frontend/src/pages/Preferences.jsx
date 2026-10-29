@@ -16,7 +16,9 @@ import {
   Sun,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth.js';
+import { exitImpersonation, logoutWhileImpersonating } from '../lib/impersonation.js';
 import { getPushStatus, subscribeToPush, unsubscribeFromPush } from '../lib/push.js';
 import { supabase } from '../lib/supabase.js';
 import { api } from '../lib/api.js';
@@ -63,7 +65,8 @@ function getAssignedCabin(cabin, preferredLocation) {
 }
 
 export default function Preferences() {
-  const { profile, session } = useAuth();
+  const { profile, session, isImpersonating } = useAuth();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -256,9 +259,22 @@ export default function Preferences() {
           </div>
           <button
             className="ml-auto btn-secondary text-sm flex items-center gap-1 shrink-0"
-            onClick={() => supabase.auth.signOut()}
+            onClick={async () => {
+              if (isImpersonating) {
+                try {
+                  await exitImpersonation();
+                  navigate('/admin', { replace: true });
+                } catch {
+                  await logoutWhileImpersonating().catch(() => {});
+                  navigate('/login', { replace: true });
+                }
+                return;
+              }
+              await supabase.auth.signOut();
+              navigate('/login', { replace: true });
+            }}
           >
-            <LogOut size={14} /> Sign out
+            <LogOut size={14} /> {isImpersonating ? 'Exit user view' : 'Sign out'}
           </button>
         </div>
 

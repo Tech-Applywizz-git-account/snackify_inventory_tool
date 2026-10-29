@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { supabaseAdmin } from '../lib/supabase.js';
+import { supabaseAdmin, supabaseAnon } from '../lib/supabase.js';
 import { requireRole } from '../middleware/auth.js';
 import { lookupEmployeeIdByEmail } from '../lib/hrms.js';
 import { applyMealTokens } from '../lib/tokens.js';
@@ -10,6 +10,13 @@ import {
   getRequireReviewToBookMeals,
   setRequireReviewToBookMeals,
 } from '../lib/mealReviewBookingSetting.js';
+import {
+  addDaysIso,
+  buildMealAttendanceReports,
+  clampAttendanceFromDate,
+  MEAL_CHECKIN_DATA_START,
+} from '../lib/mealAttendanceReport.js';
+import { isMealDate, isMealServiceClosed } from '../features/mealCheckin/service.js';
 import { getCabinName } from './cron.js';
 import {
   DEFAULT_RECEIPT_DESIGN,
@@ -17,6 +24,9 @@ import {
   receiptDesignForStorage,
   validateReceiptDesign,
 } from '../../../office-print-gateway/receiptDesign.js';
+
+/** Roles that cannot be impersonated (admin → admin blocked). */
+const IMPERSONATION_BLOCKED_ROLES = new Set(['leadership', 'admin']);
 
 const roleEnum = z.enum(['facility_manager', 'finance', 'leadership', 'staff', 'office_boy', 'vendor']);
 const lateMealChoices = z.enum(['veg', 'egg', 'non_veg']);
@@ -127,6 +137,7 @@ function escapeHtml(value) {
 export function createAdminRouter(overrides = {}) {
   const d = {
     supabaseAdmin,
+    supabaseAnon,
     sendVendorAccountEmail,
     ...overrides,
   };
@@ -153,6 +164,31 @@ export function createAdminRouter(overrides = {}) {
     return (data?.factors ?? []).find(
       (factor) => factor.factor_type === 'totp' && factor.status === 'verified'
     ) || null;
+  }
+
+  /** Mint a real Supabase session for the target without emailing or changing credentials. */
+  async function mintUserSession(email) {
+    const { data: linkData, error: linkErr } = await d.supabaseAdmin.auth.admin.generateLink({
+      type: 'magiclink',
+      email,
+    });
+    if (linkErr) throw linkErr;
+
+    const emailOtp = linkData?.properties?.email_otp;
+    if (!emailOtp) throw new Error('generateLink did not return email_otp');
+
+    const { data: sessionData, error: sessionErr } = await d.supabaseAnon.auth.verifyOtp({
+      email,
+      token: emailOtp,
+      type: 'magiclink',
+    });
+    if (sessionErr) throw sessionErr;
+
+    const session = sessionData?.session;
+    if (!session?.access_token || !session?.refresh_token) {
+      throw new Error('Failed to establish impersonation session');
+    }
+    return session;
   }
 
   async function createVendorInvitation(email, full_name, password = VENDOR_INITIAL_PASSWORD) {
@@ -686,6 +722,140 @@ export function createAdminRouter(overrides = {}) {
     }
   });
 
+  // GET /api/admin/meal-attendance-report — day + night payloads for PDF export
+  // Accepts from+to (preferred) or meal_date (single day).
+  router.get('/meal-attendance-report', async (req, res, next) => {
+    try {
+      const dateSchema = z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .refine((value) => isMealDate(value), 'Invalid date');
+      const querySchema = z
+        .object({
+          from: dateSchema.optional(),
+          to: dateSchema.optional(),
+          meal_date: dateSchema.optional(),
+          lookback_days: z.coerce.number().int().min(7).max(90).default(14),
+        })
+        .superRefine((value, ctx) => {
+          if (!value.meal_date && !(value.from && value.to)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'Provide from and to, or meal_date.',
+            });
+          }
+          if (value.from && value.to && value.from > value.to) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'from must be on or before to.',
+            });
+          }
+        });
+      const parsed = querySchema.parse(req.query);
+      const rawFromDate = parsed.from || parsed.meal_date;
+      const toDate = parsed.to || parsed.meal_date;
+      const lookbackDays = parsed.lookback_days;
+
+      if (toDate < MEAL_CHECKIN_DATA_START) {
+        return res.status(400).json({
+          error: `Attendance data starts on ${MEAL_CHECKIN_DATA_START} (vendor QR check-in go-live). Pick a To date on or after that.`,
+          checkin_data_start: MEAL_CHECKIN_DATA_START,
+        });
+      }
+
+      const fromDate = clampAttendanceFromDate(rawFromDate, toDate);
+      if (!fromDate) {
+        return res.status(400).json({
+          error: `Attendance data starts on ${MEAL_CHECKIN_DATA_START}.`,
+          checkin_data_start: MEAL_CHECKIN_DATA_START,
+        });
+      }
+
+      // Cap range length to keep PDF/query size reasonable.
+      let cursor = fromDate;
+      let calendarDays = 0;
+      while (cursor <= toDate) {
+        calendarDays += 1;
+        cursor = addDaysIso(cursor, 1);
+        if (calendarDays > 90) {
+          return res.status(400).json({ error: 'Date range cannot exceed 90 days.' });
+        }
+      }
+
+      const [{ data: profiles, error: profilesErr }, { data: preferences, error: preferencesErr }] =
+        await Promise.all([
+          d.supabaseAdmin
+            .from('profiles')
+            .select('id, full_name, preferred_name, email, employee_code, role, active')
+            .eq('active', true),
+          d.supabaseAdmin.from('employee_cafeteria_preferences').select('user_id, shift'),
+        ]);
+      if (profilesErr) throw profilesErr;
+      if (preferencesErr) throw preferencesErr;
+
+      const rangeBookings = [];
+      const rangeCheckins = [];
+      const pageSize = 1000;
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await d.supabaseAdmin
+          .from('meal_bookings')
+          .select('id, user_id, choice, meal_date')
+          .gte('meal_date', fromDate)
+          .lte('meal_date', toDate)
+          .order('meal_date', { ascending: true })
+          .range(offset, offset + pageSize - 1);
+        if (error) throw error;
+        rangeBookings.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await d.supabaseAdmin
+          .from('meal_checkins')
+          .select('meal_booking_id, meal_date, meal_choice, checked_in_at')
+          .gte('meal_date', fromDate)
+          .lte('meal_date', toDate)
+          .order('meal_date', { ascending: true })
+          .range(offset, offset + pageSize - 1);
+        if (error) throw error;
+        rangeCheckins.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+
+      const dayServiceClosed = isMealServiceClosed(
+        toDate,
+        new Date(),
+        process.env.MEAL_CHECKIN_SERVICE_CLOSE_IST || '14:00'
+      );
+      const nightServiceClosed = isMealServiceClosed(toDate, new Date(), '24:00');
+
+      const reports = buildMealAttendanceReports({
+        fromDate,
+        toDate,
+        lookbackDays,
+        profiles: profiles || [],
+        preferences: preferences || [],
+        rangeBookings,
+        rangeCheckins,
+        historyBookings: rangeBookings,
+        dayServiceClosed,
+        nightServiceClosed,
+      });
+      res.json({
+        ...reports,
+        checkin_data_start: MEAL_CHECKIN_DATA_START,
+        from_clamped: rawFromDate !== fromDate,
+        requested_from: rawFromDate,
+      });
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({
+          error: e.errors?.[0]?.message || e.issues?.[0]?.message || 'Invalid query.',
+        });
+      }
+      next(e);
+    }
+  });
+
   // GET /api/admin/unbooked-users - active users without today's meal booking
   router.get('/unbooked-users', async (req, res, next) => {
     try {
@@ -1169,6 +1339,130 @@ export function createAdminRouter(overrides = {}) {
 
       res.status(201).json({ ok: true, user_id: userId, email, role });
     } catch (e) {
+      next(e);
+    }
+  });
+
+  // POST /api/admin/users/:userId/impersonate — mint a real session for the target user
+  router.post('/users/:userId/impersonate', async (req, res, next) => {
+    try {
+      const targetUserId = req.params.userId;
+
+      if (targetUserId === req.user.id) {
+        return res.status(400).json({ error: 'You cannot view the app as yourself.' });
+      }
+
+      const { data: profile, error: profileErr } = await d.supabaseAdmin
+        .from('profiles')
+        .select('id, full_name, preferred_name, role, email, active')
+        .eq('id', targetUserId)
+        .maybeSingle();
+      if (profileErr) throw profileErr;
+      if (!profile) {
+        return res.status(404).json({ error: 'User not found.' });
+      }
+
+      if (IMPERSONATION_BLOCKED_ROLES.has(profile.role)) {
+        return res.status(403).json({ error: 'You cannot view the app as another admin.' });
+      }
+
+      if (!profile.active) {
+        return res.status(403).json({ error: 'That account is deactivated.' });
+      }
+
+      const authUser = await findUserById(targetUserId);
+      if (!authUser?.email) {
+        return res.status(404).json({ error: 'User auth account not found.' });
+      }
+
+      if (profile.role === 'vendor') {
+        if (!authUser.email_confirmed_at || authUser.app_metadata?.vendor_invitation_pending) {
+          return res.status(409).json({
+            error: 'That vendor has not finished account confirmation yet.',
+          });
+        }
+      } else {
+        const factor = await findVerifiedTotpFactor(targetUserId);
+        if (!factor) {
+          return res.status(409).json({
+            error: 'That user has not finished login setup (authenticator not enrolled).',
+          });
+        }
+      }
+
+      const session = await mintUserSession(authUser.email);
+
+      const { error: auditErr } = await d.supabaseAdmin.from('audit_logs').insert({
+        user_id: req.user.id,
+        action: 'IMPERSONATION_START',
+        entity_type: 'profile',
+        entity_id: targetUserId,
+        old_value: {
+          admin_id: req.user.id,
+          admin_email: req.user.email || null,
+          admin_role: req.user.role,
+        },
+        new_value: {
+          target_id: targetUserId,
+          target_email: authUser.email || profile.email || null,
+          target_role: profile.role,
+          target_name: profile.preferred_name || profile.full_name || null,
+        },
+      });
+      if (auditErr) throw auditErr;
+
+      res.json({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+        user: {
+          id: profile.id,
+          email: authUser.email || profile.email || null,
+          full_name: profile.full_name,
+          preferred_name: profile.preferred_name,
+          role: profile.role,
+          active: profile.active,
+        },
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // POST /api/admin/impersonation/end — audit exit after admin session is restored
+  router.post('/impersonation/end', async (req, res, next) => {
+    try {
+      const schema = z.object({
+        target_user_id: z.string().uuid(),
+        target_email: z.string().email().optional().nullable(),
+        target_role: z.string().optional().nullable(),
+        target_name: z.string().optional().nullable(),
+      });
+      const body = schema.parse(req.body);
+
+      const { error: auditErr } = await d.supabaseAdmin.from('audit_logs').insert({
+        user_id: req.user.id,
+        action: 'IMPERSONATION_END',
+        entity_type: 'profile',
+        entity_id: body.target_user_id,
+        old_value: {
+          target_id: body.target_user_id,
+          target_email: body.target_email || null,
+          target_role: body.target_role || null,
+          target_name: body.target_name || null,
+        },
+        new_value: {
+          admin_id: req.user.id,
+          admin_email: req.user.email || null,
+          restored: true,
+        },
+      });
+      if (auditErr) throw auditErr;
+
+      res.json({ ok: true });
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Invalid impersonation end payload.' });
+      }
       next(e);
     }
   });

@@ -1,4 +1,5 @@
 import { createContext, createElement, useContext, useEffect, useRef, useState } from 'react';
+import { reconcileImpersonationTicket } from '../lib/impersonation.js';
 import { isPushSupported, subscribeToPush } from '../lib/push.js';
 import { supabase } from '../lib/supabase.js';
 
@@ -34,7 +35,15 @@ function useAuthValue() {
   const [profileLoading, setProfileLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [aal, setAal] = useState('aal1');
+  const [isImpersonating, setIsImpersonating] = useState(false);
+  const [impersonationAdmin, setImpersonationAdmin] = useState(null);
   const bootstrapped = useRef(false);
+
+  function syncImpersonation(sess) {
+    const state = reconcileImpersonationTicket(sess?.user?.id || null);
+    setIsImpersonating(state.isImpersonating);
+    setImpersonationAdmin(state.isImpersonating ? state.admin : null);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +71,7 @@ function useAuthValue() {
 
         const sess = data?.session || null;
         setSession(sess);
+        syncImpersonation(sess);
 
         if (sess) {
           console.log('[useAuth] session exists, checking AAL + profile');
@@ -105,6 +115,7 @@ function useAuthValue() {
         const jwtAal = readAalFromSession(newSession) || 'aal1';
         setAal(jwtAal);
         setSession(newSession);
+        syncImpersonation(newSession);
         setProfileLoading(true);
         loadProfile(newSession.user.id).finally(() => setProfileLoading(false));
         if (jwtAal === 'aal2') tryAutoSubscribePush(newSession);
@@ -113,6 +124,7 @@ function useAuthValue() {
         setProfile(null);
         setProfileLoading(false);
         setAal('aal1');
+        syncImpersonation(null);
       }
     });
 
@@ -123,7 +135,15 @@ function useAuthValue() {
     };
   }, []);
 
-  return { session, profile, profileLoading, loading, aal };
+  return {
+    session,
+    profile,
+    profileLoading,
+    loading,
+    aal,
+    isImpersonating,
+    impersonationAdmin,
+  };
 }
 
 export function AuthProvider({ children }) {

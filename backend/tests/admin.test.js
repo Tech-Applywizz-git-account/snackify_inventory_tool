@@ -576,6 +576,228 @@ describe('getInviteRedirectUrl() — APP_PUBLIC_URL env var', () => {
   });
 });
 
+describe('POST /api/admin/users/:userId/impersonate', () => {
+  const leadershipUser = {
+    id: 'leader-1',
+    email: 'leader@applywizz.ai',
+    role: 'leadership',
+  };
+  const targetId = '11111111-1111-1111-1111-111111111111';
+
+  function makeImpersonateMocks({
+    profile,
+    authUser,
+    factors = [{ id: 'factor-1', factor_type: 'totp', status: 'verified' }],
+    session = { access_token: 'target-access', refresh_token: 'target-refresh' },
+  }) {
+    const auditLogRows = [];
+    const supabaseAdmin = {
+      auth: {
+        admin: {
+          getUserById: async () => ({ data: { user: authUser }, error: null }),
+          listUsers: async () => ({ data: { users: authUser ? [authUser] : [] }, error: null }),
+          generateLink: async () => ({
+            data: { properties: { email_otp: '123456' } },
+            error: null,
+          }),
+          mfa: {
+            listFactors: async () => ({ data: { factors }, error: null }),
+          },
+        },
+      },
+      from: (table) => {
+        if (table === 'profiles') {
+          return {
+            select: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({ data: profile, error: null }),
+              }),
+            }),
+          };
+        }
+        if (table === 'audit_logs') {
+          return {
+            insert: (payload) => {
+              auditLogRows.push(payload);
+              return makeChain({});
+            },
+          };
+        }
+        return makeChain();
+      },
+      getAuditLogRows: () => auditLogRows,
+    };
+    const supabaseAnon = {
+      auth: {
+        verifyOtp: async () => ({ data: { session }, error: null }),
+      },
+    };
+    return { supabaseAdmin, supabaseAnon };
+  }
+
+  it('mints a target session and writes IMPERSONATION_START audit', async () => {
+    const { supabaseAdmin, supabaseAnon } = makeImpersonateMocks({
+      profile: {
+        id: targetId,
+        full_name: 'Staff User',
+        preferred_name: 'Staff',
+        role: 'staff',
+        email: 'staff@applywizz.ai',
+        active: true,
+      },
+      authUser: { id: targetId, email: 'staff@applywizz.ai', email_confirmed_at: '2026-01-01' },
+    });
+    const app = buildApp({ user: leadershipUser, supabaseAdmin, supabaseAnon });
+
+    const response = await request(app, 'POST', `/api/admin/users/${targetId}/impersonate`);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.access_token, 'target-access');
+    assert.equal(response.body.refresh_token, 'target-refresh');
+    assert.equal(response.body.user.id, targetId);
+    assert.equal(response.body.user.role, 'staff');
+    assert.equal(supabaseAdmin.getAuditLogRows().length, 1);
+    assert.equal(supabaseAdmin.getAuditLogRows()[0].action, 'IMPERSONATION_START');
+    assert.equal(supabaseAdmin.getAuditLogRows()[0].user_id, leadershipUser.id);
+    assert.equal(supabaseAdmin.getAuditLogRows()[0].entity_id, targetId);
+  });
+
+  it('blocks self impersonation', async () => {
+    const { supabaseAdmin, supabaseAnon } = makeImpersonateMocks({
+      profile: null,
+      authUser: null,
+    });
+    const app = buildApp({ user: leadershipUser, supabaseAdmin, supabaseAnon });
+
+    const response = await request(app, 'POST', `/api/admin/users/${leadershipUser.id}/impersonate`);
+
+    assert.equal(response.status, 400);
+    assert.match(response.body?.error || '', /yourself/i);
+    assert.equal(supabaseAdmin.getAuditLogRows().length, 0);
+  });
+
+  it('blocks admin → admin', async () => {
+    const otherAdminId = '22222222-2222-2222-2222-222222222222';
+    const { supabaseAdmin, supabaseAnon } = makeImpersonateMocks({
+      profile: {
+        id: otherAdminId,
+        full_name: 'Other Admin',
+        preferred_name: null,
+        role: 'leadership',
+        email: 'other@applywizz.ai',
+        active: true,
+      },
+      authUser: { id: otherAdminId, email: 'other@applywizz.ai' },
+    });
+    const app = buildApp({ user: leadershipUser, supabaseAdmin, supabaseAnon });
+
+    const response = await request(app, 'POST', `/api/admin/users/${otherAdminId}/impersonate`);
+
+    assert.equal(response.status, 403);
+    assert.match(response.body?.error || '', /another admin/i);
+    assert.equal(supabaseAdmin.getAuditLogRows().length, 0);
+  });
+
+  it('blocks inactive targets', async () => {
+    const { supabaseAdmin, supabaseAnon } = makeImpersonateMocks({
+      profile: {
+        id: targetId,
+        full_name: 'Staff User',
+        preferred_name: 'Staff',
+        role: 'staff',
+        email: 'staff@applywizz.ai',
+        active: false,
+      },
+      authUser: { id: targetId, email: 'staff@applywizz.ai' },
+    });
+    const app = buildApp({ user: leadershipUser, supabaseAdmin, supabaseAnon });
+
+    const response = await request(app, 'POST', `/api/admin/users/${targetId}/impersonate`);
+
+    assert.equal(response.status, 403);
+    assert.match(response.body?.error || '', /deactivated/i);
+  });
+
+  it('blocks users who never finished authenticator setup', async () => {
+    const { supabaseAdmin, supabaseAnon } = makeImpersonateMocks({
+      profile: {
+        id: targetId,
+        full_name: 'Staff User',
+        preferred_name: 'Staff',
+        role: 'staff',
+        email: 'staff@applywizz.ai',
+        active: true,
+      },
+      authUser: { id: targetId, email: 'staff@applywizz.ai', email_confirmed_at: '2026-01-01' },
+      factors: [],
+    });
+    const app = buildApp({ user: leadershipUser, supabaseAdmin, supabaseAnon });
+
+    const response = await request(app, 'POST', `/api/admin/users/${targetId}/impersonate`);
+
+    assert.equal(response.status, 409);
+    assert.match(response.body?.error || '', /login setup/i);
+  });
+
+  it('returns 403 for non-leadership callers', async () => {
+    const { supabaseAdmin, supabaseAnon } = makeImpersonateMocks({
+      profile: {
+        id: targetId,
+        full_name: 'Staff User',
+        role: 'staff',
+        email: 'staff@applywizz.ai',
+        active: true,
+      },
+      authUser: { id: targetId, email: 'staff@applywizz.ai' },
+    });
+    const app = buildApp({
+      user: { id: 'staff-1', email: 'staff@applywizz.ai', role: 'staff' },
+      supabaseAdmin,
+      supabaseAnon,
+    });
+
+    const response = await request(app, 'POST', `/api/admin/users/${targetId}/impersonate`);
+
+    assert.equal(response.status, 403);
+  });
+});
+
+describe('POST /api/admin/impersonation/end', () => {
+  it('writes IMPERSONATION_END audit for leadership', async () => {
+    const auditLogRows = [];
+    const supabaseAdmin = {
+      from: (table) => {
+        if (table === 'audit_logs') {
+          return {
+            insert: (payload) => {
+              auditLogRows.push(payload);
+              return makeChain({});
+            },
+          };
+        }
+        return makeChain();
+      },
+    };
+    const app = buildApp({
+      user: { id: 'leader-1', email: 'leader@applywizz.ai', role: 'leadership' },
+      supabaseAdmin,
+    });
+
+    const response = await request(app, 'POST', '/api/admin/impersonation/end', {
+      target_user_id: '11111111-1111-1111-1111-111111111111',
+      target_email: 'staff@applywizz.ai',
+      target_role: 'staff',
+      target_name: 'Staff',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(auditLogRows.length, 1);
+    assert.equal(auditLogRows[0].action, 'IMPERSONATION_END');
+    assert.equal(auditLogRows[0].user_id, 'leader-1');
+  });
+});
+
 describe('POST /api/admin/users/:userId/reset-authenticator', () => {
   const leadershipUser = {
     id: 'leader-1',

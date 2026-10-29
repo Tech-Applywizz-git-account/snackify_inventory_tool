@@ -1,6 +1,34 @@
 import { supabase } from './supabase.js';
 
 const BASE = import.meta.env.VITE_API_BASE_URL || '';
+// Keep in sync with frontend/src/lib/impersonation.js (avoid circular import).
+const IMPERSONATION_STORAGE_KEY = 'snackify-impersonation-return';
+
+function signOutLocallyOnAuthFailure() {
+  // While impersonating, restore the stashed admin session instead of globally
+  // revoking (which would kick the real user off their own devices).
+  const raw = sessionStorage.getItem(IMPERSONATION_STORAGE_KEY);
+  if (raw) {
+    sessionStorage.removeItem(IMPERSONATION_STORAGE_KEY);
+    try {
+      const ticket = JSON.parse(raw);
+      if (ticket?.access_token && ticket?.refresh_token) {
+        supabase.auth
+          .setSession({
+            access_token: ticket.access_token,
+            refresh_token: ticket.refresh_token,
+          })
+          .catch(() => supabase.auth.signOut({ scope: 'local' }));
+        return;
+      }
+    } catch {
+      // fall through to local sign-out
+    }
+    supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+    return;
+  }
+  supabase.auth.signOut().catch(() => {});
+}
 
 async function authHeader() {
   const { data } = await supabase.auth.getSession();
@@ -39,7 +67,7 @@ async function request(path, opts = {}) {
       }
     } catch {}
     if (res.status === 401 && (msg.toLowerCase().includes('token') || msg.toLowerCase().includes('jwt') || msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('session'))) {
-      supabase.auth.signOut().catch(() => {});
+      signOutLocallyOnAuthFailure();
     }
     const error = new Error(msg);
     error.status = res.status;
@@ -128,6 +156,20 @@ export const api = {
     request('/api/admin/receipt-design', { method: 'PATCH', body: JSON.stringify(config) }),
   resetReceiptDesign: () => request('/api/admin/receipt-design/reset', { method: 'POST' }),
   mealOverview: () => request('/api/admin/meal-overview'),
+  mealAttendanceReport: (mealDate, lookbackDays = 14) => {
+    const query = new URLSearchParams({
+      meal_date: mealDate,
+      lookback_days: String(lookbackDays),
+    }).toString();
+    return request(`/api/admin/meal-attendance-report?${query}`);
+  },
+  mealAttendanceReportRange: (fromDate, toDate) => {
+    const query = new URLSearchParams({
+      from: fromDate,
+      to: toDate,
+    }).toString();
+    return request(`/api/admin/meal-attendance-report?${query}`);
+  },
   mealBookingAnalytics: (params) => {
     const query = new URLSearchParams(params).toString();
     return request(`/api/admin/meal-booking-analytics?${query}`);
@@ -158,6 +200,10 @@ export const api = {
     request('/api/support/ticket', { method: 'POST', body: JSON.stringify(body) }),
   resetAuthenticator: (userId) =>
     request(`/api/admin/users/${userId}/reset-authenticator`, { method: 'POST' }),
+  impersonateUser: (userId) =>
+    request(`/api/admin/users/${userId}/impersonate`, { method: 'POST' }),
+  endImpersonation: (body) =>
+    request('/api/admin/impersonation/end', { method: 'POST', body: JSON.stringify(body) }),
   createUser: (body) =>
     request('/api/admin/users/create', { method: 'POST', body: JSON.stringify(body) }),
   createVendor: (body) =>

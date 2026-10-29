@@ -1,8 +1,11 @@
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { Camera, CameraOff, MessageSquareText, RefreshCw, ScanLine, Users } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import ImpersonationBanner from '../../components/ImpersonationBanner.jsx';
 import { useAuth } from '../../hooks/useAuth.js';
 import { api } from '../../lib/api.js';
+import { exitImpersonation, logoutWhileImpersonating } from '../../lib/impersonation.js';
 import { supabase } from '../../lib/supabase.js';
 import VendorMealReport from './VendorMealReport.jsx';
 import VendorReviewInbox from './VendorReviewInbox.jsx';
@@ -20,7 +23,8 @@ function stopMediaStream(stream) {
 }
 
 export default function VendorMealCheckinPage() {
-  const { profile } = useAuth();
+  const { profile, isImpersonating } = useAuth();
+  const navigate = useNavigate();
   const canViewReviews = ['leadership', 'finance', 'office_boy'].includes(profile?.role);
   const today = getISTDate();
   const [mealDate, setMealDate] = useState(getISTDate);
@@ -221,8 +225,24 @@ export default function VendorMealCheckinPage() {
     document.getElementById(`vendor-${nextView}-tab`)?.focus();
   }
 
+  async function handleVendorSignOut() {
+    if (isImpersonating) {
+      try {
+        await exitImpersonation();
+        navigate('/admin', { replace: true });
+      } catch {
+        await logoutWhileImpersonating().catch(() => {});
+        navigate('/login', { replace: true });
+      }
+      return;
+    }
+    await supabase.auth.signOut();
+    navigate('/login', { replace: true });
+  }
+
   return (
     <div className="min-h-screen bg-[#f3f6f5] text-slate-900">
+      <ImpersonationBanner />
       <header className="border-b border-emerald-950 bg-[#102f2d] text-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-3 py-3.5 sm:px-6 lg:px-8">
           <div className="flex min-w-0 items-center gap-3">
@@ -238,10 +258,10 @@ export default function VendorMealCheckinPage() {
           </div>
           <button
             type="button"
-            onClick={() => supabase.auth.signOut()}
+            onClick={handleVendorSignOut}
             className="min-h-11 shrink-0 rounded-md border border-white/20 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/10"
           >
-            Sign out
+            {isImpersonating ? 'Exit user view' : 'Sign out'}
           </button>
         </div>
       </header>

@@ -1,8 +1,10 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
+import { exitImpersonation, logoutWhileImpersonating } from '../lib/impersonation.js';
 import { supabase } from '../lib/supabase.js';
 import { api } from '../lib/api.js';
+import ImpersonationBanner from './ImpersonationBanner.jsx';
 import SnackCoin from './SnackCoin.jsx';
 import SupportTicketModal from './SupportTicketModal.jsx';
 
@@ -45,6 +47,7 @@ const navByRole = {
     '/meal-reviews',
     '/meal-token-dashboard',
     '/vendor/meal-check-in',
+    '/meal-attendance-report',
     '/orders',
     '/queue',
     '/available',
@@ -87,6 +90,7 @@ const labels = {
   '/meal-reviews': 'Meal Reviews',
   '/meal-token-dashboard': 'Meal Tokens',
   '/vendor/meal-check-in': 'Vendor Check-in',
+  '/meal-attendance-report': 'Attendance PDFs',
   '/orders': 'Orders',
   '/queue': 'Queue',
   '/bills': 'Bills',
@@ -109,15 +113,46 @@ const roleDisplay = {
 };
 
 export default function Layout() {
-  const { profile } = useAuth();
+  const { profile, isImpersonating } = useAuth();
+  const navigate = useNavigate();
   const links = profile ? navByRole[profile.role] || ['/request'] : [];
   const [wallet, setWallet] = useState(null);
   const [card, setCard] = useState(null);
   const [ticketOpen, setTicketOpen] = useState(false);
+  const [exitBusy, setExitBusy] = useState(false);
   const hasCard = Boolean(card?.cafeteria_card_number || (card?.card_masked && !String(card.card_masked).includes('----')));
-
   function openMealReview() {
     window.dispatchEvent(new Event('open-meal-review'));
+  }
+
+  async function handleExitUserView() {
+    if (exitBusy) return;
+    setExitBusy(true);
+    try {
+      await exitImpersonation();
+      navigate('/admin', { replace: true });
+    } catch {
+      navigate('/login', { replace: true });
+    } finally {
+      setExitBusy(false);
+    }
+  }
+
+  async function handleHeaderSignOut() {
+    if (exitBusy) return;
+    setExitBusy(true);
+    try {
+      if (isImpersonating) {
+        await logoutWhileImpersonating();
+      } else {
+        await supabase.auth.signOut();
+      }
+      navigate('/login', { replace: true });
+    } catch {
+      navigate('/login', { replace: true });
+    } finally {
+      setExitBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -130,6 +165,7 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen flex flex-col">
+      <ImpersonationBanner />
       <header className="bg-white border-b border-slate-200">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -200,9 +236,13 @@ export default function Layout() {
             </div>
             <button
               className="btn-secondary text-xs px-3 py-1.5"
-              onClick={() => supabase.auth.signOut()}
+              disabled={exitBusy}
+              onClick={() => {
+                if (isImpersonating) handleExitUserView();
+                else handleHeaderSignOut();
+              }}
             >
-              Sign out
+              {isImpersonating ? 'Exit user view' : 'Sign out'}
             </button>
           </div>
         </div>

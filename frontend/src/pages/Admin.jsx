@@ -1,8 +1,11 @@
 import { X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../lib/api.js';
+import { canViewAsUser, startImpersonation } from '../lib/impersonation.js';
+import { supabase } from '../lib/supabase.js';
 
 // DB value : display label
 const ROLE_OPTIONS = [
@@ -666,12 +669,14 @@ function MealBookingAnalytics() {
 }
 
 export default function Admin() {
-  const { profile } = useAuth();
+  const { profile, session, isImpersonating } = useAuth();
+  const navigate = useNavigate();
   const [users, setUsers] = useState(null);
   const [err, setErr] = useState('');
   const [okMsg, setOkMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [resetTarget, setResetTarget] = useState(null);
+  const [viewAsTarget, setViewAsTarget] = useState(null);
   const [vendorPasswordTarget, setVendorPasswordTarget] = useState(null);
   const [vendorPassword, setVendorPassword] = useState('');
 
@@ -847,6 +852,34 @@ export default function Admin() {
     } catch (e) {
       setErr(e.message);
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onConfirmViewAs() {
+    if (!viewAsTarget) return;
+    const gate = canViewAsUser(profile, viewAsTarget, { alreadyImpersonating: isImpersonating });
+    if (!gate.ok) {
+      setErr(gate.reason);
+      setViewAsTarget(null);
+      return;
+    }
+
+    setBusy(true);
+    setErr('');
+    setOkMsg('');
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const liveSession = sessionData?.session || session;
+      await startImpersonation({
+        adminSession: liveSession,
+        adminProfile: profile,
+        targetUserId: viewAsTarget.id,
+      });
+      setViewAsTarget(null);
+      navigate('/', { replace: true });
+    } catch (e) {
+      setErr(e.message || 'Could not start user view.');
       setBusy(false);
     }
   }
@@ -1253,7 +1286,7 @@ export default function Admin() {
             </div>
           </div>
           <p className="text-xs text-slate-500 mb-4">
-            Day-shift users only. Admin booking is available for the selected date until 11:00 AM IST on that date. Printing remains separate from booking.
+            Day-shift users only. Admin booking is available for the selected date until 11:00 AM IST on that date. Printing remains separate from booking. Attendance PDFs live on the Attendance PDFs dashboard.
           </p>
           {mealOverview && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
@@ -1480,6 +1513,26 @@ export default function Admin() {
                     </td>
                     <td className="py-2 pr-3">
                       <div className="flex flex-col gap-1.5">
+                        {(() => {
+                          const viewAsGate = canViewAsUser(profile, u, {
+                            alreadyImpersonating: isImpersonating,
+                          });
+                          return (
+                            <button
+                              type="button"
+                              className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
+                              disabled={busy || !viewAsGate.ok}
+                              title={viewAsGate.ok ? 'Open the real app as this user' : viewAsGate.reason}
+                              onClick={() => {
+                                setErr('');
+                                setOkMsg('');
+                                setViewAsTarget(u);
+                              }}
+                            >
+                              View as user
+                            </button>
+                          );
+                        })()}
                         <button
                           type="button"
                           className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-50"
@@ -1536,6 +1589,54 @@ export default function Admin() {
           </table>
         </div>
       </div>
+
+      {viewAsTarget && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => !busy && setViewAsTarget(null)}
+        >
+          <div
+            className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-slate-900">View as this user?</h3>
+              <p className="text-sm text-slate-600">
+                You will see the real dashboard with{' '}
+                <strong>
+                  {viewAsTarget.preferred_name || viewAsTarget.full_name || viewAsTarget.email}
+                </strong>
+                &apos;s roles and data. An amber bar lets you exit anytime.
+              </p>
+              <p className="text-sm text-slate-500">
+                Their password, authenticator, and other devices stay untouched — only this
+                browser switches sessions.
+              </p>
+              <p className="text-xs text-slate-400">
+                Target: {viewAsTarget.email || 'Unknown email'}
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="btn-secondary flex-1"
+                disabled={busy}
+                onClick={() => setViewAsTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary flex-1"
+                disabled={busy}
+                onClick={onConfirmViewAs}
+              >
+                {busy ? 'Switching…' : 'View as user'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {resetTarget && (
         <div
