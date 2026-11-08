@@ -285,7 +285,7 @@ export default function MyMealBox() {
                 {isToday ? 'No meal booked for today' : 'No meal booked for this date'}
               </p>
               <p style={{ color: '#94A3B8', fontSize: 13, marginBottom: 24 }}>
-                Book your meal for tomorrow before 6 PM
+                Book your meal for tomorrow before 8 PM
               </p>
               <button
                 onClick={() => navigate('/meals')}

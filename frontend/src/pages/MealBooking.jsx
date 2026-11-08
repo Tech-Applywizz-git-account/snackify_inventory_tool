@@ -181,7 +181,6 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
       }
       if (todayDay === 0) {
         if (currentHour >= 20) return { canBook: false, canSkip: false, reason: 'locked' };
-        if (currentHour >= 18) return { canBook: false, canSkip: true, reason: 'skip_only' };
       }
       return { canBook: true, canSkip: true, reason: 'open' };
     }
@@ -191,9 +190,6 @@ function getBookingStatus(dateStr, shift = 'morning', todayDateObj) {
     }
     if (currentHour >= 20) {
       return { canBook: false, canSkip: false, reason: 'locked' };
-    }
-    if (currentHour >= 18) {
-      return { canBook: false, canSkip: true, reason: 'skip_only' };
     }
     return { canBook: true, canSkip: true, reason: 'open' };
   } else {
@@ -277,10 +273,12 @@ function getMonthStr(year, month) {
   return `${year}-${String(month + 1).padStart(2, '0')}`;
 }
 function getDaysInMonth(year, month) {
-  return new Date(year, month + 1, 0).getDate();
+  // month is 0-indexed; new Date(year, month+1, 0) gives last day of month
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 }
 function getFirstDayOfWeek(year, month) {
-  return new Date(year, month, 1).getDay();
+  // Use UTC noon of the 1st to get IST-correct day of week (IST = UTC+5:30, no DST)
+  return new Date(Date.UTC(year, month, 1, 6, 30)).getUTCDay();
 }
 
 // ── Toast notification ────────────────────────────────────────────────────────
@@ -525,6 +523,7 @@ export default function MealBooking() {
 
   // Toast state
   const [toast, setToast] = useState(null); // { message, type }
+  const [reviewRequired, setReviewRequired] = useState(false); // show review gate banner
 
   const monthStr = getMonthStr(year, month);
 
@@ -643,6 +642,7 @@ export default function MealBooking() {
       setConfirmData(null);
       setChangingDate(null);
       setBookedMealDate(dateStr);
+      setReviewRequired(false);
       setPayPhase('paid');
       if (isManager && selectedDate === dateStr) {
         api
@@ -653,13 +653,13 @@ export default function MealBooking() {
     } catch (e) {
       setPayPhase('fail');
       setPayError(e.message || 'Something went wrong');
-      setToast({
-        message:
-          e.code === 'MEAL_REVIEW_REQUIRED'
-            ? 'Please complete your previous meal review before booking the next meal. Open Meal Reviews to continue.'
-            : e.message || 'Something went wrong',
-        type: 'error',
-      });
+      if (e.code === 'MEAL_REVIEW_REQUIRED') {
+        // Show the review-required banner instead of a generic toast
+        setReviewRequired(true);
+        setConfirmData(null);
+      } else {
+        setToast({ message: e.message || 'Something went wrong', type: 'error' });
+      }
     } finally {
       setBooking(false);
     }
@@ -688,6 +688,35 @@ export default function MealBooking() {
           <Toast message={toast.message} type={toast.type} onDismiss={() => setToast(null)} />
         )}
       </AnimatePresence>
+
+      {/* Meal Review Required Banner */}
+      {reviewRequired && (
+        <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+          <div className="text-2xl shrink-0">📝</div>
+          <div className="flex-1 min-w-0">
+            <div className="font-bold text-amber-900 text-sm">Review required before booking</div>
+            <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
+              Please complete your previous meal review before booking the next meal.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => navigate('/meal-reviews')}
+              className="px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 transition-all"
+            >
+              Open Meal Reviews
+            </button>
+            <button
+              type="button"
+              onClick={() => setReviewRequired(false)}
+              className="px-3 py-2 rounded-xl bg-amber-100 text-amber-700 text-xs font-bold hover:bg-amber-200 transition-all"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Confirmation Sheet */}
       <AnimatePresence>
@@ -808,14 +837,16 @@ export default function MealBooking() {
 
           {Array.from({ length: daysInMonth }).map((_, i) => {
             const day = i + 1;
-            const dateObj = new Date(year, month, day);
-            const dow = dateObj.getDay();
+            // Use UTC noon to get IST-accurate day-of-week (IST = UTC+5:30)
+            const dateObj = new Date(Date.UTC(year, month, day, 6, 30));
+            const dow = dateObj.getUTCDay();
             if (dow === 0 || dow === 6) return null;
 
             const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
             const b = getBookingForDate(dateStr);
-            const isPast = dateObj < today;
-            const isToday = dateObj.getTime() === today.getTime();
+            const dateMidnightIST = new Date(Date.UTC(year, month, day));
+            const isPast = dateMidnightIST < today;
+            const isToday = dateMidnightIST.getTime() === today.getTime();
             const isSelected = selectedDate === dateStr;
             const bStatus = userPrefsLoading
               ? { canBook: false, canSkip: false, reason: 'loading' }
@@ -892,7 +923,7 @@ export default function MealBooking() {
                 year: 'numeric',
                 timeZone: 'Asia/Kolkata',
               })}{' '}
-              between 6:00 PM and 12:00 AM, one day before.
+              between 6:00 PM and 12:00 AM (midnight), one day before.
             </div>
           )}
 
