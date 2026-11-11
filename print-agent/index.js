@@ -929,7 +929,13 @@ async function executePrintJob(job) {
             .filter((preference) => preference.shift === 'night')
             .map((preference) => preference.user_id)
         );
-        bookings = bookings.filter((booking) => !nightShiftUserIds.has(booking.user_id));
+        // Day cabin batches exclude night users; night_cabin_batch prints only night users.
+        const isNightBatch = job.print_type === 'night_cabin_batch';
+        bookings = bookings.filter((booking) =>
+          isNightBatch
+            ? nightShiftUserIds.has(booking.user_id)
+            : !nightShiftUserIds.has(booking.user_id)
+        );
       }
     }
 

@@ -15,17 +15,27 @@ function getISTHour() {
   return ist.getHours() + ist.getMinutes() / 60;
 }
 
-function getISTDateString() {
-  return getISTNow().toISOString().slice(0, 10);
+function getISTDateString(now = new Date()) {
+  // en-CA → YYYY-MM-DD in Asia/Kolkata (avoids UTC day flip from toISOString)
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
 }
 
-function getNextWorkingDay(nowDate = getISTNow()) {
-  const d = new Date(nowDate);
-  d.setDate(d.getDate() + 1); // start from tomorrow
-  while (d.getDay() === 0 || d.getDay() === 6) {
-    d.setDate(d.getDate() + 1);
+function getNextWorkingDay(fromDateStr = getISTDateString()) {
+  const [year, month, day] = fromDateStr.split('-').map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  while (next.getUTCDay() === 0 || next.getUTCDay() === 6) {
+    next.setUTCDate(next.getUTCDate() + 1);
   }
-  return d.toISOString().slice(0, 10);
+  return [
+    next.getUTCFullYear(),
+    String(next.getUTCMonth() + 1).padStart(2, '0'),
+    String(next.getUTCDate()).padStart(2, '0'),
+  ].join('-');
 }
 
 // ── Reprint time-window enforcement ──────────────────────────────────────────
@@ -69,10 +79,21 @@ router.get('/my-token', async (req, res, next) => {
   try {
     let date = req.query.date || getISTDateString();
     const today = getISTDateString();
-
     const hour = getISTHour();
-    // If the request targets today and it's after 2:00 PM (14:00), shift to the next working day
-    if (date === today && hour >= 14) {
+
+    const { data: preference, error: preferenceError } = await supabaseAdmin
+      .from('employee_cafeteria_preferences')
+      .select('shift, cabin, preferred_location')
+      .eq('user_id', req.user.id)
+      .maybeSingle();
+
+    if (preferenceError) throw preferenceError;
+
+    const isNightShift = preference?.shift === 'night';
+
+    // Day shift only: after 2:00 PM IST, roll the default token view to next working day.
+    // Night shift keeps today's meal token through 11:59 PM IST.
+    if (!req.query.date && date === today && hour >= 14 && !isNightShift) {
       date = getNextWorkingDay();
     }
 
@@ -83,14 +104,6 @@ router.get('/my-token', async (req, res, next) => {
     );
 
     if (booking) {
-      const { data: preference, error: preferenceError } = await supabaseAdmin
-        .from('employee_cafeteria_preferences')
-        .select('cabin, preferred_location')
-        .eq('user_id', req.user.id)
-        .maybeSingle();
-
-      if (preferenceError) throw preferenceError;
-
       booking.cabin_name = resolveBookingCabin(
         booking.cabin_name,
         preference ? getCabinName(preference.cabin, preference.preferred_location) : null
@@ -101,6 +114,8 @@ router.get('/my-token', async (req, res, next) => {
 
     res.json({
       booking: booking || null,
+      shift: isNightShift ? 'night' : 'morning',
+      resolved_date: date,
       canReprint,
       reprintWindowMessage: canReprint
         ? 'You can reprint your token until 1:30 PM'

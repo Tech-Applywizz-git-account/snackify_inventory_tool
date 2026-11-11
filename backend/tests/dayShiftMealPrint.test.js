@@ -29,6 +29,23 @@ test('11 AM meal printing excludes night-shift bookings', () => {
   );
 });
 
+test('10 PM night meal printing includes only night-shift bookings', () => {
+  const bookings = [
+    { id: 'day-booking', user_id: 'day-user' },
+    { id: 'night-booking', user_id: 'night-user' },
+    { id: 'default-day-booking', user_id: 'default-day-user' },
+  ];
+  const preferences = [
+    { user_id: 'day-user', shift: 'morning' },
+    { user_id: 'night-user', shift: 'night' },
+  ];
+
+  assert.deepEqual(
+    filterNightMealBookings(bookings, preferences).map((booking) => booking.id),
+    ['night-booking']
+  );
+});
+
 test('assigned cabin setting takes precedence over a stale booking cabin', () => {
   assert.equal(resolveBookingCabin('Pantry Counter', 'Anusha Cabin'), 'Anusha Cabin');
   assert.equal(resolveBookingCabin('Pantry Counter', null), 'Pantry Counter');

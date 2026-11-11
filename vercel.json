@@ -9,6 +9,10 @@
     "api/cron/meal-booking-night-shift-report.js": {
       "memory": 256,
       "maxDuration": 60
+    },
+    "api/cron/schedule-night-meal-print.js": {
+      "memory": 256,
+      "maxDuration": 60
     }
   },
   "rewrites": [
@@ -25,6 +29,10 @@
     {
       "path": "/api/cron/meal-booking-night-shift-report",
       "schedule": "45 18 * * *"
+    },
+    {
+      "path": "/api/cron/schedule-night-meal-print",
+      "schedule": "30 16 * * 1-5"
     }
   ]
 }

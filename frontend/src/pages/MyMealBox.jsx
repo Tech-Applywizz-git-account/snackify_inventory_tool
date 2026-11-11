@@ -11,13 +11,41 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
+import { useAuth } from '../hooks/useAuth.js';
+import { supabase } from '../lib/supabase.js';
 import MealQrPanel from '../features/mealCheckin/MealQrPanel.jsx';
 
 // ── IST date helper ───────────────────────────────────────────────────────────
-function getISTDate() {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
-    .toISOString()
-    .slice(0, 10);
+// Use en-CA (YYYY-MM-DD) in Asia/Kolkata — avoids toISOString() flipping the
+// calendar day when the local IST clock is near midnight.
+function getISTDate(now = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
+function getISTHour(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(now);
+  return Number(parts.find((part) => part.type === 'hour')?.value || 0);
+}
+
+function getNextWorkingDay(fromDateStr) {
+  const [year, month, day] = fromDateStr.split('-').map(Number);
+  const nextWD = new Date(Date.UTC(year, month - 1, day + 1));
+  while (nextWD.getUTCDay() === 0 || nextWD.getUTCDay() === 6) {
+    nextWD.setUTCDate(nextWD.getUTCDate() + 1);
+  }
+  const yyyy = nextWD.getUTCFullYear();
+  const mm = String(nextWD.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(nextWD.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 // ── Choice display config ─────────────────────────────────────────────────────
@@ -30,27 +58,21 @@ const CHOICE_CONFIG = {
 export default function MyMealBox() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const { session } = useAuth();
   const today = getISTDate();
   const dateParam = params.get('date');
+  const hasExplicitDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '');
 
-  // If the active date is today and it's after 2:00 PM IST, shift to the next working day
-  const getNextWorkingDay = () => {
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const nextWD = new Date(now);
-    nextWD.setDate(nextWD.getDate() + 1);
-    while (nextWD.getDay() === 0 || nextWD.getDay() === 6) {
-      nextWD.setDate(nextWD.getDate() + 1);
-    }
-    const yyyy = nextWD.getFullYear();
-    const mm = String(nextWD.getMonth() + 1).padStart(2, '0');
-    const dd = String(nextWD.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  };
+  const [userShift, setUserShift] = useState('morning'); // 'morning' | 'night'
+  const [shiftLoaded, setShiftLoaded] = useState(false);
 
-  const isAfter2PM = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours() >= 14;
-  let activeDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '') ? dateParam : today;
-  if (activeDate === today && isAfter2PM) {
-    activeDate = getNextWorkingDay();
+  // Day shift: after 2:00 PM IST, show next working day's token (unchanged).
+  // Night shift only: keep today's token through 11:59 PM IST.
+  const isNightShift = userShift === 'night';
+  const isAfter2PM = getISTHour() >= 14;
+  let activeDate = hasExplicitDate ? dateParam : today;
+  if (!hasExplicitDate && !isNightShift && activeDate === today && isAfter2PM) {
+    activeDate = getNextWorkingDay(today);
   }
 
   const [selectedDate, setSelectedDate] = useState(activeDate);
@@ -63,6 +85,35 @@ export default function MyMealBox() {
   const loadRequestId = useRef(0);
 
   useEffect(() => {
+    let cancelled = false;
+    async function loadShift() {
+      if (!session?.user?.id) {
+        if (!cancelled) {
+          setUserShift('morning');
+          setShiftLoaded(true);
+        }
+        return;
+      }
+      try {
+        const { data: prefs } = await supabase
+          .from('employee_cafeteria_preferences')
+          .select('shift')
+          .eq('user_id', session.user.id)
+          .maybeSingle();
+        if (!cancelled) setUserShift(prefs?.shift === 'night' ? 'night' : 'morning');
+      } catch {
+        if (!cancelled) setUserShift('morning');
+      } finally {
+        if (!cancelled) setShiftLoaded(true);
+      }
+    }
+    loadShift();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
+
+  useEffect(() => {
     setSelectedDate(activeDate);
   }, [activeDate]);
 
@@ -72,11 +123,11 @@ export default function MyMealBox() {
   }, []);
 
   const load = useCallback(async () => {
+    if (!shiftLoaded) return;
     const requestId = ++loadRequestId.current;
     setLoading(true);
     try {
       let lookupDate = activeDate;
-      const hasExplicitDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '');
 
       if (!hasExplicitDate) {
         const [year, month] = activeDate.split('-').map(Number);
@@ -86,28 +137,38 @@ export default function MyMealBox() {
             api.myMealBookings(monthKey)
           )
         );
-        const nextMeal = bookingsByMonth
+        const foodBookings = bookingsByMonth
           .flat()
-          .filter(
-            (booking) =>
-              booking.meal_date >= activeDate &&
-              ['veg', 'non_veg', 'egg'].includes(booking.choice)
-          )
-          .sort((first, second) => first.meal_date.localeCompare(second.meal_date))[0];
+          .filter((booking) => ['veg', 'non_veg', 'egg'].includes(booking.choice))
+          .sort((first, second) => first.meal_date.localeCompare(second.meal_date));
 
-        if (nextMeal) lookupDate = nextMeal.meal_date;
+        if (isNightShift) {
+          // Night: prefer today's booking until end of IST day; else next upcoming.
+          const todayMeal = foodBookings.find((booking) => booking.meal_date === today);
+          const upcomingMeal = foodBookings.find((booking) => booking.meal_date > today);
+          if (todayMeal) lookupDate = todayMeal.meal_date;
+          else if (upcomingMeal) lookupDate = upcomingMeal.meal_date;
+          else lookupDate = today;
+        } else {
+          // Day shift: original behaviour — first food booking on/after activeDate
+          // (activeDate already rolled to next WD after 2 PM).
+          const nextMeal = foodBookings.find((booking) => booking.meal_date >= activeDate);
+          if (nextMeal) lookupDate = nextMeal.meal_date;
+        }
       }
 
       const result = await api.myMealToken(lookupDate);
       if (requestId !== loadRequestId.current) return;
-      setSelectedDate(result.booking ? lookupDate : activeDate);
+      const resolved =
+        result.resolved_date && !hasExplicitDate ? result.resolved_date : lookupDate;
+      setSelectedDate(result.booking ? resolved : activeDate);
       setData(result);
     } catch (e) {
       if (requestId === loadRequestId.current) showToast(e.message, 'error');
     } finally {
       if (requestId === loadRequestId.current) setLoading(false);
     }
-  }, [activeDate, dateParam, showToast]);
+  }, [activeDate, hasExplicitDate, isNightShift, shiftLoaded, today, showToast]);
 
   useEffect(() => {
     load();
@@ -232,7 +293,11 @@ export default function MyMealBox() {
               My Meal Box
             </h1>
             <p style={{ fontSize: 12, color: '#94A3B8', margin: 0 }}>
-              {isToday ? "Today's lunch token" : 'Meal ticket for selected date'}
+              {isToday
+                ? isNightShift
+                  ? "Today's night-shift meal token (until 11:59 PM IST)"
+                  : "Today's lunch token"
+                : 'Meal ticket for selected date'}
             </p>
           </div>
         </div>
