@@ -118,10 +118,9 @@ function getNextWorkingDay(nowDate = new Date()) {
  * Booking window rules (IST):
  * Morning (lunch):
  *   - Only next working day is bookable (blocked dates are skipped when computing next WD)
- *   - Open 9:00 AM – 6:00 PM → can book + skip
- *   - 6:00 PM – 8:00 PM → skip only (no new bookings)
+ *   - Open 9:00 AM – 8:00 PM → can book + skip
  *   - After 8:00 PM → locked
- *   - Special: Fri/Sat/Sun morning → Monday meal open all day (no 6pm cut-off)
+ *   - Special: Fri/Sat/Sun morning → Monday meal open all day (no 8pm cut-off)
  * Night (dinner):
  *   - Can book the next working day only
  *   - Open 6:00 PM – 12:00 AM IST the evening before (Fri/Sat/Sun evenings cover Monday)
@@ -169,7 +168,6 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
       }
       if (todayDay === 0) {
         if (currentHour >= 20) return { canBook: false, canSkip: false, reason: 'locked' };
-        if (currentHour >= 18) return { canBook: false, canSkip: true, reason: 'skip_only' };
       }
       return { canBook: true, canSkip: true, reason: 'open' };
     }
@@ -179,9 +177,6 @@ function getAllowedActions(mealDate, shift = 'morning', mockDate) {
     }
     if (currentHour >= 20) {
       return { canBook: false, canSkip: false, reason: 'locked' };
-    }
-    if (currentHour >= 18) {
-      return { canBook: false, canSkip: true, reason: 'skip_only' };
     }
     return { canBook: true, canSkip: true, reason: 'open' };
   } else {
@@ -416,7 +411,7 @@ router.post('/book', async (req, res, next) => {
         if (actions.canSkip) {
           return res
             .status(400)
-            .json({ error: 'After 6 PM you can only skip. Cannot change meal type.' });
+            .json({ error: 'After 8 PM meal booking is locked.' });
         }
         const lockedMsg = {
           past: 'You can only book lunch for the next working day.',

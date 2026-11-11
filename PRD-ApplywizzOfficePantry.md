@@ -295,8 +295,8 @@ Tap "Done" -> status: done, live_status: done
 ## 8. Meal Booking Screen (/meals)
 
 ### Morning Shift Employees
-- Book by **6 PM** for next day's lunch
-- Cancel till **8 PM**
+- Book by **8 PM** for next day's lunch (booking + skip both open until 8 PM)
+- Locked after **8 PM**
 
 ### Night Shift Employees
 - Book between **6:00 PM and 12:00 AM** the evening before, for the next working day's meal

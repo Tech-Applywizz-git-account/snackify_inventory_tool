@@ -331,7 +331,7 @@ export async function sendMealBookingReminderEmail(email, mealDate, isFinal = fa
 
   const warningText = isFinal
     ? `<p style="margin: 0 0 20px 0; font-size: 15px; line-height: 24px; color: #dc2626; font-weight: 600;">
-         ⚠️ The meal booking window closes at 6:00 PM IST today
+         ⚠️ The meal booking window closes at 8:00 PM IST today
        </p>`
     : '';
 

@@ -176,9 +176,9 @@ export default function MealCard({ userShift = 'morning' }) {
         <div className="flex flex-col items-end gap-0.5">
           {reason === 'open' && (
             <>
-              <CountdownTimer cutoffHour={userShift === 'night' ? 24 : 18} />
+              <CountdownTimer cutoffHour={userShift === 'night' ? 24 : 20} />
               <span className="text-[10px] text-slate-300 font-medium">
-                Book by {userShift === 'night' ? '12 AM' : '6 PM'}
+                Book by {userShift === 'night' ? '12 AM' : '8 PM'}
               </span>
             </>
           )}

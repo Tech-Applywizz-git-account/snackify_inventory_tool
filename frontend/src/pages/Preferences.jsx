@@ -338,7 +338,7 @@ export default function Preferences() {
         </div>
         {shift === 'morning' && (
           <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
-            Book by <strong>6 PM</strong> for next day's lunch. Cancel till <strong>8 PM</strong>.
+            Book by <strong>8 PM</strong> for next day's lunch. Booking is locked after <strong>8 PM</strong>.
           </p>
         )}
         {shift === 'night' && (
